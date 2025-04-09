@@ -1,0 +1,23 @@
+# IDE files
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Build and Gradle files
+.gradle/
+build/
+*/build/
+.externalNativeBuild/
+.cxx/
+
+# Local configuration (should not be shared)
+local.properties
+/local.properties
+
+# Captures and generated files
+/captures/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
