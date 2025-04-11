@@ -1,4 +1,4 @@
-﻿package com.example.lifesignal
+﻿package com.tojkuv.lifesignal
 
 import org.junit.Test
 

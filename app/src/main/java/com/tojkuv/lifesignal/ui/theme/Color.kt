@@ -1,4 +1,4 @@
-package com.example.lifesignal.ui.theme
+package com.tojkuv.lifesignal.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
