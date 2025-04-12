@@ -64,9 +64,12 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
 
     implementation(libs.androidx.material.icons.extended)
+    implementation(libs.androidx.animation)
 
     val nav_version = "2.8.9"
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.coil.compose)
+
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
@@ -86,4 +89,5 @@ dependencies {
 
     implementation(libs.libphonenumber)
 
+    implementation("com.google.zxing:core:3.5.2")
 }

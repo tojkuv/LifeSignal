@@ -6,13 +6,20 @@ import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ContentUris
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
+import android.widget.Toast
 
 // AndroidX - Activity & Compose
 import androidx.activity.ComponentActivity
@@ -33,6 +40,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,8 +52,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
@@ -53,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+
 
 // Core utilities
 import androidx.core.app.ActivityCompat
@@ -78,9 +89,11 @@ import com.google.firebase.auth.PhoneAuthCredential
 import com.google.firebase.auth.PhoneAuthOptions
 import com.google.firebase.auth.PhoneAuthProvider
 import com.google.firebase.firestore.DocumentReference
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
+import com.google.firebase.messaging.FirebaseMessaging
 
 // ML Kit
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -96,10 +109,23 @@ import kotlinx.serialization.Serializable
 import java.util.concurrent.TimeUnit
 import com.google.i18n.phonenumbers.PhoneNumberUtil
 import com.google.i18n.phonenumbers.NumberParseException
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.tasks.await
-import java.text.DateFormat
 import java.util.Date
+import java.util.UUID
+import androidx.core.content.edit
+import com.google.firebase.firestore.SetOptions
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.MultiFormatWriter
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.set
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.content.FileProvider
+import coil.compose.rememberAsyncImagePainter
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import java.io.File
+import java.io.FileOutputStream
+
 
 @JvmInline
 value class Phone(val number: String) {
@@ -142,11 +168,17 @@ data class UserProfile(
     val note: String = "",
     val checkInInterval: Long = 24 * 60 * 60 * 1000L,
     val lastCheckedIn: Timestamp = Timestamp.now(),
-    val contacts: List<ResolvedContact> = emptyList()
+    val contacts: List<ResolvedContact> = emptyList(),
+    val notify30MinBefore: Boolean = true,
+    val notify2HoursBefore: Boolean = true,
+    val qrCodeId: String = "",
+    val sessionId: String = "",
+    val fcmToken: String = ""
 ) {
     val checkInExpiry: Timestamp
         get() = Timestamp(Date(lastCheckedIn.toDate().time + checkInInterval))
 }
+
 
 class UserViewModel : ViewModel() {
     private val auth = FirebaseAuth.getInstance()
@@ -175,6 +207,11 @@ class UserViewModel : ViewModel() {
                     val note = snapshot.getString("note") ?: ""
                     val intervalMillis = snapshot.getLong("checkInInterval") ?: 86400000L
                     val lastCheckedIn = snapshot.getTimestamp("lastCheckedIn") ?: Timestamp.now()
+                    val sessionId = snapshot.getString("sessionId") ?: ""
+                    val fcmToken = snapshot.getString("fcmToken") ?: ""
+                    val notify30 = snapshot.getBoolean("notify30MinBefore") ?: true
+                    val notify2hr = snapshot.getBoolean("notify2HoursBefore") ?: true
+                    val qrCodeId = snapshot.getString("qrCodeId") ?: ""
 
                     val contactList = mutableListOf<ResolvedContact>()
                     val rawContacts: List<Any?> = snapshot.get("contacts") as? List<*> ?: emptyList()
@@ -194,6 +231,7 @@ class UserViewModel : ViewModel() {
                             val contactNote = contactSnap.getString("note") ?: ""
                             val contactInterval = contactSnap.getLong("checkInInterval") ?: 86400000L
                             val contactLastCheckedIn = contactSnap.getTimestamp("lastCheckedIn") ?: Timestamp.now()
+
 
                             contactList.add(
                                 ResolvedContact(
@@ -218,7 +256,12 @@ class UserViewModel : ViewModel() {
                         note = note,
                         checkInInterval = intervalMillis,
                         lastCheckedIn = lastCheckedIn,
-                        contacts = contactList
+                        contacts = contactList,
+                        notify30MinBefore = notify30,
+                        notify2HoursBefore = notify2hr,
+                        qrCodeId = qrCodeId,
+                        sessionId = sessionId,
+                        fcmToken = fcmToken
                     )
 
                     Log.d("UserViewModel", "Profile parsed: $profile")
@@ -258,10 +301,19 @@ class UserViewModel : ViewModel() {
             "note" to profile.note,
             "checkInInterval" to profile.checkInInterval,
             "lastCheckedIn" to profile.lastCheckedIn,
-            "contacts" to contactsData
+            "contacts" to contactsData,
+            "notify30MinBefore" to profile.notify30MinBefore,
+            "notify2HoursBefore" to profile.notify2HoursBefore,
+            "qrCodeId" to profile.qrCodeId,
+            "fcmToken" to profile.fcmToken,
+            "sessionId" to profile.sessionId
         )
 
-        db.collection("users").document(uid).set(data).await()
+
+        db.collection("users")
+            .document(uid)
+            .set(data, SetOptions.merge())
+            .await()
     }
 
 
@@ -284,6 +336,61 @@ class UserViewModel : ViewModel() {
 
     fun updateContacts(newContacts: List<ResolvedContact>) {
         updateProfile { it.copy(contacts = newContacts) }
+    }
+
+    fun updateNotificationPreference(key: String, value: Boolean) {
+        updateProfile { profile ->
+            when (key) {
+                "notify30MinBefore" -> profile.copy(notify30MinBefore = value)
+                "notify2HoursBefore" -> profile.copy(notify2HoursBefore = value)
+                else -> profile
+            }
+        }
+    }
+
+    fun generateAndSaveQRCodeId() {
+        updateProfile { profile ->
+            profile.copy(qrCodeId = UUID.randomUUID().toString())
+        }
+    }
+
+    fun addQrContact(
+        qrCodeId: String,
+        isResponder: Boolean,
+        isDependent: Boolean,
+        onSuccess: () -> Unit = {},
+        onError: (Exception) -> Unit = {}
+    ) {
+        val user = auth.currentUser ?: return
+
+        viewModelScope.launch {
+            try {
+                val result = db.collection("users")
+                    .whereEqualTo("qrCodeId", qrCodeId)
+                    .limit(1)
+                    .get()
+                    .await()
+
+                val ref = result.documents.firstOrNull()?.reference ?: return@launch
+
+                val contact = ResolvedContact(
+                    reference = ref,
+                    name = "",
+                    phone = Phone(""),
+                    note = "",
+                    checkInInterval = 86400000L,
+                    lastCheckedIn = Timestamp.now(),
+                    isResponder = isResponder,
+                    isDependent = isDependent
+                )
+
+                updateProfile { it.copy(contacts = it.contacts + contact) }
+                onSuccess()
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to add contact via QR", e)
+                onError(e)
+            }
+        }
     }
 
     private fun updateProfile(transform: (UserProfile) -> UserProfile) {
@@ -321,7 +428,6 @@ class UserViewModel : ViewModel() {
             null
         }
     }
-
 }
 
 data class ContactRef(
@@ -464,6 +570,7 @@ class AuthViewModel : ViewModel() {
     var errorMessage by mutableStateOf<String?>(null)
 
     fun signInWithCredential(
+        context: Context,
         credential: PhoneAuthCredential,
         onSuccess: () -> Unit
     ) {
@@ -472,6 +579,27 @@ class AuthViewModel : ViewModel() {
             .addOnCompleteListener { task ->
                 isLoading = false
                 if (task.isSuccessful) {
+                    val user = firebaseAuth.currentUser
+                    if (user != null) {
+                        val sessionId = UUID.randomUUID().toString()
+                        SessionManager.saveSessionId(context, sessionId)
+
+                        Firebase.firestore.collection("users")
+                            .document(user.uid)
+                            .update(
+                                mapOf(
+                                    "sessionId" to sessionId,
+                                    "lastLoginAt" to FieldValue.serverTimestamp()
+                                )
+                            )
+                            .addOnSuccessListener {
+                                Log.d("AUTH", "Session ID updated")
+                            }
+                            .addOnFailureListener {
+                                Log.w("AUTH", "Failed to update session ID", it)
+                            }
+                    }
+
                     onSuccess()
                 } else {
                     errorMessage = task.exception?.message ?: "Sign-in failed"
@@ -479,10 +607,44 @@ class AuthViewModel : ViewModel() {
             }
     }
 
+
     fun clearError() {
         errorMessage = null
     }
 }
+
+object SessionManager {
+
+    private const val PREF_NAME = "user_session"
+
+    fun saveSessionId(context: Context, sessionId: String) {
+        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        prefs.edit() { putString("sessionId", sessionId) }
+    }
+
+    fun getSessionId(context: Context): String? {
+        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        return prefs.getString("sessionId", null)
+    }
+
+    fun validateSession(context: Context, onInvalid: () -> Unit) {
+        val currentUser = FirebaseAuth.getInstance().currentUser ?: return
+        val localSession = SessionManager.getSessionId(context)
+
+        Firebase.firestore.collection("users")
+            .document(currentUser.uid)
+            .get()
+            .addOnSuccessListener { doc ->
+                val remoteSession = doc.getString("sessionId")
+                if (remoteSession != localSession) {
+                    FirebaseAuth.getInstance().signOut()
+                    onInvalid()
+                }
+            }
+    }
+
+}
+
 
 
 interface NavigationBarDestination {
@@ -517,6 +679,8 @@ object UserProfileRoute : NavigationBarDestination {
 val navigationBarScreens = listOf(HomeRoute, RespondersRoute, DependentsRoute, UserProfileRoute)
 
 class MainActivity : ComponentActivity() {
+    var showLogin by mutableStateOf(FirebaseAuth.getInstance().currentUser == null)
+        private set
 
     companion object {
         const val CHANNEL_ID = "lifesignal_timer_channel"
@@ -619,8 +783,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        FirebaseAuth.getInstance().useAppLanguage()
-
         verificationCallbacks = object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
 
             override fun onVerificationCompleted(credential: PhoneAuthCredential) {
@@ -668,6 +830,32 @@ class MainActivity : ComponentActivity() {
         requestNotificationPermission()
         enableEdgeToEdge()
 
+        val user = FirebaseAuth.getInstance().currentUser
+
+        if (user != null) {
+            SessionManager.validateSession(this@MainActivity) {
+                Log.w("AUTH", "Session invalid — logging out")
+                FirebaseAuth.getInstance().signOut()
+                showLogin = true
+            }
+
+            watchSession(user.uid)
+
+            FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+                Firebase.firestore.collection("users")
+                    .document(user.uid)
+                    .update("fcmToken", token)
+                    .addOnSuccessListener {
+                        Log.d("FCM", "FCM token updated in Firestore")
+                    }
+                    .addOnFailureListener {
+                        Log.w("FCM", "Failed to update FCM token", it)
+                    }
+            }
+        } else {
+            showLogin = true
+        }
+
         setContent {
             val userViewModel: UserViewModel = viewModel()
             val userProfile by userViewModel.profile.collectAsState()
@@ -696,9 +884,37 @@ class MainActivity : ComponentActivity() {
 
             LifeSignalApp(
                 secondsLeft = secondsLeft,
-                userViewModel = userViewModel
+                userViewModel = userViewModel,
+                showLogin = showLogin,
+                onSignedIn = { showLogin = false }
             )
+
         }
+    }
+
+    private fun watchSession(uid: String) {
+        Firebase.firestore.collection("users")
+            .document(uid)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+
+                val remoteSession = snapshot.getString("sessionId")
+                val localSession = SessionManager.getSessionId(this)
+
+                if (remoteSession != localSession) {
+                    FirebaseAuth.getInstance().signOut()
+                    Toast.makeText(this, "You were signed out (session expired).", Toast.LENGTH_LONG).show()
+                    showLogin = true
+                    setContent {
+                        LifeSignalApp(
+                            secondsLeft = secondsLeft,
+                            userViewModel = UserViewModel(),
+                            showLogin = true,
+                            onSignedIn = { showLogin = false }
+                        )
+                    }
+                }
+            }
     }
 
     fun startPhoneVerification(
@@ -725,8 +941,11 @@ class MainActivity : ComponentActivity() {
 fun LifeSignalApp(
     secondsLeft: Int,
     userViewModel: UserViewModel,
+    showLogin: Boolean,
+    onSignedIn: () -> Unit,
     modifier: Modifier = Modifier
-) {
+)
+ {
     val navController = rememberNavController()
     val contactViewModel: ContactViewModel = viewModel()
     val userViewModel: UserViewModel = viewModel()
@@ -735,18 +954,19 @@ fun LifeSignalApp(
     val activity = LocalContext.current.findActivity()
     val authState = FirebaseAuth.getInstance().currentUser
 
-    LaunchedEffect(Unit) {
-        val currentUser = FirebaseAuth.getInstance().currentUser
-        if (currentUser != null) {
-            userViewModel.loadUserProfile()
-        }
-    }
+     LaunchedEffect(authState) {
+         if (authState != null) {
+             userViewModel.loadUserProfile()
+         }
+     }
 
-    LifeSignalTheme {
+     LifeSignalTheme {
         when {
-            authState == null -> {
+            showLogin || authState == null -> {
                 SignInScreen(
-                    onSignedIn = {},
+                    onSignedIn = {
+                        onSignedIn()
+                    },
                     modifier = Modifier.fillMaxSize(),
                     activity = activity,
                     signInWithCredential = remember {
@@ -761,11 +981,8 @@ fun LifeSignalApp(
                 )
             }
 
-            profile == null -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            }
+            profile == null -> { }
+
 
             else -> {
                 val user = profile
@@ -921,20 +1138,22 @@ fun LifeSignalApp(
                                         contactViewModel = contactViewModel,
                                         onBack = { navController.popBackStack() },
                                         onNavigateToAddContact = {
-                                            navController.navigate("addContactViaQr")
+                                            navController.navigate("addContactViaQr") {
+                                                popUpTo("qrScanner") { inclusive = true }
+                                            }
                                         }
                                     )
                                 }
 
                                 composable("addContactViaQr") {
+                                    val qrCodeId = contactViewModel.scannedQrContent ?: ""
+
                                     AddContactViaQRCodeScreen(
-                                        contactViewModel = contactViewModel,
-                                        onAddAsResponder = {},
-                                        onAddAsDependent = {},
-                                        onAddAsBoth = {},
+                                        qrCodeId = qrCodeId,
                                         onBack = { navController.popBackStack() }
                                     )
                                 }
+
                             }
                         }
                     }
@@ -955,8 +1174,8 @@ fun SignInScreen(
 ) {
     val context = LocalContext.current
     val realActivity = activity ?: (context as? Activity)
-    var phoneNumber by remember { mutableStateOf("") }
-    var smsCode by remember { mutableStateOf("") }
+    var phoneNumber by remember { mutableStateOf("+11234567890") }
+    var smsCode by remember { mutableStateOf("123456") }
     var verificationId by remember { mutableStateOf(initialVerificationId) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val viewModel: AuthViewModel = viewModel()
@@ -1016,7 +1235,7 @@ fun SignInScreen(
                 } else {
                     if (smsCode.isNotBlank()) {
                         val credential = PhoneAuthProvider.getCredential(verificationId!!, smsCode)
-                        viewModel.signInWithCredential(credential) {
+                        viewModel.signInWithCredential(context, credential) {
                             onSignedIn()
                         }
                     } else {
@@ -1141,9 +1360,7 @@ fun formatCountdown(seconds: Int): String {
 @Composable
 fun HomeScreen(
     userViewModel: UserViewModel,
-    onResetQRCode: () -> Unit = {},
     onAddContactViaQrCode: () -> Unit = {},
-    onShareClick: () -> Unit = {},
     onReviewInstructionsClick: () -> Unit = {}
 ) {
     val profile by userViewModel.profile.collectAsState()
@@ -1151,6 +1368,12 @@ fun HomeScreen(
 
     LaunchedEffect(Unit) {
         userViewModel.loadUserProfile()
+    }
+
+    LaunchedEffect(profile?.qrCodeId) {
+        if (profile?.qrCodeId.isNullOrBlank()) {
+            userViewModel.generateAndSaveQRCodeId()
+        }
     }
 
     Column(
@@ -1178,8 +1401,11 @@ fun HomeScreen(
                     .aspectRatio(1f)
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
+                    val context = LocalContext.current
+                    val qrCodeId = profile?.qrCodeId.orEmpty()
+
                     IconButton(
-                        onClick = onShareClick,
+                        onClick = { shareQrCode(context, qrCodeId) },
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(16.dp)
@@ -1192,6 +1418,7 @@ fun HomeScreen(
                             tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
+
 
                     Column(
                         verticalArrangement = Arrangement.Top,
@@ -1218,15 +1445,18 @@ fun HomeScreen(
                                 .fillMaxSize()
                                 .padding(horizontal = middleSpace)
                                 .padding(bottom = middleSpace)
-                                .background(Color.White, shape = RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White)
                         ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.ic_rq_code_foreground),
-                                contentDescription = "QR Code",
-                                modifier = Modifier
-                                    .fillMaxSize(0.95f)
-                                    .align(Alignment.Center)
-                            )
+                            val qrCodeId = profile?.qrCodeId
+                            if (!qrCodeId.isNullOrBlank()) {
+                                QrCodeView(
+                                    content = qrCodeId,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .align(Alignment.Center)
+                                )
+                            }
                         }
                     }
                 }
@@ -1244,7 +1474,7 @@ fun HomeScreen(
 
             Spacer(Modifier.height(8.dp))
 
-            TextButton(onClick = onResetQRCode) {
+            TextButton(onClick = { userViewModel.generateAndSaveQRCodeId() }) {
                 Text("Reset QR Code")
             }
 
@@ -1267,16 +1497,98 @@ fun HomeScreen(
 
             Spacer(Modifier.height(12.dp))
 
+            var dialogOpen by remember { mutableStateOf(false) }
+
             SettingCard(
                 icon = Icons.Default.AlarmOn,
                 title = "Check-in time interval",
                 subtitle = profile?.checkInInterval?.let { millis ->
                     val days = millis / (1000 * 60 * 60 * 24)
-                    val hours = (millis / (1000 * 60 * 60)) % 24
-                    val minutes = (millis / (1000 * 60)) % 60
-                    "${days}d ${hours}h ${minutes}m"
-                } ?: "—"
+                    val remainingMillis = millis % (1000 * 60 * 60 * 24)
+                    val hours = remainingMillis / (1000 * 60 * 60)
+                    buildString {
+                        if (days > 0) append("$days ${if (days == 1L) "day" else "days"} ")
+                        if (hours > 0) append("$hours ${if (hours == 1L) "hour" else "hours"} ")
+                    }.trim()
+                } ?: "—",
+                onClick = { dialogOpen = true }
             )
+
+            var selectedIndex by remember { mutableIntStateOf(0) }
+            val unitOptions = listOf("Days", "Hours")
+            var selectedAmount by remember { mutableStateOf("1") }
+
+            if (dialogOpen) {
+                var selectedIndex by remember { mutableIntStateOf(0) }
+                var selectedAmount by remember { mutableStateOf("1") }
+
+                val minDays = 1
+                val minHours = 8
+                val unitOptions = listOf("Days", "Hours")
+
+                val amountOptions = remember(selectedIndex) {
+                    if (unitOptions[selectedIndex] == "Hours") {
+                        (minHours..99).map { it.toString() }
+                    } else {
+                        (minDays..99).map { it.toString() }
+                    }
+                }
+
+                SideEffect {
+                    val min = if (unitOptions[selectedIndex] == "Hours") minHours else minDays
+                    val current = selectedAmount.toIntOrNull() ?: 0
+                    if (current != min) {
+                        selectedAmount = min.toString()
+                    }
+                }
+
+                AlertDialog(
+                    onDismissRequest = { dialogOpen = false },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            val amount = selectedAmount.toIntOrNull() ?: 1
+                            val millis = if (unitOptions[selectedIndex] == "Days") {
+                                amount * 24 * 60 * 60 * 1000L
+                            } else {
+                                amount * 60 * 60 * 1000L
+                            }
+                            userViewModel.updateCheckInInterval(millis)
+                            dialogOpen = false
+                        }) {
+                            Text("OK")
+                        }
+                    },
+                    title = { Text("Select interval") },
+                    text = {
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                SingleChoiceSegmentedButtonRow {
+                                    unitOptions.forEachIndexed { index, label ->
+                                        SegmentedButton(
+                                            shape = SegmentedButtonDefaults.itemShape(index, unitOptions.size),
+                                            onClick = { selectedIndex = index },
+                                            selected = index == selectedIndex,
+                                            label = { Text(label) }
+                                        )
+                                    }
+                                }
+
+                                Spacer(Modifier.height(8.dp))
+
+                                DropdownSelector(
+                                    label = "Amount",
+                                    options = amountOptions,
+                                    selected = selectedAmount,
+                                    onSelectedChange = { selectedAmount = it }
+                                )
+                            }
+                        }
+                    }
+                )
+            }
 
             Spacer(Modifier.height(24.dp))
 
@@ -1291,8 +1603,10 @@ fun HomeScreen(
             SettingToggleCard(
                 icon = Icons.Default.Notifications,
                 title = "30 minutes before timeout",
-                checked = true,
-                onCheckedChange = {}
+                checked = profile?.notify30MinBefore == true,
+                onCheckedChange = { isChecked ->
+                    userViewModel.updateNotificationPreference("notify30MinBefore", isChecked)
+                }
             )
 
             Spacer(Modifier.height(12.dp))
@@ -1300,8 +1614,10 @@ fun HomeScreen(
             SettingToggleCard(
                 icon = Icons.Default.Notifications,
                 title = "2 hours before timeout",
-                checked = true,
-                onCheckedChange = {}
+                checked = profile?.notify2HoursBefore == true,
+                onCheckedChange = { isChecked ->
+                    userViewModel.updateNotificationPreference("notify2HoursBefore", isChecked)
+                }
             )
 
             Spacer(Modifier.height(24.dp))
@@ -1325,21 +1641,101 @@ fun HomeScreen(
     }
 }
 
+fun shareQrCode(context: Context, qrCodeId: String) {
+    val qrBitmap = generateQrCodeBitmap(qrCodeId)
 
-//@Preview(showBackground = true)
-//@Composable
-//fun HomeScreenPreview() {
-//    LifeSignalTheme {
-//        HomeScreen(
-//            name = "First Last",
-//            interval = "XX days XXh XXm",
-//            onResetQRCode = {},
-//            onAddContact = {},
-//            onShareClick = {},
-//            onReviewInstructionsClick = {}
-//        )
-//    }
-//}
+    val file = File(context.cacheDir, "qr_code.png")
+    FileOutputStream(file).use { out ->
+        qrBitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+    }
+
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "image/png"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
+    }
+
+    context.startActivity(Intent.createChooser(shareIntent, "Share QR Code"))
+}
+
+
+@Composable
+fun QrCodeView(content: String, modifier: Modifier = Modifier) {
+    val qrBitmap = remember(content) { generateQrCodeBitmap(content) }
+    Image(
+        bitmap = qrBitmap.asImageBitmap(),
+        contentDescription = "QR Code",
+        modifier = modifier
+            .fillMaxSize()
+    )
+}
+
+fun generateQrCodeBitmap(text: String, size: Int = 512): Bitmap {
+    val hints = mapOf(
+        EncodeHintType.MARGIN to 1,
+        EncodeHintType.CHARACTER_SET to "UTF-8",
+        EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.L
+    )
+
+    val bitMatrix = MultiFormatWriter().encode(text, BarcodeFormat.QR_CODE, size, size, hints)
+
+    val bmp = createBitmap(size, size, Bitmap.Config.RGB_565)
+
+    for (x in 0 until size) {
+        for (y in 0 until size) {
+            bmp[x, y] =
+                if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+        }
+    }
+    return bmp
+}
+
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DropdownSelector(
+    label: String,
+    options: List<String>,
+    selected: String,
+    onSelectedChange: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val maxHeight = screenHeight * 0.3f
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded }
+    ) {
+        TextField(
+            value = selected,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier.menuAnchor()
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.heightIn(max = maxHeight)
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option) },
+                    onClick = {
+                        onSelectedChange(option)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1584,22 +1980,55 @@ fun ContactDetailScreen(
     val isResponder = contact.isResponder
     val isDependent = contact.isDependent
 
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+
+    var localResponder by remember { mutableStateOf(isResponder) }
+    var localDependent by remember { mutableStateOf(isDependent) }
+
+    fun enforceToggleState(type: String, newValue: Boolean) {
+        val newResponder = if (type == "responder") newValue else localResponder
+        val newDependent = if (type == "dependent") newValue else localDependent
+
+        if (!newResponder && !newDependent) {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("At least one role must remain enabled.")
+            }
+            return
+        }
+
+        if (type == "responder") {
+            localResponder = newValue
+            onResponderToggle(newValue)
+        } else {
+            localDependent = newValue
+            onDependentToggle(newValue)
+        }
+    }
+
+
     LaunchedEffect(contact) {
         Log.d("ContactDetailScreen", "Showing contact: ${contact.name}")
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("Contact") },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBackIosNew, contentDescription = "Back")
+    Scaffold(
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState)
+        },
+        topBar = {
+            TopAppBar(
+                title = { Text("Contact") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBackIosNew, contentDescription = "Back")
+                    }
                 }
-            }
-        )
-
+            )
+        }
+    ) { innerPadding ->
         Column(
             modifier = Modifier
+                .padding(innerPadding)
                 .fillMaxSize()
                 .verticalScroll(screenScroll)
                 .background(MaterialTheme.colorScheme.background)
@@ -1631,7 +2060,10 @@ fun ContactDetailScreen(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterHorizontally)
+                horizontalArrangement = Arrangement.spacedBy(
+                    18.dp,
+                    Alignment.CenterHorizontally
+                )
             ) {
                 ActionButton(
                     icon = Icons.Default.PriorityHigh,
@@ -1687,8 +2119,8 @@ fun ContactDetailScreen(
             SettingToggleCard(
                 icon = Icons.Default.PlayArrow,
                 title = "Responder",
-                checked = isResponder,
-                onCheckedChange = onResponderToggle
+                checked = localResponder,
+                onCheckedChange = { enforceToggleState("responder", it) }
             )
 
             Spacer(Modifier.height(12.dp))
@@ -1696,8 +2128,8 @@ fun ContactDetailScreen(
             SettingToggleCard(
                 icon = Icons.Default.Groups,
                 title = "Dependent",
-                checked = isDependent,
-                onCheckedChange = onDependentToggle
+                checked = localDependent,
+                onCheckedChange = { enforceToggleState("dependent", it) }
             )
 
             Spacer(Modifier.height(32.dp))
@@ -1713,6 +2145,11 @@ fun ContactDetailScreen(
             }
 
             Spacer(Modifier.height(24.dp))
+
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.align(Alignment.CenterHorizontally)
+            )
         }
     }
 }
@@ -1746,8 +2183,10 @@ fun QRCodeScannerScreen(
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
-    val cameraPermission = Manifest.permission.CAMERA
+    val lifecycleOwner = LocalLifecycleOwner.current
 
+    val cameraPermission = Manifest.permission.CAMERA
+    var hasRequested by remember { mutableStateOf(false) }
     val permissionGranted = remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, cameraPermission) == PackageManager.PERMISSION_GRANTED
@@ -1756,11 +2195,7 @@ fun QRCodeScannerScreen(
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        permissionGranted.value = granted
-    }
-
-    var hasRequested by remember { mutableStateOf(false) }
+    ) { granted -> permissionGranted.value = granted }
 
     LaunchedEffect(Unit) {
         if (!permissionGranted.value && !hasRequested) {
@@ -1769,13 +2204,34 @@ fun QRCodeScannerScreen(
         }
     }
 
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        val bitmap = if (Build.VERSION.SDK_INT < 28) {
+            MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
+        } else {
+            val source = ImageDecoder.createSource(context.contentResolver, uri)
+            ImageDecoder.decodeBitmap(source)
+        }
+        val inputImage = InputImage.fromBitmap(bitmap, 0)
+        BarcodeScanning.getClient().process(inputImage)
+            .addOnSuccessListener { barcodes ->
+                barcodes.firstOrNull()?.rawValue?.let { qrContent ->
+                    contactViewModel.setScannedQr(qrContent)
+                    onNavigateToAddContact()
+                }
+            }
+            .addOnFailureListener {
+                Log.e("QR", "Image scan failed", it)
+            }
+    }
+
+    val recentImages = remember { loadRecentImages(context) }
+
     if (permissionGranted.value) {
-        val lifecycleOwner = LocalLifecycleOwner.current
         val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
-
         val previewView = remember { PreviewView(context) }
-
-        AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
 
         LaunchedEffect(Unit) {
             val cameraProvider = cameraProviderFuture.get()
@@ -1818,15 +2274,70 @@ fun QRCodeScannerScreen(
                     analyzer
                 )
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("QR", "Camera binding failed", e)
             }
         }
 
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
-            IconButton(onClick = onBack, modifier = Modifier.padding(16.dp)) {
-                Icon(Icons.Default.ArrowBackIosNew, contentDescription = "Back", tint = Color.White)
+        Box(modifier = Modifier.fillMaxSize()) {
+            AndroidView(
+                factory = { previewView },
+                modifier = Modifier.fillMaxSize()
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 16.dp),
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBackIosNew, contentDescription = "Back", tint = Color.White)
+                    }
+                    IconButton(onClick = {
+                        imagePickerLauncher.launch("image/*")
+                    }) {
+                        Icon(Icons.Default.UploadFile, contentDescription = "Upload QR", tint = Color.White)
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xAA000000))
+                        .padding(vertical = 8.dp)
+                ) {
+                    ImageGalleryPreview(
+                        imageUris = recentImages,
+                        onImageClick = { uri ->
+                            val bitmap = if (Build.VERSION.SDK_INT < 28) {
+                                MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
+                            } else {
+                                val source = ImageDecoder.createSource(context.contentResolver, uri)
+                                ImageDecoder.decodeBitmap(source)
+                            }
+                            val inputImage = InputImage.fromBitmap(bitmap, 0)
+                            BarcodeScanning.getClient().process(inputImage)
+                                .addOnSuccessListener { barcodes ->
+                                    barcodes.firstOrNull()?.rawValue?.let { qrContent ->
+                                        contactViewModel.setScannedQr(qrContent)
+                                        onNavigateToAddContact()
+                                    }
+                                }
+                                .addOnFailureListener {
+                                    Log.e("QR", "Recent image scan failed", it)
+                                }
+                        }
+                    )
+                }
             }
         }
+
     } else {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Camera permission required to scan QR codes.")
@@ -1834,16 +2345,96 @@ fun QRCodeScannerScreen(
     }
 }
 
+@Composable
+fun ImageGalleryPreview(
+    imageUris: List<Uri>,
+    onImageClick: (Uri) -> Unit
+) {
+    LazyRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(100.dp),
+        contentPadding = PaddingValues(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    )
+    {
+        items(imageUris) { uri ->
+            Image(
+                painter = rememberAsyncImagePainter(uri),
+                contentDescription = null,
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onImageClick(uri) }
+            )
+        }
+    }
+}
+
+fun loadRecentImages(context: Context, maxResults: Int = 6): List<Uri> {
+    val images = mutableListOf<Uri>()
+    val projection = arrayOf(
+        MediaStore.Images.Media._ID
+    )
+
+    val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
+
+    val query = context.contentResolver.query(
+        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+        projection,
+        null,
+        null,
+        sortOrder
+    )
+
+    query?.use { cursor ->
+        val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+        var count = 0
+        while (cursor.moveToNext() && count < maxResults) {
+            val id = cursor.getLong(idColumn)
+            val contentUri = ContentUris.withAppendedId(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id
+            )
+            images.add(contentUri)
+            count++
+        }
+    }
+
+    return images
+}
+
+
+
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddContactViaQRCodeScreen(
-    contactViewModel: ContactViewModel,
-    onAddAsResponder: () -> Unit = {},
-    onAddAsDependent: () -> Unit = {},
-    onAddAsBoth: () -> Unit = {},
+    qrCodeId: String,
     onBack: () -> Unit
 ) {
     val scrollState = rememberScrollState()
+    val context = LocalContext.current
+    val user = FirebaseAuth.getInstance().currentUser
+    val db = FirebaseFirestore.getInstance()
+
+    var contactName by remember { mutableStateOf("") }
+    var contactPhone by remember { mutableStateOf("") }
+    var contactNote by remember { mutableStateOf("") }
+
+    LaunchedEffect(qrCodeId) {
+        val snapshot = db.collection("users")
+            .whereEqualTo("qrCodeId", qrCodeId)
+            .limit(1)
+            .get()
+            .await()
+
+        val doc = snapshot.documents.firstOrNull()
+        if (doc != null) {
+            contactName = doc.getString("name") ?: ""
+            contactPhone = doc.getString("phone") ?: ""
+            contactNote = doc.getString("note") ?: ""
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -1881,52 +2472,54 @@ fun AddContactViaQRCodeScreen(
                         .fillMaxWidth()
                         .offset(y = 38.dp)
                 ) {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        Column(
-                            verticalArrangement = Arrangement.Top,
-                            horizontalAlignment = Alignment.CenterHorizontally,
+                    Column(
+                        verticalArrangement = Arrangement.Top,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Spacer(Modifier.height(48.dp))
+
+                        val middleSpace = 56.dp
+
+                        Box(
                             modifier = Modifier
-                                .fillMaxSize()
+                                .fillMaxWidth()
+                                .height(middleSpace),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Spacer(Modifier.height(48.dp))
-
-                            val middleSpace = 56.dp
-
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(middleSpace),
-                                contentAlignment = Alignment.Center
-                            ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
-                                    text = contactViewModel.resolvedContact.value?.name.orEmpty(),
+                                    text = contactName,
                                     style = MaterialTheme.typography.titleLarge,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
-                            }
 
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = middleSpace)
-                                    .padding(bottom = middleSpace)
-                                    .background(Color.White, shape = RoundedCornerShape(8.dp))
-                            ) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.ic_rq_code_foreground),
-                                    contentDescription = "QR Code",
-                                    modifier = Modifier
-                                        .fillMaxSize(0.95f)
-                                        .aspectRatio(1f)
-                                        .align(Alignment.Center)
+                                Text(
+                                    text = contactPhone,
+                                    style = MaterialTheme.typography.bodyMedium
                                 )
                             }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .padding(horizontal = middleSpace)
+                                .padding(bottom = middleSpace)
+                                .background(Color.White, shape = RoundedCornerShape(8.dp))
+                                .aspectRatio(1f)
+                        ) {
+                            QrCodeView(
+                                content = qrCodeId,
+                                modifier = Modifier
+                                    .fillMaxSize(0.95f)
+                                    .align(Alignment.Center)
+                            )
                         }
                     }
                 }
 
                 Avatar(
-                    name = "First Last",
+                    name = contactName,
                     size = AvatarSize.Large,
                     color = MaterialTheme.colorScheme.surfaceVariant
                 )
@@ -1934,26 +2527,68 @@ fun AddContactViaQRCodeScreen(
 
             Spacer(Modifier.height(64.dp))
 
+            val context = LocalContext.current
+            val userViewModel: UserViewModel = viewModel()
+
             Button(
-                onClick = onAddAsResponder,
+                onClick = {
+                    userViewModel.addQrContact(
+                        qrCodeId = qrCodeId,
+                        isResponder = true,
+                        isDependent = false,
+                        onSuccess = {
+                            Toast.makeText(context, "Added as Responder", Toast.LENGTH_SHORT).show()
+                            onBack()
+                        },
+                        onError = {
+                            Toast.makeText(context, "Failed to add contact", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                },
                 shape = RoundedCornerShape(24.dp)
             ) {
-                Text("Add as a Responder")
+                Text("Add as Responder")
             }
 
             Spacer(Modifier.height(12.dp))
 
             Button(
-                onClick = onAddAsDependent,
+                onClick = {
+                    userViewModel.addQrContact(
+                        qrCodeId = qrCodeId,
+                        isResponder = false,
+                        isDependent = true,
+                        onSuccess = {
+                            Toast.makeText(context, "Added as Dependent", Toast.LENGTH_SHORT).show()
+                            onBack()
+                        },
+                        onError = {
+                            Toast.makeText(context, "Failed to add contact", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                },
                 shape = RoundedCornerShape(24.dp)
             ) {
-                Text("Add as a Dependent")
+                Text("Add as Dependent")
             }
 
             Spacer(Modifier.height(12.dp))
 
             Button(
-                onClick = onAddAsBoth,
+                onClick = {
+                    userViewModel.addQrContact(
+                        qrCodeId = qrCodeId,
+                        isResponder = true,
+                        isDependent = true,
+                        onSuccess = {
+                            Toast.makeText(context, "Added as Both", Toast.LENGTH_SHORT).show()
+                            onBack()
+                        },
+                        onError = {
+                            Toast.makeText(context, "Failed to add contact", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                },
                 shape = RoundedCornerShape(24.dp)
             ) {
                 Text("Add as Both")
@@ -1963,6 +2598,8 @@ fun AddContactViaQRCodeScreen(
         }
     }
 }
+
+
 
 //@Preview(showBackground = true)
 //@Composable
