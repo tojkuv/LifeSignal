@@ -1022,7 +1022,7 @@ class MainActivity : ComponentActivity() {
 
                 if (remoteSession != localSession) {
                     FirebaseAuth.getInstance().signOut()
-                    Toast.makeText(this, "You were signed out (session expired).", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "You were signed out (session expired)", Toast.LENGTH_LONG).show()
                     showLogin = true
                     setContent {
                         LifeSignalApp(
@@ -2072,6 +2072,7 @@ fun HomeScreen(
 
             Spacer(Modifier.height(12.dp))
 
+            val context = LocalContext.current
             var dialogOpen by remember { mutableStateOf(false) }
 
             val unitOptions = listOf("Days", "Hours")
@@ -2121,6 +2122,7 @@ fun HomeScreen(
                             }
                             userViewModel.updateCheckInInterval(millis)
                             dialogOpen = false
+                            Toast.makeText(context, "Check-in interval updated", Toast.LENGTH_SHORT).show()
                         }) {
                             Text("OK")
                         }
@@ -2500,7 +2502,7 @@ fun UserProfileScreen(
                         TextButton(onClick = {
                             userViewModel.updateName(nameText)
                             showDialog = false
-                            Toast.makeText(context, "Updated Name", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Name updated", Toast.LENGTH_SHORT).show()
                         }) { Text("Save") }
                     },
                     dismissButton = {
@@ -2681,7 +2683,7 @@ fun UserProfileScreen(
                                         ?.addOnSuccessListener {
                                             userViewModel.updatePhoneNumber(fullPhone, authViewModel.phoneRegion)
                                             resetPhoneVerificationState()
-                                            Toast.makeText(context, "Updated phone number", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "Phone number updated", Toast.LENGTH_SHORT).show()
                                         }
                                         ?.addOnFailureListener {
                                             Toast.makeText(context, "Invalid code", Toast.LENGTH_SHORT).show()
@@ -2752,7 +2754,7 @@ fun UserProfileScreen(
                             showSignOutDialog = false
                             FirebaseAuth.getInstance().signOut()
 
-                            Toast.makeText(context, "Signed Out", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Signed out", Toast.LENGTH_SHORT).show()
                         }) {
                             Text("Yes")
                         }
@@ -2997,7 +2999,7 @@ fun ContactDetailScreen(
                     text = { Text("Are you sure you want to delete this contact?") },
                     confirmButton = {
                         TextButton(onClick = {
-                            Toast.makeText(context, "Deleted Contact", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Contact deleted", Toast.LENGTH_SHORT).show()
 
                             showDeleteDialog = false
                             userViewModel.deleteContactReferencesFromUserAndContact(contact.reference)
@@ -3409,7 +3411,7 @@ fun AddContactViaQRCodeScreen(
                         isDependent = false,
                         context = context,
                         onSuccess = {
-                            Toast.makeText(context, "Added as Responder", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Responder added", Toast.LENGTH_SHORT).show()
                             onBack()
                         },
                         onError = {
@@ -3432,7 +3434,7 @@ fun AddContactViaQRCodeScreen(
                         isDependent = true,
                         context = context,
                         onSuccess = {
-                            Toast.makeText(context, "Added as Dependent", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Dependent added", Toast.LENGTH_SHORT).show()
                             onBack()
                         },
                         onError = {
@@ -3455,7 +3457,7 @@ fun AddContactViaQRCodeScreen(
                         isDependent = true,
                         context = context,
                         onSuccess = {
-                            Toast.makeText(context, "Added as Both", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Contact added as both", Toast.LENGTH_SHORT).show()
                             onBack()
                         },
                         onError = {
@@ -3664,7 +3666,7 @@ fun SettingToggleCard(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 20.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(icon, contentDescription = null)
