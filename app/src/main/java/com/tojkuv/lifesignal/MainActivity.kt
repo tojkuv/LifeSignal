@@ -37,6 +37,7 @@ import androidx.camera.view.PreviewView
 
 // Compose UI
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.lazy.LazyColumn
@@ -44,7 +45,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -59,7 +59,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -124,6 +123,8 @@ import com.google.zxing.MultiFormatWriter
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.set
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
@@ -276,8 +277,11 @@ class UserViewModel : ViewModel() {
         updateProfile { it.copy(name = newName) }
     }
 
-    fun updatePhoneNumber(newNumber: String) {
-        updateProfile { it.copy(phoneNumber = newNumber) }
+    fun updatePhoneNumber(rawNumber: String, regionCode: String) {
+        val dialCode = getDialCode(regionCode)
+        val fullNumber = "+${dialCode}${rawNumber.filter(Char::isDigit)}"
+
+        updateProfile { it.copy(phoneNumber = fullNumber, phoneRegion = regionCode) }
     }
 
     fun updatePhoneRegion(newRegion: String) {
@@ -479,6 +483,11 @@ class UserViewModel : ViewModel() {
     }
 }
 
+fun getDialCode(regionCode: String): String {
+    return getAllRegions().firstOrNull { it.code == regionCode }?.dialCode ?: "1"
+}
+
+
 data class ContactRef(
     val reference: DocumentReference,
     val isResponder: Boolean,
@@ -631,14 +640,59 @@ fun Context.findActivity(): Activity? {
     return null
 }
 
-class AuthViewModel : ViewModel() {
+object AuthRoutes {
+    const val Phone = "auth/phone"
+    const val Code = "auth/code"
+}
 
-    private val firebaseAuth = FirebaseAuth.getInstance()
+class AuthenticationViewModel : ViewModel() {
+
+    private val auth = FirebaseAuth.getInstance()
+    private val firestore = Firebase.firestore
+
+    var dialablePhoneNumber by mutableStateOf(Phone(""))
+    var phoneNumber by mutableStateOf("")
+    var phoneRegion by mutableStateOf("US")
+    var smsCode by mutableStateOf("")
+    var verificationId by mutableStateOf<String?>(null)
 
     var isLoading by mutableStateOf(false)
         private set
 
     var errorMessage by mutableStateOf<String?>(null)
+
+    var verificationSent by mutableStateOf(false)
+
+    fun resetVerification() {
+        verificationSent = false
+    }
+
+    fun startPhoneVerification(
+        activity: Activity,
+        onCodeSent: (String) -> Unit,
+        onError: (FirebaseException) -> Unit
+    ) {
+        val options = PhoneAuthOptions.newBuilder(auth)
+            .setPhoneNumber(dialablePhoneNumber.number)
+            .setTimeout(60L, TimeUnit.SECONDS)
+            .setActivity(activity)
+            .setCallbacks(object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
+                override fun onVerificationCompleted(credential: PhoneAuthCredential) {
+                    auth.signInWithCredential(credential)
+                }
+
+                override fun onVerificationFailed(e: FirebaseException) {
+                    onError(e)
+                }
+
+                override fun onCodeSent(id: String, token: PhoneAuthProvider.ForceResendingToken) {
+                    onCodeSent(id)
+                }
+            })
+            .build()
+
+        PhoneAuthProvider.verifyPhoneNumber(options)
+    }
 
     fun signInWithCredential(
         context: Context,
@@ -646,41 +700,37 @@ class AuthViewModel : ViewModel() {
         onSuccess: () -> Unit
     ) {
         isLoading = true
-        firebaseAuth.signInWithCredential(credential)
-            .addOnCompleteListener { task ->
-                isLoading = false
-                if (task.isSuccessful) {
-                    val user = firebaseAuth.currentUser
-                    if (user != null) {
-                        val sessionId = UUID.randomUUID().toString()
-                        SessionManager.saveSessionId(context, sessionId)
+        auth.signInWithCredential(credential).addOnCompleteListener { task ->
+            isLoading = false
+            if (task.isSuccessful) {
+                auth.currentUser?.let { user ->
+                    val sessionId = UUID.randomUUID().toString()
+                    SessionManager.saveSessionId(context, sessionId)
 
-                        Firebase.firestore.collection("users")
-                            .document(user.uid)
-                            .update(
-                                mapOf(
-                                    "sessionId" to sessionId,
-                                    "lastLoginAt" to FieldValue.serverTimestamp()
-                                )
+                    firestore.collection("users")
+                        .document(user.uid)
+                        .update(
+                            mapOf(
+                                "sessionId" to sessionId,
+                                "lastLoginAt" to FieldValue.serverTimestamp()
                             )
-                            .addOnSuccessListener {
-                                Log.d("AUTH", "Session ID updated")
-                            }
-                            .addOnFailureListener {
-                                Log.w("AUTH", "Failed to update session ID", it)
-                            }
-                    }
-
-                    onSuccess()
-                } else {
-                    errorMessage = task.exception?.message ?: "Sign-in failed"
+                        )
                 }
+                onSuccess()
+            } else {
+                errorMessage = task.exception?.message ?: "Sign-in failed"
             }
+        }
     }
 
-
-    fun clearError() {
+    fun reset() {
+        phoneNumber = ""
+        dialablePhoneNumber = Phone("")
+        phoneRegion = "US"
+        smsCode = ""
+        verificationId = null
         errorMessage = null
+        isLoading = false
     }
 }
 
@@ -928,6 +978,7 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
+            val authenticationViewModel: AuthenticationViewModel = viewModel()
             val userViewModel: UserViewModel = viewModel()
             val userProfile by userViewModel.profile.collectAsState()
             var millisLeft by remember { mutableStateOf(0L) }
@@ -951,9 +1002,10 @@ class MainActivity : ComponentActivity() {
             }
 
             LifeSignalApp(
-                millisecondsLeft = millisLeft,
+                authenticationViewModel = authenticationViewModel,
                 userViewModel = userViewModel,
                 showLogin = showLogin,
+                millisecondsLeft = millisLeft,
                 onSignedIn = { showLogin = false }
             )
         }
@@ -974,9 +1026,10 @@ class MainActivity : ComponentActivity() {
                     showLogin = true
                     setContent {
                         LifeSignalApp(
-                            millisecondsLeft = millisecondsLeft,
+                            authenticationViewModel = AuthenticationViewModel(),
                             userViewModel = UserViewModel(),
                             showLogin = true,
+                            millisecondsLeft = millisecondsLeft,
                             onSignedIn = { showLogin = false }
                         )
                     }
@@ -1007,210 +1060,194 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun LifeSignalApp(
     millisecondsLeft: Long,
+    authenticationViewModel: AuthenticationViewModel,
     userViewModel: UserViewModel,
     showLogin: Boolean,
     onSignedIn: () -> Unit,
     modifier: Modifier = Modifier
-)
- {
+) {
+    val context = LocalContext.current
+    val activity = context.findActivity()
     val navController = rememberNavController()
     val resolvedContactsViewModel: ResolvedContactsViewModel = viewModel()
-    val userViewModel: UserViewModel = viewModel()
     val profile by userViewModel.profile.collectAsState()
-    val isSignedIn = FirebaseAuth.getInstance().currentUser != null
-    val activity = LocalContext.current.findActivity()
     val authState = FirebaseAuth.getInstance().currentUser
 
-     LaunchedEffect(authState) {
-         if (authState != null) {
-             userViewModel.loadUserProfile()
-         }
-     }
+    LaunchedEffect(authState) {
+        if (authState != null) {
+            userViewModel.loadUserProfile()
+        }
+    }
 
-     LifeSignalTheme {
+    LifeSignalTheme {
         when {
             showLogin || authState == null -> {
-                AuthNavHost(
+                AuthenticationNavigationHost(
+                    authenticationViewModel = authenticationViewModel,
                     onSignedIn = onSignedIn,
-                    activity = activity!!,
                     signInWithCredential = { credential, onSuccess, onFailure ->
-                        FirebaseAuth.getInstance().signInWithCredential(credential)
-                            .addOnCompleteListener(activity) { task ->
-                                if (task.isSuccessful) onSuccess()
-                                else onFailure(task.exception?.message ?: "Sign-in failed")
-                            }
+                        if (activity != null) {
+                            FirebaseAuth.getInstance().signInWithCredential(credential)
+                                .addOnCompleteListener(activity) { task ->
+                                    if (task.isSuccessful) {
+                                        authenticationViewModel.reset()
+                                        onSuccess()
+                                    } else {
+                                        onFailure(task.exception?.message ?: "Sign-in failed")
+                                    }
+                                }
+                        }
                     }
                 )
             }
 
-            profile == null -> { }
+            profile == null -> {
 
+            }
+
+            profile?.name.isNullOrBlank() -> {
+                NameEntryScreen(
+                    onSubmit = { name ->
+                        userViewModel.updateName(name)
+                    }
+                )
+            }
 
             else -> {
-                val user = profile
-                if (user?.name.isNullOrBlank()) {
-                    NameEntryScreen(
-                        onSubmit = { name ->
-                            userViewModel.updateName(name)
-                        }
-                    )
-                } else {
-                    Scaffold(
-                        bottomBar = {
-                            val currentBackStackEntry by navController.currentBackStackEntryAsState()
-                            val currentRoute = currentBackStackEntry?.destination?.route
+                Scaffold(
+                    bottomBar = {
+                        val currentBackStackEntry by navController.currentBackStackEntryAsState()
+                        val currentRoute = currentBackStackEntry?.destination?.route
 
-                            Surface(
-                                tonalElevation = 0.dp,
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        Surface(
+                            tonalElevation = 0.dp,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                                    verticalArrangement = Arrangement.Center,
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Spacer(Modifier.height(16.dp))
+                                Spacer(Modifier.height(16.dp))
+                                Text("Check-in Time Left", style = MaterialTheme.typography.titleMedium)
+                                Text(formatCountdown(millisecondsLeft), style = MaterialTheme.typography.titleLarge)
+                                Spacer(Modifier.height(8.dp))
 
-                                    Text("Check-in Time Left", style = MaterialTheme.typography.titleMedium)
-                                    Text(formatCountdown(millisecondsLeft), style = MaterialTheme.typography.titleLarge)
+                                NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceVariant) {
+                                    val total = navigationBarScreens.size
+                                    val middleIndex = total / 2
 
-                                    Spacer(Modifier.height(8.dp))
-
-                                    NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceVariant) {
-                                        val total = navigationBarScreens.size
-                                        val middleIndex = total / 2
-
-                                        navigationBarScreens.forEachIndexed { index, screen ->
-                                            if (index == middleIndex) {
-                                                NavigationBarItem(
-                                                    icon = { Icon(Icons.Default.MobileFriendly, contentDescription = "Check-In") },
-                                                    label = {
-                                                        Text(
-                                                            "Check-in",
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            maxLines = 1,
-                                                            overflow = TextOverflow.Ellipsis
-                                                        )
-                                                    },
-                                                    selected = false,
-                                                    onClick = {
-                                                        userViewModel.updateLastCheckedIn()
-                                                    }
-                                                )
-                                            }
-
+                                    navigationBarScreens.forEachIndexed { index, screen ->
+                                        if (index == middleIndex) {
                                             NavigationBarItem(
-                                                icon = { Icon(screen.icon, contentDescription = screen.route) },
-                                                label = {
-                                                    Text(
-                                                        screen.route,
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis
-                                                    )
-                                                },
-                                                selected = currentRoute == screen.route,
+                                                icon = { Icon(Icons.Default.MobileFriendly, contentDescription = "Check-In") },
+                                                label = { Text("Check-in", style = MaterialTheme.typography.labelSmall) },
+                                                selected = false,
                                                 onClick = {
-                                                    navController.navigate(screen.route) {
-                                                        launchSingleTop = true
-                                                        restoreState = true
-                                                        popUpTo(screen.route) { inclusive = true }
-                                                    }
+                                                    userViewModel.updateLastCheckedIn()
                                                 }
                                             )
                                         }
+
+                                        NavigationBarItem(
+                                            icon = { Icon(screen.icon, contentDescription = screen.route) },
+                                            label = { Text(screen.route, style = MaterialTheme.typography.labelSmall) },
+                                            selected = currentRoute == screen.route,
+                                            onClick = {
+                                                navController.navigate(screen.route) {
+                                                    launchSingleTop = true
+                                                    restoreState = true
+                                                    popUpTo(screen.route) { inclusive = true }
+                                                }
+                                            }
+                                        )
                                     }
                                 }
                             }
                         }
-                    ) { innerPadding ->
-                        Box(modifier = Modifier.padding(innerPadding)) {
-                            NavHost(navController = navController, startDestination = HomeRoute.route) {
-                                composable(HomeRoute.route) {
-                                    HomeScreen(
-                                        onAddContactViaQrCode = {
-                                            navController.navigate("qrScanner")
-                                        },
-                                        userViewModel = userViewModel
-                                    )
+                    }
+                ) { innerPadding ->
+                    Box(modifier = Modifier.padding(innerPadding)) {
+                        NavHost(navController = navController, startDestination = HomeRoute.route) {
+                            composable(HomeRoute.route) {
+                                HomeScreen(
+                                    onAddContactViaQrCode = {
+                                        navController.navigate("qrScanner")
+                                    },
+                                    userViewModel = userViewModel
+                                )
+                            }
+
+                            composable(RespondersRoute.route) {
+                                LaunchedEffect(Unit) {
+                                    userViewModel.loadUserProfile()
                                 }
 
-                                composable(RespondersRoute.route) {
-                                    LaunchedEffect(Unit) {
-                                        userViewModel.loadUserProfile()
+                                RespondersScreen(
+                                    userViewModel = userViewModel,
+                                    onContactClick = { contact ->
+                                        resolvedContactsViewModel.select(contact)
+                                        navController.navigate("contactDetail")
                                     }
+                                )
+                            }
 
-                                    RespondersScreen(
+                            composable(DependentsRoute.route) {
+                                LaunchedEffect(Unit) {
+                                    userViewModel.loadUserProfile()
+                                }
+
+                                DependentsScreen(
+                                    userViewModel = userViewModel,
+                                    onContactClick = { contact ->
+                                        resolvedContactsViewModel.select(contact)
+                                        navController.navigate("contactDetail")
+                                    }
+                                )
+                            }
+
+                            composable("contactDetail") {
+                                val scope = rememberCoroutineScope()
+                                LaunchedEffect(Unit) {
+                                    scope.launch {
+                                        resolvedContactsViewModel.refreshSelectedContact()
+                                    }
+                                }
+
+                                resolvedContactsViewModel.selectedResolvedContact.value?.let {
+                                    ContactDetailScreen(
                                         userViewModel = userViewModel,
-                                        onContactClick = { contact ->
-                                            resolvedContactsViewModel.select(contact)
-                                            navController.navigate("contactDetail")
-                                        }
-                                    )
-                                }
-
-                                composable(DependentsRoute.route) {
-                                    LaunchedEffect(Unit) {
-                                        userViewModel.loadUserProfile()
-                                    }
-
-                                    DependentsScreen(
-                                        userViewModel = userViewModel,
-                                        onContactClick = { contact ->
-                                            resolvedContactsViewModel.select(contact)
-                                            navController.navigate("contactDetail")
-                                        }
-                                    )
-                                }
-
-
-                                composable("contactDetail") {
-                                    val scope = rememberCoroutineScope()
-
-                                    LaunchedEffect(Unit) {
-                                        scope.launch {
-                                            resolvedContactsViewModel.refreshSelectedContact()
-                                        }
-                                    }
-
-                                    if (resolvedContactsViewModel.selectedResolvedContact.value != null) {
-                                        ContactDetailScreen(
-                                            userViewModel = userViewModel,
-                                            resolvedContactsViewModel = resolvedContactsViewModel,
-                                            onBack = { navController.popBackStack() }
-                                        )
-                                    }
-                                }
-
-                                composable(UserProfileRoute.route) {
-                                    UserProfileScreen()
-                                }
-
-
-                                composable("qrScanner") {
-                                    QRCodeScannerScreen(
                                         resolvedContactsViewModel = resolvedContactsViewModel,
-                                        onBack = { navController.popBackStack() },
-                                        onNavigateToAddContact = {
-                                            navController.navigate("addContactViaQr") {
-                                                popUpTo("qrScanner") { inclusive = true }
-                                            }
-                                        }
-                                    )
-                                }
-
-                                composable("addContactViaQr") {
-                                    val qrCodeId = resolvedContactsViewModel.scannedQrContent ?: ""
-
-                                    AddContactViaQRCodeScreen(
-                                        qrCodeId = qrCodeId,
                                         onBack = { navController.popBackStack() }
                                     )
                                 }
+                            }
 
+                            composable(UserProfileRoute.route) {
+                                UserProfileScreen()
+                            }
+
+                            composable("qrScanner") {
+                                QRCodeScannerScreen(
+                                    resolvedContactsViewModel = resolvedContactsViewModel,
+                                    onBack = { navController.popBackStack() },
+                                    onNavigateToAddContact = {
+                                        navController.navigate("addContactViaQr") {
+                                            popUpTo("qrScanner") { inclusive = true }
+                                        }
+                                    }
+                                )
+                            }
+
+                            composable("addContactViaQr") {
+                                val qrCodeId = resolvedContactsViewModel.scannedQrContent ?: ""
+                                AddContactViaQRCodeScreen(
+                                    qrCodeId = qrCodeId,
+                                    onBack = { navController.popBackStack() }
+                                )
                             }
                         }
                     }
@@ -1220,27 +1257,31 @@ fun LifeSignalApp(
     }
 }
 
+
 @Composable
-fun AuthNavHost(
+fun AuthenticationNavigationHost(
+    authenticationViewModel: AuthenticationViewModel,
     onSignedIn: () -> Unit,
-    activity: Activity,
     signInWithCredential: (PhoneAuthCredential, () -> Unit, (String) -> Unit) -> Unit
 ) {
     val navController = rememberNavController()
-    val viewModel: SignInViewModel = viewModel()
 
     NavHost(navController = navController, startDestination = AuthRoutes.Phone) {
         composable(AuthRoutes.Phone) {
-            PhoneEntryScreen(
-                viewModel = viewModel,
-                activity = activity,
-                onCodeSent = { navController.navigate(AuthRoutes.Code) }
+            PhoneNumberEntryScreen(
+                authenticationViewModel = authenticationViewModel,
+                onCodeSent = {
+                    navController.navigate(AuthRoutes.Code)
+                }
             )
         }
         composable(AuthRoutes.Code) {
-            CodeEntryScreen(
-                viewModel = viewModel,
-                onBack = { navController.popBackStack() },
+            VerificationCodeScreen(
+                authenticationViewModel = authenticationViewModel,
+                onBack = {
+                    authenticationViewModel.reset()
+                    navController.popBackStack()
+                },
                 onSignedIn = onSignedIn,
                 signInWithCredential = signInWithCredential
             )
@@ -1248,27 +1289,13 @@ fun AuthNavHost(
     }
 }
 
-object AuthRoutes {
-    const val Phone = "auth/phone"
-    const val Code = "auth/code"
-}
-
-class SignInViewModel : ViewModel() {
-    var phone by mutableStateOf(Phone(""))
-    var phoneText by mutableStateOf("")
-    var region by mutableStateOf("US")
-    var smsCode by mutableStateOf("")
-    var verificationId by mutableStateOf<String?>(null)
-    var errorMessage by mutableStateOf<String?>(null)
-}
 
 @Composable
-fun PhoneEntryScreen(
-    viewModel: SignInViewModel,
-    activity: Activity,
+fun PhoneNumberEntryScreen(
+    authenticationViewModel: AuthenticationViewModel,
     onCodeSent: () -> Unit
 ) {
-    val fullPhoneNumber = "+${getAllRegions().first { it.code == viewModel.region }.dialCode.filter(Char::isDigit)}${viewModel.phoneText}"
+    val activity = LocalContext.current.findActivity()
 
     Column(
         modifier = Modifier
@@ -1280,62 +1307,62 @@ fun PhoneEntryScreen(
 
         Image(
             painter = painterResource(id = R.drawable.life_signal_logo),
-            contentDescription = "App Logo",
+            contentDescription = null,
             modifier = Modifier.size(100.dp)
         )
 
         Spacer(Modifier.height(24.dp))
 
         Text(
-            text = "Welcome to LifeSignal",
+            "Welcome to LifeSignal",
             style = MaterialTheme.typography.headlineMedium,
             textAlign = TextAlign.Center
         )
 
         Spacer(Modifier.height(32.dp))
 
-        PhoneInput(
-            phoneText = viewModel.phoneText,
-            regionCode = viewModel.region,
+        PhoneNumberInput(
+            phoneText = authenticationViewModel.phoneNumber,
+            regionCode = authenticationViewModel.phoneRegion,
             onValueChange = { digits, newPhone, newRegion ->
-                viewModel.phoneText = digits
-                viewModel.phone = newPhone
-                viewModel.region = newRegion
-            }
+                authenticationViewModel.phoneNumber = digits
+                authenticationViewModel.dialablePhoneNumber = newPhone
+                authenticationViewModel.phoneRegion = newRegion
+            },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !authenticationViewModel.verificationSent
         )
 
         Spacer(Modifier.height(24.dp))
 
-        val isValidNumber = viewModel.phone.isValid(viewModel.region) ||
-                viewModel.phone.number == "+11234567890"
-
         Button(
             onClick = {
-                startPhoneVerification(
-                    phoneNumber = fullPhoneNumber,
-                    activity = activity,
-                    onCodeSent = { id ->
-                        viewModel.verificationId = id
-                        viewModel.smsCode = ""
-                        viewModel.errorMessage = null
-                        onCodeSent()
-                    },
-                    onError = { error ->
-                        viewModel.errorMessage = error.message
-                    }
-                )
+                if (activity != null) {
+                    authenticationViewModel.startPhoneVerification(
+                        activity = activity,
+                        onCodeSent = { id ->
+                            authenticationViewModel.verificationId = id
+                            authenticationViewModel.smsCode = ""
+                            authenticationViewModel.errorMessage = null
+                            authenticationViewModel.verificationSent = true
+                            onCodeSent()
+                        },
+                        onError = { error ->
+                            authenticationViewModel.errorMessage = error.message
+                        }
+                    )
+                }
             },
-            enabled = isValidNumber,
-            modifier = Modifier.fillMaxWidth()
+            enabled = (
+                    authenticationViewModel.dialablePhoneNumber.isValid(authenticationViewModel.phoneRegion) ||
+                            authenticationViewModel.phoneNumber == "1234567890"
+                    ) && !authenticationViewModel.verificationSent,
+                    modifier = Modifier.fillMaxWidth()
         ) {
             Text("Send Code")
         }
 
         Spacer(Modifier.height(16.dp))
-
-        viewModel.errorMessage?.let {
-            Text(it, color = MaterialTheme.colorScheme.error)
-        }
 
         Text(
             "You may receive an SMS for verification. Standard rates apply.",
@@ -1343,6 +1370,7 @@ fun PhoneEntryScreen(
         )
     }
 }
+
 
 data class Region(
     val code: String,
@@ -1379,16 +1407,17 @@ fun getAllRegions(): List<Region> {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun PhoneInput(
+fun PhoneNumberInput(
     phoneText: String,
     regionCode: String,
-    onValueChange: (String, Phone, regionCode: String) -> Unit
+    onValueChange: (String, Phone, regionCode: String) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
 ) {
     val regions = remember { getAllRegions() }
     var region by remember { mutableStateOf(regions.first { it.code == regionCode }) }
     var showDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
-    var isPressed by remember { mutableStateOf(false) }
 
     val filteredRegions = regions.filter {
         it.name.contains(searchQuery, ignoreCase = true) ||
@@ -1400,56 +1429,62 @@ fun PhoneInput(
     val phone = Phone(e164)
     val isValid = phone.isValid(region.code)
 
+    var fieldValue by remember { mutableStateOf(TextFieldValue(text = phoneText)) }
+
+    val phoneUtil = remember { PhoneNumberUtil.getInstance() }
+    val maxLength = remember(region.code) {
+        try {
+            val example = phoneUtil.getExampleNumber(region.code)
+            phoneUtil.getNationalSignificantNumber(example).length
+        } catch (e: Exception) {
+            15
+        }
+    }
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier
     ) {
         OutlinedTextField(
             value = "${region.flag} ${region.dialCode}",
             onValueChange = {},
+            enabled = false,
             readOnly = true,
-            trailingIcon = {
-                Icon(Icons.Default.ArrowDropDown, contentDescription = "Select Region")
-            },
             modifier = Modifier
-                .width(120.dp)
+                .weight(1f)
                 .combinedClickable(
+                    enabled = enabled,
                     onClick = {
-                        isPressed = true
                         showDialog = true
                     },
                     onClickLabel = "Open Region Picker",
                     onLongClick = null,
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
                 ),
             shape = MaterialTheme.shapes.extraSmall,
             singleLine = true,
-            enabled = false,
             label = { Text("Region") },
+            textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center),
             colors = TextFieldDefaults.colors(
-                disabledTextColor = LocalContentColor.current,
+                disabledTextColor = if (!enabled) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                disabledLabelColor = if (!enabled) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                disabledIndicatorColor = if (!enabled) MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+                else MaterialTheme.colorScheme.outline,
+                focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+                unfocusedIndicatorColor = MaterialTheme.colorScheme.outline,
+                focusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 disabledContainerColor = Color.Transparent,
-                disabledIndicatorColor = if (isPressed)
-                    MaterialTheme.colorScheme.primary
-                else
-                    MaterialTheme.colorScheme.outline,
-                disabledTrailingIconColor = LocalContentColor.current,
-                disabledLabelColor = LocalContentColor.current
+                unfocusedContainerColor = Color.Transparent,
+                focusedContainerColor = Color.Transparent,
+                errorContainerColor = Color.Transparent
             )
         )
 
         Spacer(Modifier.width(8.dp))
-
-        var fieldValue by remember { mutableStateOf(TextFieldValue(text = phoneText)) }
-
-        val phoneUtil = remember { PhoneNumberUtil.getInstance() }
-        val maxLength = remember(region.code) {
-            try {
-                val example = phoneUtil.getExampleNumber(region.code)
-                phoneUtil.getNationalSignificantNumber(example).length
-            } catch (e: Exception) {
-                15
-            }
-        }
 
         OutlinedTextField(
             value = fieldValue,
@@ -1457,7 +1492,7 @@ fun PhoneInput(
                 val rawDigits = newValue.text.filter(Char::isDigit).take(maxLength)
 
                 val formatted = try {
-                    val formatter = PhoneNumberUtil.getInstance().getAsYouTypeFormatter(region.code)
+                    val formatter = phoneUtil.getAsYouTypeFormatter(region.code)
                     formatter.clear()
                     rawDigits.fold("") { acc, c -> formatter.inputDigit(c) }
                 } catch (_: Exception) {
@@ -1473,23 +1508,19 @@ fun PhoneInput(
                 onValueChange(rawDigits, Phone(fullNumber), region.code)
             },
             label = { Text("Phone Number") },
+            enabled = enabled,
             isError = phoneText.isNotBlank() && !isValid,
-            trailingIcon = {
-                if (phoneText.isNotBlank() && isValid) {
-                    Icon(
-                        Icons.Default.Check,
-                        contentDescription = null,
-                        tint = Color.Green
-                    )
-                }
-            },
             keyboardOptions = KeyboardOptions.Default.copy(keyboardType = KeyboardType.Phone),
             singleLine = true,
-            modifier = Modifier.weight(1f),
+            textStyle = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(2f),
             colors = TextFieldDefaults.colors(
                 focusedIndicatorColor = if (phoneText.isNotBlank() && !isValid) Color.Red else MaterialTheme.colorScheme.primary,
                 unfocusedIndicatorColor = if (phoneText.isNotBlank() && !isValid) Color.Red else MaterialTheme.colorScheme.outline,
-                cursorColor = MaterialTheme.colorScheme.primary
+                disabledContainerColor = Color.Transparent,
+                unfocusedContainerColor = Color.Transparent,
+                focusedContainerColor = Color.Transparent,
+                errorContainerColor = Color.Transparent
             )
         )
     }
@@ -1517,8 +1548,13 @@ fun PhoneInput(
                                         region = r
                                         showDialog = false
                                         searchQuery = ""
-                                        val fullNumber = "+${r.dialCode.filter(Char::isDigit)}$phoneText"
-                                        onValueChange(phoneText, Phone(fullNumber), r.code)
+
+                                        val fullNumber = "+${r.dialCode.filter(Char::isDigit)}${phoneText.filter(Char::isDigit)}"
+                                        onValueChange(
+                                            phoneText.filter(Char::isDigit),
+                                            Phone(fullNumber),
+                                            r.code
+                                        )
                                     }
                                     .padding(8.dp)
                             )
@@ -1533,6 +1569,7 @@ fun PhoneInput(
         )
     }
 }
+
 
 fun phoneVisualTransformation(regionCode: String): VisualTransformation {
     return VisualTransformation { text ->
@@ -1555,8 +1592,8 @@ fun phoneVisualTransformation(regionCode: String): VisualTransformation {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CodeEntryScreen(
-    viewModel: SignInViewModel,
+fun VerificationCodeScreen(
+    authenticationViewModel: AuthenticationViewModel,
     onBack: () -> Unit,
     onSignedIn: () -> Unit,
     signInWithCredential: (PhoneAuthCredential, () -> Unit, (String) -> Unit) -> Unit
@@ -1579,8 +1616,9 @@ fun CodeEntryScreen(
                 title = {},
                 navigationIcon = {
                     IconButton(onClick = {
-                        viewModel.smsCode = ""
-                        viewModel.errorMessage = null
+                        authenticationViewModel.smsCode = ""
+                        authenticationViewModel.errorMessage = null
+                        authenticationViewModel.verificationId = null
                         onBack()
                     }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
@@ -1592,12 +1630,11 @@ fun CodeEntryScreen(
         Column(
             modifier = Modifier
                 .padding(innerPadding)
-                .fillMaxSize()
+                .fillMaxWidth()
                 .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Top
         ) {
-            Spacer(Modifier.height(48.dp))
-
             Image(
                 painter = painterResource(id = R.drawable.life_signal_logo),
                 contentDescription = "App Logo",
@@ -1607,93 +1644,89 @@ fun CodeEntryScreen(
             Spacer(Modifier.height(24.dp))
 
             Text(
-                text = "Enter SMS Code",
+                text = "SMS Code Verification",
                 style = MaterialTheme.typography.headlineMedium,
                 textAlign = TextAlign.Center
             )
 
             Spacer(Modifier.height(32.dp))
 
-            val formattedCode = remember(viewModel.smsCode) {
-                viewModel.smsCode.chunked(3).joinToString(" ")
+            val formattedCode = remember(authenticationViewModel.smsCode) {
+                authenticationViewModel.smsCode.chunked(3).joinToString(" ")
             }
 
-            OutlinedTextField(
-                value = viewModel.smsCode,
-                onValueChange = {
-                    viewModel.smsCode = it.filter(Char::isDigit).take(6)
-                },
-                visualTransformation = CodeVisualTransformation,
-                isError = viewModel.smsCode.length != 6 && viewModel.smsCode.isNotBlank(),
-                textStyle = LocalTextStyle.current.copy(
-                    textAlign = TextAlign.Center,
-                    fontSize = MaterialTheme.typography.headlineSmall.fontSize
-                ),
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions.Default.copy(keyboardType = KeyboardType.NumberPassword),
-                singleLine = true
+            VerificationCodeInput(
+                code = authenticationViewModel.smsCode,
+                onCodeChange = { authenticationViewModel.smsCode = it },
+                modifier = Modifier.fillMaxWidth(0.8f)
             )
 
             Spacer(Modifier.height(24.dp))
 
             Button(
                 onClick = {
-                    val id = viewModel.verificationId
-                    if (viewModel.smsCode.length == 6 && id != null) {
-                        val credential = PhoneAuthProvider.getCredential(id, viewModel.smsCode)
+                    val id = authenticationViewModel.verificationId
+                    if (authenticationViewModel.smsCode.length == 6 && id != null) {
+                        val credential = PhoneAuthProvider.getCredential(id, authenticationViewModel.smsCode)
                         signInWithCredential(credential, onSignedIn) {
-                            viewModel.errorMessage = it
+                            authenticationViewModel.errorMessage = it
                         }
                     } else {
-                        viewModel.errorMessage = "Enter a valid 6-digit code"
+                        authenticationViewModel.errorMessage = "Enter a valid 6-digit code"
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = viewModel.smsCode.length == 6
+                enabled = authenticationViewModel.smsCode.length == 6
             ) {
-                Text("Sign In")
+                Text("Verify")
             }
 
             Spacer(Modifier.height(16.dp))
 
-            viewModel.errorMessage?.let {
-                Text(it, color = MaterialTheme.colorScheme.error)
-            }
+            Text(
+                "You may receive an SMS for verification. Standard rates apply.",
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }
 
-
-fun startPhoneVerification(
-    phoneNumber: String,
-    activity: Activity,
-    onCodeSent: (String) -> Unit,
-    onError: (FirebaseException) -> Unit
+@Composable
+fun VerificationCodeInput(
+    modifier: Modifier = Modifier,
+    onCodeChange: (String) -> Unit,
+    label: String = "Verification Code",
+    code: String = ""
 ) {
-    val options = PhoneAuthOptions.newBuilder(FirebaseAuth.getInstance())
-        .setPhoneNumber(phoneNumber)
-        .setTimeout(60L, TimeUnit.SECONDS)
-        .setActivity(activity)
-        .setCallbacks(object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
-            override fun onVerificationCompleted(credential: PhoneAuthCredential) {
-                FirebaseAuth.getInstance().signInWithCredential(credential)
+    val CodeVisualTransformation = remember {
+        VisualTransformation { text ->
+            val trimmed = text.text.take(6)
+            val formatted = trimmed.chunked(3).joinToString(" ")
+            val offsetMapping = object : OffsetMapping {
+                override fun originalToTransformed(offset: Int) = if (offset <= 3) offset else offset + 1
+                override fun transformedToOriginal(offset: Int) = if (offset <= 3) offset else offset - 1
             }
+            TransformedText(AnnotatedString(formatted), offsetMapping)
+        }
+    }
 
-            override fun onVerificationFailed(e: FirebaseException) {
-                onError(e)
-            }
-
-            override fun onCodeSent(verificationId: String, token: PhoneAuthProvider.ForceResendingToken) {
-                onCodeSent(verificationId)
-            }
-        })
-        .build()
-
-    PhoneAuthProvider.verifyPhoneNumber(options)
+    OutlinedTextField(
+        value = code,
+        onValueChange = { onCodeChange(it.filter(Char::isDigit).take(6)) },
+        label = { Text(label) },
+        visualTransformation = CodeVisualTransformation,
+        textStyle = LocalTextStyle.current.copy(
+            textAlign = TextAlign.Center,
+            fontSize = MaterialTheme.typography.bodyLarge.fontSize
+        ),
+        keyboardOptions = KeyboardOptions.Default.copy(keyboardType = KeyboardType.NumberPassword),
+        singleLine = true,
+        modifier = modifier
+    )
 }
 
 @Composable
-fun PhoneInputScreen(
+fun AuthenticationScreen(
     initialRegionCode: String = "US",
     onPhoneChanged: (Phone, regionCode: String) -> Unit
 ) {
@@ -2399,6 +2432,7 @@ fun DependentsScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UserProfileScreen(
+    authenticationViewModel: AuthenticationViewModel = viewModel(),
     userViewModel: UserViewModel = viewModel(),
     onUpdatePhoneClick: () -> Unit = {}
 ) {
@@ -2409,6 +2443,12 @@ fun UserProfileScreen(
     var note by remember(userProfile?.note) {
         mutableStateOf(userProfile?.note.orEmpty())
     }
+
+    val context = LocalContext.current
+    val activity = context.findActivity()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
 
     LaunchedEffect(Unit) {
         userViewModel.loadUserProfile()
@@ -2432,24 +2472,34 @@ fun UserProfileScreen(
             Spacer(Modifier.height(8.dp))
 
             var showDialog by remember { mutableStateOf(false) }
-            var nameText by remember { mutableStateOf(userProfile?.name.orEmpty()) }
+            var nameText by remember { mutableStateOf("") }
 
             Text(
                 text = userProfile?.name ?: "First Last",
                 style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.clickable { showDialog = true }
+                modifier = Modifier.clickable {
+                    showDialog = true
+                }
             )
 
             if (showDialog) {
-                val context = LocalContext.current
+
+                LaunchedEffect(showDialog) {
+                    if (showDialog) {
+                        nameText = userProfile?.name.orEmpty()
+                    }
+                }
 
                 AlertDialog(
-                    onDismissRequest = { showDialog = false },
+                    onDismissRequest = {
+                        focusManager.clearFocus()
+                        keyboardController?.hide()
+                        showDialog = false
+                    },
                     confirmButton = {
                         TextButton(onClick = {
                             userViewModel.updateName(nameText)
                             showDialog = false
-
                             Toast.makeText(context, "Updated Name", Toast.LENGTH_SHORT).show()
                         }) { Text("Save") }
                     },
@@ -2461,16 +2511,27 @@ fun UserProfileScreen(
                         OutlinedTextField(
                             value = nameText,
                             onValueChange = { nameText = it },
+                            label = { Text("Profile Name") },
                             singleLine = true
                         )
                     }
                 )
             }
 
-            val formattedPhone = userProfile?.let {
-                formatPhoneNumber(it.phone.number, it.phoneRegion)
-            } ?: "+1 (123) 456-7890"
+            val defaultRegion = "US"
 
+            val formattedPhone = userProfile?.let {
+                val phoneUtil = PhoneNumberUtil.getInstance()
+                val parsed = phoneUtil.parse(it.phone.number, it.phoneRegion)
+                val formatted = phoneUtil.format(parsed, PhoneNumberUtil.PhoneNumberFormat.NATIONAL)
+
+                if (it.phoneRegion != defaultRegion) {
+                    val flag = getFlagEmoji(it.phoneRegion)
+                    "$flag $formatted (${it.phoneRegion})"
+                } else {
+                    formatted
+                }
+            } ?: "+1 (123) 456-7890"
 
             Text(
                 text = formattedPhone,
@@ -2487,6 +2548,9 @@ fun UserProfileScreen(
                     .padding(bottom = 8.dp)
             )
 
+            var dialogOpen by remember { mutableStateOf(false) }
+            var tempNote by remember { mutableStateOf("") }
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2495,6 +2559,10 @@ fun UserProfileScreen(
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(12.dp)
                     )
+                    .clickable {
+                        tempNote = note.ifBlank { userProfile?.note.orEmpty() }
+                        dialogOpen = true
+                    }
                     .verticalScroll(noteScroll)
                     .padding(12.dp)
             ) {
@@ -2506,29 +2574,155 @@ fun UserProfileScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                     )
-                }
-
-                BasicTextField(
-                    value = note,
-                    onValueChange = {
-                        note = it
-                        userViewModel.updateNote(it)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = MaterialTheme.typography.bodySmall.copy(
+                } else {
+                    Text(
+                        text = displayNote,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
-                    ),
-                    maxLines = 150
+                    )
+                }
+            }
+
+            if (dialogOpen) {
+                AlertDialog(
+                    onDismissRequest = {
+                        focusManager.clearFocus()
+                        keyboardController?.hide()
+                        dialogOpen = false
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            note = tempNote
+                            userViewModel.updateNote(tempNote)
+                            dialogOpen = false
+                        }) {
+                            Text("Save")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { dialogOpen = false }) {
+                            Text("Cancel")
+                        }
+                    },
+                    title = { Text("Edit Note") },
+                    text = {
+                        val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+                        val textFieldHeight = screenHeight * 0.4f
+
+                        OutlinedTextField(
+                            value = tempNote,
+                            onValueChange = { tempNote = it },
+                            label = { Text("Contact Note") },
+                            singleLine = false,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(textFieldHeight)
+                        )
+                    }
                 )
             }
 
             Spacer(Modifier.height(32.dp))
 
+            val phoneUtil = PhoneNumberUtil.getInstance()
+            val authViewModel: AuthenticationViewModel = viewModel()
+            var showPhoneDialog by remember { mutableStateOf(false) }
+
+            val regionCode = authViewModel.phoneRegion
+            val phoneText = try {
+                val parsed = phoneUtil.parse(authViewModel.phoneNumber, regionCode)
+                phoneUtil.format(parsed, PhoneNumberUtil.PhoneNumberFormat.NATIONAL)
+            } catch (e: Exception) {
+                ""
+            }
+
+            fun resetPhoneVerificationState() {
+                focusManager.clearFocus()
+                keyboardController?.hide()
+                showPhoneDialog = false
+                authViewModel.resetVerification()
+                authViewModel.smsCode = ""
+                authViewModel.verificationId = null
+            }
+
             Button(
-                onClick = onUpdatePhoneClick,
+                onClick = {
+                    authViewModel.phoneRegion = userProfile?.phoneRegion ?: "US"
+                    authViewModel.phoneNumber = userProfile?.phoneNumber.orEmpty()
+                    showPhoneDialog = true
+                },
                 shape = RoundedCornerShape(24.dp)
             ) {
                 Text("Update Phone Number")
+            }
+
+            val isCodeValid = authViewModel.smsCode.length == 6
+
+            if (showPhoneDialog) {
+                AlertDialog(
+                    onDismissRequest = { resetPhoneVerificationState() },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                val fullPhone = "+${getDialCode(authViewModel.phoneRegion)}${phoneText.filter(Char::isDigit)}"
+
+                                if (!authViewModel.verificationSent) {
+                                    authViewModel.dialablePhoneNumber = Phone(fullPhone)
+                                    authViewModel.startPhoneVerification(
+                                        activity = activity!!,
+                                        onCodeSent = { id -> authViewModel.verificationId = id; authViewModel.verificationSent = true },
+                                        onError = { Toast.makeText(context, "Phone verification failed", Toast.LENGTH_SHORT).show() }
+                                    )
+                                } else {
+                                    val id = authViewModel.verificationId ?: return@TextButton
+                                    val credential = PhoneAuthProvider.getCredential(id, authViewModel.smsCode)
+                                    FirebaseAuth.getInstance().currentUser
+                                        ?.updatePhoneNumber(credential)
+                                        ?.addOnSuccessListener {
+                                            userViewModel.updatePhoneNumber(fullPhone, authViewModel.phoneRegion)
+                                            resetPhoneVerificationState()
+                                            Toast.makeText(context, "Updated phone number", Toast.LENGTH_SHORT).show()
+                                        }
+                                        ?.addOnFailureListener {
+                                            Toast.makeText(context, "Invalid code", Toast.LENGTH_SHORT).show()
+                                        }
+                                }
+                            },
+                            enabled = !authViewModel.verificationSent || isCodeValid
+                        ) {
+                            Text(if (authViewModel.verificationSent) "Verify" else "Send Code")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { resetPhoneVerificationState() }) {
+                            Text("Cancel")
+                        }
+                    },
+                    title = { Text("Edit Phone Number") },
+                    text = {
+                        Column {
+                            PhoneNumberInput(
+                                phoneText = phoneText,
+                                regionCode = authViewModel.phoneRegion,
+                                onValueChange = { newText, _, newCode ->
+                                    authViewModel.phoneNumber = newText
+                                    authViewModel.phoneRegion = newCode
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !authViewModel.verificationSent
+                            )
+
+                            if (authViewModel.verificationSent) {
+                                Spacer(Modifier.height(12.dp))
+                                VerificationCodeInput(
+                                    code = authViewModel.smsCode,
+                                    onCodeChange = { authViewModel.smsCode = it },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                    }
+                )
             }
 
             Spacer(Modifier.height(16.dp))
@@ -2575,6 +2769,11 @@ fun UserProfileScreen(
         }
     }
 }
+
+fun getFlagEmoji(regionCode: String): String =
+    regionCode.uppercase().map { 0x1F1E6 - 'A'.code + it.code }
+        .joinToString("") { String(Character.toChars(it)) }
+
 
 fun formatPhoneNumber(number: String, regionCode: String): String {
     val nationalDigits = number.filter { it.isDigit() }
@@ -2727,7 +2926,9 @@ fun ContactDetailScreen(
             Text(
                 text = "Contact Note",
                 style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
             )
 
             Box(
