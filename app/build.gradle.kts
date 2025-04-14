@@ -70,7 +70,6 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.coil.compose)
 
-
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     implementation("androidx.camera:camera-core:1.3.1")
@@ -86,6 +85,8 @@ dependencies {
     implementation(libs.firebase.auth)
     implementation(libs.firebase.firestore.ktx)
     implementation(libs.firebase.messaging)
+    implementation(libs.firebase.functions.ktx)
+
 
     implementation(libs.libphonenumber)
 

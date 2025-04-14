@@ -12,7 +12,6 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
@@ -39,12 +38,14 @@ import androidx.camera.view.PreviewView
 // Compose UI
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.Sms
@@ -57,12 +58,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 
 
 // Core utilities
@@ -94,6 +98,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
 import com.google.firebase.messaging.FirebaseMessaging
+import com.google.firebase.functions.FirebaseFunctions
 
 // ML Kit
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -119,64 +124,76 @@ import com.google.zxing.MultiFormatWriter
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.set
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import coil.compose.rememberAsyncImagePainter
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import java.io.File
 import java.io.FileOutputStream
-
+import java.util.Locale
+import androidx.core.net.toUri
 
 @JvmInline
 value class Phone(val number: String) {
 
     fun isValid(region: String = "US"): Boolean {
         return try {
-            val parsed = phoneUtil.parse(number, region)
-            phoneUtil.isValidNumber(parsed)
-        } catch (_: NumberParseException) {
+            val parsed = util.parse(number, region)
+            util.isValidNumber(parsed)
+        } catch (_: Exception) {
             false
         }
     }
 
-    fun asE164(region: String = "US"): String? {
+    fun format(region: String = "US"): String? {
         return try {
-            val parsed = phoneUtil.parse(number, region)
-            phoneUtil.format(parsed, PhoneNumberUtil.PhoneNumberFormat.E164)
-        } catch (_: NumberParseException) {
-            null
-        }
-    }
+            val parsed = util.parse(number, region)
+            val numberRegion = util.getRegionCodeForNumber(parsed)
 
-    fun asInternational(region: String = "US"): String? {
-        return try {
-            val parsed = phoneUtil.parse(number, region)
-            phoneUtil.format(parsed, PhoneNumberUtil.PhoneNumberFormat.INTERNATIONAL)
+            val format = when {
+                numberRegion == region -> PhoneNumberUtil.PhoneNumberFormat.NATIONAL
+                else -> PhoneNumberUtil.PhoneNumberFormat.INTERNATIONAL
+            }
+
+            util.format(parsed, format)
         } catch (_: NumberParseException) {
             null
         }
     }
 
     companion object {
-        private val phoneUtil = PhoneNumberUtil.getInstance()
+        private val util = PhoneNumberUtil.getInstance()
     }
 }
 
+
+
 data class UserProfile(
     val name: String = "",
-    val phone: Phone = Phone(""),
+    val phoneNumber: String = "",
+    val phoneRegion: String = "",
     val note: String = "",
     val checkInInterval: Long = 24 * 60 * 60 * 1000L,
     val lastCheckedIn: Timestamp = Timestamp.now(),
-    val contacts: List<ResolvedContact> = emptyList(),
+    val checkInExpiration: Timestamp,
+    val contacts: List<ContactRef> = emptyList(),
     val notify30MinBefore: Boolean = true,
     val notify2HoursBefore: Boolean = true,
     val qrCodeId: String = "",
     val sessionId: String = "",
     val fcmToken: String = ""
 ) {
-    val checkInExpiry: Timestamp
-        get() = Timestamp(Date(lastCheckedIn.toDate().time + checkInInterval))
+    val phone: Phone
+        get() = Phone(phoneNumber)
 }
 
 
@@ -203,60 +220,38 @@ class UserViewModel : ViewModel() {
 
                 if (snapshot.exists()) {
                     val name = snapshot.getString("name") ?: ""
-                    val phoneStr = snapshot.getString("phone") ?: ""
+                    val phoneNumber = snapshot.getString("phoneNumber") ?: ""
+                    val phoneRegion = snapshot.getString("phoneRegion") ?: "US"
                     val note = snapshot.getString("note") ?: ""
                     val intervalMillis = snapshot.getLong("checkInInterval") ?: 86400000L
                     val lastCheckedIn = snapshot.getTimestamp("lastCheckedIn") ?: Timestamp.now()
+                    val checkInExpiration = Timestamp(Date(lastCheckedIn.toDate().time + intervalMillis))
                     val sessionId = snapshot.getString("sessionId") ?: ""
                     val fcmToken = snapshot.getString("fcmToken") ?: ""
                     val notify30 = snapshot.getBoolean("notify30MinBefore") ?: true
                     val notify2hr = snapshot.getBoolean("notify2HoursBefore") ?: true
                     val qrCodeId = snapshot.getString("qrCodeId") ?: ""
 
-                    val contactList = mutableListOf<ResolvedContact>()
+                    val contactsRefs = mutableListOf<ContactRef>()
                     val rawContacts: List<Any?> = snapshot.get("contacts") as? List<*> ?: emptyList()
 
                     for (raw in rawContacts) {
                         val map = raw as? Map<*, *> ?: continue
-                        val ref = map["contact"] as? DocumentReference ?: continue
+                        val ref = map["reference"] as? DocumentReference ?: continue
                         val isResponder = map["isResponder"] as? Boolean ?: false
                         val isDependent = map["isDependent"] as? Boolean ?: false
-
-                        try {
-                            val contactSnap = ref.get().await()
-                            if (!contactSnap.exists()) continue
-
-                            val contactName = contactSnap.getString("name") ?: ""
-                            val contactPhone = contactSnap.getString("phone") ?: ""
-                            val contactNote = contactSnap.getString("note") ?: ""
-                            val contactInterval = contactSnap.getLong("checkInInterval") ?: 86400000L
-                            val contactLastCheckedIn = contactSnap.getTimestamp("lastCheckedIn") ?: Timestamp.now()
-
-
-                            contactList.add(
-                                ResolvedContact(
-                                    reference = ref,
-                                    name = contactName,
-                                    phone = Phone(contactPhone),
-                                    note = contactNote,
-                                    checkInInterval = contactInterval,
-                                    lastCheckedIn = contactLastCheckedIn,
-                                    isResponder = isResponder,
-                                    isDependent = isDependent
-                                )
-                            )
-                        } catch (e: Exception) {
-                            Log.e("UserViewModel", "Failed to load contact ref", e)
-                        }
+                        contactsRefs.add(ContactRef(ref, isResponder, isDependent))
                     }
 
                     val profile = UserProfile(
                         name = name,
-                        phone = Phone(phoneStr),
+                        phoneNumber = phoneNumber,
+                        phoneRegion = phoneRegion,
                         note = note,
                         checkInInterval = intervalMillis,
                         lastCheckedIn = lastCheckedIn,
-                        contacts = contactList,
+                        checkInExpiration = checkInExpiration,
+                        contacts = contactsRefs,
                         notify30MinBefore = notify30,
                         notify2HoursBefore = notify2hr,
                         qrCodeId = qrCodeId,
@@ -273,51 +268,6 @@ class UserViewModel : ViewModel() {
         }
     }
 
-
-
-    suspend fun saveUserProfile(profile: UserProfile) {
-        val uid = auth.currentUser?.uid ?: return
-
-        val contactsData = profile.contacts.mapNotNull {
-            val reference = db.collection("users")
-                .whereEqualTo("phone", it.phone.number)
-                .limit(1)
-                .get()
-                .await()
-                .documents
-                .firstOrNull()
-                ?.reference ?: return@mapNotNull null
-
-            mapOf(
-                "contact" to reference,
-                "isResponder" to it.isResponder,
-                "isDependent" to it.isDependent
-            )
-        }
-
-        val data = mapOf(
-            "name" to profile.name,
-            "phone" to profile.phone.number,
-            "note" to profile.note,
-            "checkInInterval" to profile.checkInInterval,
-            "lastCheckedIn" to profile.lastCheckedIn,
-            "contacts" to contactsData,
-            "notify30MinBefore" to profile.notify30MinBefore,
-            "notify2HoursBefore" to profile.notify2HoursBefore,
-            "qrCodeId" to profile.qrCodeId,
-            "fcmToken" to profile.fcmToken,
-            "sessionId" to profile.sessionId
-        )
-
-
-        db.collection("users")
-            .document(uid)
-            .set(data, SetOptions.merge())
-            .await()
-    }
-
-
-
     fun updateNote(newNote: String) {
         updateProfile { it.copy(note = newNote) }
     }
@@ -326,15 +276,35 @@ class UserViewModel : ViewModel() {
         updateProfile { it.copy(name = newName) }
     }
 
+    fun updatePhoneNumber(newNumber: String) {
+        updateProfile { it.copy(phoneNumber = newNumber) }
+    }
+
+    fun updatePhoneRegion(newRegion: String) {
+        updateProfile { it.copy(phoneRegion = newRegion) }
+    }
+
     fun updateCheckInInterval(intervalMillis: Long) {
-        updateProfile { it.copy(checkInInterval = intervalMillis) }
+        updateProfile { profile ->
+            val newExpiration = Timestamp(Date(profile.lastCheckedIn.toDate().time + intervalMillis))
+            profile.copy(
+                checkInInterval = intervalMillis,
+                checkInExpiration = newExpiration
+            )
+        }
     }
 
     fun updateLastCheckedIn(now: Timestamp = Timestamp.now()) {
-        updateProfile { it.copy(lastCheckedIn = now) }
+        updateProfile { profile ->
+            val newExpiration = Timestamp(Date(now.toDate().time + profile.checkInInterval))
+            profile.copy(
+                lastCheckedIn = now,
+                checkInExpiration = newExpiration
+            )
+        }
     }
 
-    fun updateContacts(newContacts: List<ResolvedContact>) {
+    fun updateContacts(newContacts: List<ContactRef>) {
         updateProfile { it.copy(contacts = newContacts) }
     }
 
@@ -348,6 +318,35 @@ class UserViewModel : ViewModel() {
         }
     }
 
+    fun deleteContactReferencesFromUserAndContact(contactReference: DocumentReference) {
+        val uid = auth.currentUser?.uid ?: return
+        val currentUserRef = db.collection("users").document(uid)
+        val functions = FirebaseFunctions.getInstance("us-central1")
+
+        viewModelScope.launch {
+            try {
+                val data = mapOf(
+                    "userARefPath" to currentUserRef.path,
+                    "userBRefPath" to contactReference.path
+                )
+
+                functions
+                    .getHttpsCallable("deleteContactRelation")
+                    .call(data)
+                    .await()
+
+                val profile = _profile.value
+                _profile.value = profile?.copy(
+                    contacts = profile.contacts.filterNot { it.reference.path == contactReference.path }
+                )
+
+            } catch (e: Exception) {
+                Log.e("UserViewModel", "Failed to delete contact via function", e)
+            }
+        }
+    }
+
+
     fun generateAndSaveQRCodeId() {
         updateProfile { profile ->
             profile.copy(qrCodeId = UUID.randomUUID().toString())
@@ -358,33 +357,50 @@ class UserViewModel : ViewModel() {
         qrCodeId: String,
         isResponder: Boolean,
         isDependent: Boolean,
+        context: Context,
         onSuccess: () -> Unit = {},
         onError: (Exception) -> Unit = {}
     ) {
         val user = auth.currentUser ?: return
+        val userRef = db.collection("users").document(user.uid)
 
         viewModelScope.launch {
             try {
-                val result = db.collection("users")
+                val contactRef = db.collection("users")
                     .whereEqualTo("qrCodeId", qrCodeId)
                     .limit(1)
                     .get()
                     .await()
+                    .documents
+                    .firstOrNull()
+                    ?.reference ?: return@launch
 
-                val ref = result.documents.firstOrNull()?.reference ?: return@launch
+                val alreadyExists = _profile.value?.contacts?.any {
+                    it.reference.path == contactRef.path
+                } == true
 
-                val contact = ResolvedContact(
-                    reference = ref,
-                    name = "",
-                    phone = Phone(""),
-                    note = "",
-                    checkInInterval = 86400000L,
-                    lastCheckedIn = Timestamp.now(),
-                    isResponder = isResponder,
-                    isDependent = isDependent
+                if (alreadyExists) {
+                    Toast.makeText(context, "Contact already exists", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+
+                FirebaseFunctions.getInstance("us-central1")
+                    .getHttpsCallable("addContactRelation")
+                    .call(
+                        mapOf(
+                            "userRefPath" to userRef.path,
+                            "contactRefPath" to contactRef.path,
+                            "isResponder" to isResponder,
+                            "isDependent" to isDependent
+                        )
+                    ).await()
+
+                _profile.value = _profile.value?.copy(
+                    contacts = _profile.value?.contacts?.plus(
+                        ContactRef(contactRef, isResponder, isDependent)
+                    ) ?: listOf(ContactRef(contactRef, isResponder, isDependent))
                 )
 
-                updateProfile { it.copy(contacts = it.contacts + contact) }
                 onSuccess()
             } catch (e: Exception) {
                 Log.e("UserViewModel", "Failed to add contact via QR", e)
@@ -400,6 +416,39 @@ class UserViewModel : ViewModel() {
         viewModelScope.launch {
             saveUserProfile(updated)
         }
+    }
+
+    suspend fun saveUserProfile(profile: UserProfile) {
+        val uid = auth.currentUser?.uid ?: return
+
+        val contactsData = profile.contacts.map {
+            mapOf(
+                "reference" to it.reference,
+                "isResponder" to it.isResponder,
+                "isDependent" to it.isDependent
+            )
+        }
+
+        val data = mapOf(
+            "name" to profile.name,
+            "phoneNumber" to profile.phoneNumber,
+            "phoneRegion" to profile.phoneRegion,
+            "note" to profile.note,
+            "checkInInterval" to profile.checkInInterval,
+            "lastCheckedIn" to profile.lastCheckedIn,
+            "checkInExpiration" to profile.checkInExpiration,
+            "contacts" to contactsData,
+            "notify30MinBefore" to profile.notify30MinBefore,
+            "notify2HoursBefore" to profile.notify2HoursBefore,
+            "qrCodeId" to profile.qrCodeId,
+            "fcmToken" to profile.fcmToken,
+            "sessionId" to profile.sessionId
+        )
+
+        db.collection("users")
+            .document(uid)
+            .set(data, SetOptions.merge())
+            .await()
     }
 
     suspend fun resolveContact(contactRef: ContactRef): ResolvedContact? {
@@ -436,27 +485,15 @@ data class ContactRef(
     val isDependent: Boolean
 )
 
-data class ResolvedContact(
-    val reference: DocumentReference,
-    val name: String,
-    val phone: Phone,
-    val note: String,
-    val checkInInterval: Long,
-    val lastCheckedIn: Timestamp,
-    val isResponder: Boolean,
-    val isDependent: Boolean
-) {
-    val checkInExpiry: Timestamp
-        get() = Timestamp(Date(lastCheckedIn.toDate().time + checkInInterval))
-}
-
-
-class ContactViewModel : ViewModel() {
+class ResolvedContactsViewModel : ViewModel() {
     private val auth = FirebaseAuth.getInstance()
     private val db = FirebaseFirestore.getInstance()
 
-    private val _resolvedContact = mutableStateOf<ResolvedContact?>(null)
-    val resolvedContact: State<ResolvedContact?> = _resolvedContact
+    private val _resolvedContacts = MutableStateFlow<List<ResolvedContact>>(emptyList())
+    val resolvedContacts: StateFlow<List<ResolvedContact>> = _resolvedContacts
+
+    private val _selectedResolvedContact = mutableStateOf<ResolvedContact?>(null)
+    val selectedResolvedContact: State<ResolvedContact?> = _selectedResolvedContact
 
     var scannedQrContent by mutableStateOf<String?>(null)
         private set
@@ -466,25 +503,25 @@ class ContactViewModel : ViewModel() {
     }
 
     fun select(contact: ResolvedContact) {
-        _resolvedContact.value = contact
+        _selectedResolvedContact.value = contact
         Log.d("ContactViewModel", "Selected: ${contact.name}")
     }
 
     fun clear() {
-        _resolvedContact.value = null
+        _selectedResolvedContact.value = null
     }
 
     fun toggleResponder() {
-        val contact = _resolvedContact.value ?: return
+        val contact = _selectedResolvedContact.value ?: return
         val updated = contact.copy(isResponder = !contact.isResponder)
-        _resolvedContact.value = updated
+        _selectedResolvedContact.value = updated
         updateFlagsInFirestore(updated)
     }
 
     fun toggleDependent() {
-        val contact = _resolvedContact.value ?: return
+        val contact = _selectedResolvedContact.value ?: return
         val updated = contact.copy(isDependent = !contact.isDependent)
-        _resolvedContact.value = updated
+        _selectedResolvedContact.value = updated
         updateFlagsInFirestore(updated)
     }
 
@@ -497,22 +534,17 @@ class ContactViewModel : ViewModel() {
                 val userSnap = userDocRef.get().await()
                 val rawContacts = userSnap.get("contacts") as? List<*> ?: return@launch
 
-                val contacts = rawContacts.mapNotNull { item ->
-                    if (item is Map<*, *>) {
-                        @Suppress("UNCHECKED_CAST")
-                        item as? Map<String, Any?>
+                val updatedContacts = rawContacts.mapNotNull { map ->
+                    if (map is Map<*, *>) {
+                        val ref = map["reference"] as? DocumentReference
+                        if (ref?.path == contact.reference.path) {
+                            mapOf(
+                                "reference" to ref,
+                                "isResponder" to contact.isResponder,
+                                "isDependent" to contact.isDependent
+                            )
+                        } else map
                     } else null
-                }
-
-                val updatedContacts = contacts.map { map ->
-                    val ref = map["contact"] as? DocumentReference
-                    if (ref?.path == contact.reference.path) {
-                        mapOf(
-                            "contact" to ref,
-                            "isResponder" to contact.isResponder,
-                            "isDependent" to contact.isDependent
-                        )
-                    } else map
                 }
 
                 userDocRef.update("contacts", updatedContacts).await()
@@ -523,8 +555,33 @@ class ContactViewModel : ViewModel() {
         }
     }
 
+    suspend fun loadAllResolvedContacts(contactRefs: List<ContactRef>) {
+        val resolvedList = contactRefs.mapNotNull { ref ->
+            try {
+                val snapshot = ref.reference.get().await()
+                if (!snapshot.exists()) return@mapNotNull null
+
+                ResolvedContact(
+                    reference = ref.reference,
+                    name = snapshot.getString("name") ?: "",
+                    phone = Phone(snapshot.getString("phone") ?: ""),
+                    note = snapshot.getString("note") ?: "",
+                    checkInInterval = snapshot.getLong("checkInInterval") ?: 86400000L,
+                    lastCheckedIn = snapshot.getTimestamp("lastCheckedIn") ?: Timestamp.now(),
+                    isResponder = ref.isResponder,
+                    isDependent = ref.isDependent
+                )
+            } catch (e: Exception) {
+                Log.e("ContactViewModel", "Failed to resolve contact ${ref.reference.path}", e)
+                null
+            }
+        }
+
+        _resolvedContacts.value = resolvedList
+    }
+
     suspend fun refreshSelectedContact() {
-        val current = _resolvedContact.value ?: return
+        val current = _selectedResolvedContact.value ?: return
 
         try {
             val snap = current.reference.get().await()
@@ -536,17 +593,31 @@ class ContactViewModel : ViewModel() {
                     note = snap.getString("note") ?: "",
                     checkInInterval = snap.getLong("checkInInterval") ?: 86400000L,
                     lastCheckedIn = snap.getTimestamp("lastCheckedIn") ?: Timestamp.now(),
-                    isResponder = current.isResponder, // flags come from profile
+                    isResponder = current.isResponder,
                     isDependent = current.isDependent
                 )
-                _resolvedContact.value = refreshed
+                _selectedResolvedContact.value = refreshed
                 Log.d("ContactViewModel", "Contact refreshed from Firestore")
             }
         } catch (e: Exception) {
             Log.e("ContactViewModel", "Failed to refresh contact", e)
         }
     }
+}
 
+
+data class ResolvedContact(
+    val reference: DocumentReference,
+    val name: String,
+    val phone: Phone,
+    val note: String,
+    val checkInInterval: Long,
+    val lastCheckedIn: Timestamp,
+    val isResponder: Boolean,
+    val isDependent: Boolean
+) {
+    val checkInExpiry: Timestamp
+        get() = Timestamp(Date(lastCheckedIn.toDate().time + checkInInterval))
 }
 
 
@@ -686,7 +757,7 @@ class MainActivity : ComponentActivity() {
         const val CHANNEL_ID = "lifesignal_timer_channel"
     }
 
-    private var secondsLeft by mutableStateOf(10000)
+    private var millisecondsLeft by mutableStateOf(24 * 60 * 60 * 1000L)
     var resetTrigger by mutableStateOf(0)
 
     private var storedVerificationId: String? = null
@@ -859,36 +930,32 @@ class MainActivity : ComponentActivity() {
         setContent {
             val userViewModel: UserViewModel = viewModel()
             val userProfile by userViewModel.profile.collectAsState()
+            var millisLeft by remember { mutableStateOf(0L) }
 
-            LaunchedEffect(Unit) {
-                userViewModel.loadUserProfile()
-            }
-
-            LaunchedEffect(userProfile?.checkInExpiry, resetTrigger) {
+            LaunchedEffect(userProfile?.checkInExpiration, resetTrigger) {
                 userProfile?.let { profile ->
-                    val millisLeft = profile.checkInExpiry.toDate().time - System.currentTimeMillis()
-                    secondsLeft = (millisLeft / 1000).coerceAtLeast(0).toInt()
-
-                    while (secondsLeft > 0) {
+                    while (true) {
+                        val remaining = profile.checkInExpiration.toDate().time - System.currentTimeMillis()
+                        millisLeft = remaining.coerceAtLeast(0)
+                        if (millisLeft == 0L) {
+                            sendNotification(
+                                context = this@MainActivity,
+                                textTitle = "Timer Expired",
+                                textContent = "Please check in."
+                            )
+                            break
+                        }
                         delay(1000L)
-                        secondsLeft--
                     }
-
-                    sendNotification(
-                        context = this@MainActivity,
-                        textTitle = "Timer Expired",
-                        textContent = "Please check in."
-                    )
                 }
             }
 
             LifeSignalApp(
-                secondsLeft = secondsLeft,
+                millisecondsLeft = millisLeft,
                 userViewModel = userViewModel,
                 showLogin = showLogin,
                 onSignedIn = { showLogin = false }
             )
-
         }
     }
 
@@ -907,7 +974,7 @@ class MainActivity : ComponentActivity() {
                     showLogin = true
                     setContent {
                         LifeSignalApp(
-                            secondsLeft = secondsLeft,
+                            millisecondsLeft = millisecondsLeft,
                             userViewModel = UserViewModel(),
                             showLogin = true,
                             onSignedIn = { showLogin = false }
@@ -939,7 +1006,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun LifeSignalApp(
-    secondsLeft: Int,
+    millisecondsLeft: Long,
     userViewModel: UserViewModel,
     showLogin: Boolean,
     onSignedIn: () -> Unit,
@@ -947,7 +1014,7 @@ fun LifeSignalApp(
 )
  {
     val navController = rememberNavController()
-    val contactViewModel: ContactViewModel = viewModel()
+    val resolvedContactsViewModel: ResolvedContactsViewModel = viewModel()
     val userViewModel: UserViewModel = viewModel()
     val profile by userViewModel.profile.collectAsState()
     val isSignedIn = FirebaseAuth.getInstance().currentUser != null
@@ -963,20 +1030,15 @@ fun LifeSignalApp(
      LifeSignalTheme {
         when {
             showLogin || authState == null -> {
-                SignInScreen(
-                    onSignedIn = {
-                        onSignedIn()
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                    activity = activity,
-                    signInWithCredential = remember {
-                        { credential, onSuccess, onFailure ->
-                            FirebaseAuth.getInstance().signInWithCredential(credential)
-                                .addOnCompleteListener(activity!!) { task ->
-                                    if (task.isSuccessful) onSuccess()
-                                    else onFailure(task.exception?.message ?: "Sign-in failed")
-                                }
-                        }
+                AuthNavHost(
+                    onSignedIn = onSignedIn,
+                    activity = activity!!,
+                    signInWithCredential = { credential, onSuccess, onFailure ->
+                        FirebaseAuth.getInstance().signInWithCredential(credential)
+                            .addOnCompleteListener(activity) { task ->
+                                if (task.isSuccessful) onSuccess()
+                                else onFailure(task.exception?.message ?: "Sign-in failed")
+                            }
                     }
                 )
             }
@@ -1013,7 +1075,7 @@ fun LifeSignalApp(
                                     Spacer(Modifier.height(16.dp))
 
                                     Text("Check-in Time Left", style = MaterialTheme.typography.titleMedium)
-                                    Text(formatCountdown(secondsLeft), style = MaterialTheme.typography.titleLarge)
+                                    Text(formatCountdown(millisecondsLeft), style = MaterialTheme.typography.titleLarge)
 
                                     Spacer(Modifier.height(8.dp))
 
@@ -1084,7 +1146,7 @@ fun LifeSignalApp(
                                     RespondersScreen(
                                         userViewModel = userViewModel,
                                         onContactClick = { contact ->
-                                            contactViewModel.select(contact)
+                                            resolvedContactsViewModel.select(contact)
                                             navController.navigate("contactDetail")
                                         }
                                     )
@@ -1098,7 +1160,7 @@ fun LifeSignalApp(
                                     DependentsScreen(
                                         userViewModel = userViewModel,
                                         onContactClick = { contact ->
-                                            contactViewModel.select(contact)
+                                            resolvedContactsViewModel.select(contact)
                                             navController.navigate("contactDetail")
                                         }
                                     )
@@ -1106,24 +1168,19 @@ fun LifeSignalApp(
 
 
                                 composable("contactDetail") {
-                                    val contact = contactViewModel.resolvedContact.value
                                     val scope = rememberCoroutineScope()
 
                                     LaunchedEffect(Unit) {
                                         scope.launch {
-                                            contactViewModel.refreshSelectedContact()
+                                            resolvedContactsViewModel.refreshSelectedContact()
                                         }
                                     }
 
-                                    if (contact != null) {
+                                    if (resolvedContactsViewModel.selectedResolvedContact.value != null) {
                                         ContactDetailScreen(
-                                            contact = contact,
-                                            onBack = { navController.popBackStack() },
-                                            onCallClick = { /* ... */ },
-                                            onMessageClick = { /* ... */ },
-                                            onResponderToggle = { contactViewModel.toggleResponder() },
-                                            onDependentToggle = { contactViewModel.toggleDependent() },
-                                            onDeleteClick = { /* ... */ }
+                                            userViewModel = userViewModel,
+                                            resolvedContactsViewModel = resolvedContactsViewModel,
+                                            onBack = { navController.popBackStack() }
                                         )
                                     }
                                 }
@@ -1135,7 +1192,7 @@ fun LifeSignalApp(
 
                                 composable("qrScanner") {
                                     QRCodeScannerScreen(
-                                        contactViewModel = contactViewModel,
+                                        resolvedContactsViewModel = resolvedContactsViewModel,
                                         onBack = { navController.popBackStack() },
                                         onNavigateToAddContact = {
                                             navController.navigate("addContactViaQr") {
@@ -1146,7 +1203,7 @@ fun LifeSignalApp(
                                 }
 
                                 composable("addContactViaQr") {
-                                    val qrCodeId = contactViewModel.scannedQrContent ?: ""
+                                    val qrCodeId = resolvedContactsViewModel.scannedQrContent ?: ""
 
                                     AddContactViaQRCodeScreen(
                                         qrCodeId = qrCodeId,
@@ -1163,97 +1220,446 @@ fun LifeSignalApp(
     }
 }
 
-
 @Composable
-fun SignInScreen(
+fun AuthNavHost(
     onSignedIn: () -> Unit,
-    modifier: Modifier = Modifier,
-    initialVerificationId: String? = null,
-    activity: Activity? = null,
+    activity: Activity,
     signInWithCredential: (PhoneAuthCredential, () -> Unit, (String) -> Unit) -> Unit
 ) {
-    val context = LocalContext.current
-    val realActivity = activity ?: (context as? Activity)
-    var phoneNumber by remember { mutableStateOf("+11234567890") }
-    var smsCode by remember { mutableStateOf("123456") }
-    var verificationId by remember { mutableStateOf(initialVerificationId) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    val viewModel: AuthViewModel = viewModel()
+    val navController = rememberNavController()
+    val viewModel: SignInViewModel = viewModel()
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text("Phone Number", style = MaterialTheme.typography.titleMedium)
-
-        OutlinedTextField(
-            value = phoneNumber,
-            onValueChange = { phoneNumber = it },
-            label = { Text("e.g. +1234567890") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        if (verificationId != null) {
-            Spacer(Modifier.height(16.dp))
-            Text("Enter SMS Code", style = MaterialTheme.typography.titleMedium)
-
-            OutlinedTextField(
-                value = smsCode,
-                onValueChange = { smsCode = it },
-                isError = viewModel.errorMessage != null,
-                label = {
-                    Text(
-                        if (viewModel.errorMessage != null) "Invalid Code" else "123456"
-                    )
-                },
-                modifier = Modifier.fillMaxWidth()
+    NavHost(navController = navController, startDestination = AuthRoutes.Phone) {
+        composable(AuthRoutes.Phone) {
+            PhoneEntryScreen(
+                viewModel = viewModel,
+                activity = activity,
+                onCodeSent = { navController.navigate(AuthRoutes.Code) }
             )
         }
-
-        errorMessage?.let {
-            Spacer(Modifier.height(8.dp))
-            Text(text = it, color = MaterialTheme.colorScheme.error)
+        composable(AuthRoutes.Code) {
+            CodeEntryScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() },
+                onSignedIn = onSignedIn,
+                signInWithCredential = signInWithCredential
+            )
         }
+    }
+}
+
+object AuthRoutes {
+    const val Phone = "auth/phone"
+    const val Code = "auth/code"
+}
+
+class SignInViewModel : ViewModel() {
+    var phone by mutableStateOf(Phone(""))
+    var phoneText by mutableStateOf("")
+    var region by mutableStateOf("US")
+    var smsCode by mutableStateOf("")
+    var verificationId by mutableStateOf<String?>(null)
+    var errorMessage by mutableStateOf<String?>(null)
+}
+
+@Composable
+fun PhoneEntryScreen(
+    viewModel: SignInViewModel,
+    activity: Activity,
+    onCodeSent: () -> Unit
+) {
+    val fullPhoneNumber = "+${getAllRegions().first { it.code == viewModel.region }.dialCode.filter(Char::isDigit)}${viewModel.phoneText}"
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(48.dp))
+
+        Image(
+            painter = painterResource(id = R.drawable.life_signal_logo),
+            contentDescription = "App Logo",
+            modifier = Modifier.size(100.dp)
+        )
 
         Spacer(Modifier.height(24.dp))
 
+        Text(
+            text = "Welcome to LifeSignal",
+            style = MaterialTheme.typography.headlineMedium,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(Modifier.height(32.dp))
+
+        PhoneInput(
+            phoneText = viewModel.phoneText,
+            regionCode = viewModel.region,
+            onValueChange = { digits, newPhone, newRegion ->
+                viewModel.phoneText = digits
+                viewModel.phone = newPhone
+                viewModel.region = newRegion
+            }
+        )
+
+        Spacer(Modifier.height(24.dp))
+
+        val isValidNumber = viewModel.phone.isValid(viewModel.region) ||
+                viewModel.phone.number == "+11234567890"
+
         Button(
             onClick = {
-                if (verificationId == null) {
-                    realActivity?.let { activity ->
-                        startPhoneVerification(
-                            phoneNumber = phoneNumber,
-                            activity = activity,
-                            onCodeSent = { id -> verificationId = id },
-                            onError = { error -> errorMessage = error.message }
-                        )
-                    } ?: run {
-                        errorMessage = "Activity not available."
+                startPhoneVerification(
+                    phoneNumber = fullPhoneNumber,
+                    activity = activity,
+                    onCodeSent = { id ->
+                        viewModel.verificationId = id
+                        viewModel.smsCode = ""
+                        viewModel.errorMessage = null
+                        onCodeSent()
+                    },
+                    onError = { error ->
+                        viewModel.errorMessage = error.message
                     }
-                } else {
-                    if (smsCode.isNotBlank()) {
-                        val credential = PhoneAuthProvider.getCredential(verificationId!!, smsCode)
-                        viewModel.signInWithCredential(context, credential) {
-                            onSignedIn()
-                        }
-                    } else {
-                        viewModel.errorMessage = "Enter the SMS code"
-                    }
-                }
+                )
             },
+            enabled = isValidNumber,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(if (verificationId == null) "Send Code" else "Sign In")
+            Text("Send Code")
         }
 
         Spacer(Modifier.height(16.dp))
+
+        viewModel.errorMessage?.let {
+            Text(it, color = MaterialTheme.colorScheme.error)
+        }
 
         Text(
             "You may receive an SMS for verification. Standard rates apply.",
             style = MaterialTheme.typography.bodySmall
         )
+    }
+}
+
+data class Region(
+    val code: String,
+    val dialCode: String,
+    val name: String,
+    val flag: String
+)
+
+
+fun getAllRegions(): List<Region> {
+    val util = PhoneNumberUtil.getInstance()
+
+    return util.supportedRegions.mapNotNull { regionCode ->
+        try {
+            val dialCode = "+${util.getCountryCodeForRegion(regionCode)}"
+            val name = Locale("", regionCode).displayCountry
+            val flag = regionCode
+                .uppercase()
+                .map { it.code - 0x41 + 0x1F1E6 }
+                .joinToString("") { Character.toChars(it).concatToString() }
+
+            Region(
+                code = regionCode,
+                dialCode = dialCode,
+                name = name,
+                flag = flag
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }.sortedBy { it.name }
+}
+
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun PhoneInput(
+    phoneText: String,
+    regionCode: String,
+    onValueChange: (String, Phone, regionCode: String) -> Unit
+) {
+    val regions = remember { getAllRegions() }
+    var region by remember { mutableStateOf(regions.first { it.code == regionCode }) }
+    var showDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var isPressed by remember { mutableStateOf(false) }
+
+    val filteredRegions = regions.filter {
+        it.name.contains(searchQuery, ignoreCase = true) ||
+                it.code.contains(searchQuery, ignoreCase = true) ||
+                it.dialCode.contains(searchQuery)
+    }
+
+    val e164 = "+${region.dialCode.filter(Char::isDigit)}$phoneText"
+    val phone = Phone(e164)
+    val isValid = phone.isValid(region.code)
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        OutlinedTextField(
+            value = "${region.flag} ${region.dialCode}",
+            onValueChange = {},
+            readOnly = true,
+            trailingIcon = {
+                Icon(Icons.Default.ArrowDropDown, contentDescription = "Select Region")
+            },
+            modifier = Modifier
+                .width(120.dp)
+                .combinedClickable(
+                    onClick = {
+                        isPressed = true
+                        showDialog = true
+                    },
+                    onClickLabel = "Open Region Picker",
+                    onLongClick = null,
+                ),
+            shape = MaterialTheme.shapes.extraSmall,
+            singleLine = true,
+            enabled = false,
+            label = { Text("Region") },
+            colors = TextFieldDefaults.colors(
+                disabledTextColor = LocalContentColor.current,
+                disabledContainerColor = Color.Transparent,
+                disabledIndicatorColor = if (isPressed)
+                    MaterialTheme.colorScheme.primary
+                else
+                    MaterialTheme.colorScheme.outline,
+                disabledTrailingIconColor = LocalContentColor.current,
+                disabledLabelColor = LocalContentColor.current
+            )
+        )
+
+        Spacer(Modifier.width(8.dp))
+
+        var fieldValue by remember { mutableStateOf(TextFieldValue(text = phoneText)) }
+
+        val phoneUtil = remember { PhoneNumberUtil.getInstance() }
+        val maxLength = remember(region.code) {
+            try {
+                val example = phoneUtil.getExampleNumber(region.code)
+                phoneUtil.getNationalSignificantNumber(example).length
+            } catch (e: Exception) {
+                15
+            }
+        }
+
+        OutlinedTextField(
+            value = fieldValue,
+            onValueChange = { newValue ->
+                val rawDigits = newValue.text.filter(Char::isDigit).take(maxLength)
+
+                val formatted = try {
+                    val formatter = PhoneNumberUtil.getInstance().getAsYouTypeFormatter(region.code)
+                    formatter.clear()
+                    rawDigits.fold("") { acc, c -> formatter.inputDigit(c) }
+                } catch (_: Exception) {
+                    rawDigits
+                }
+
+                fieldValue = TextFieldValue(
+                    text = formatted,
+                    selection = TextRange(formatted.length)
+                )
+
+                val fullNumber = "+${region.dialCode.filter(Char::isDigit)}$rawDigits"
+                onValueChange(rawDigits, Phone(fullNumber), region.code)
+            },
+            label = { Text("Phone Number") },
+            isError = phoneText.isNotBlank() && !isValid,
+            trailingIcon = {
+                if (phoneText.isNotBlank() && isValid) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = null,
+                        tint = Color.Green
+                    )
+                }
+            },
+            keyboardOptions = KeyboardOptions.Default.copy(keyboardType = KeyboardType.Phone),
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+            colors = TextFieldDefaults.colors(
+                focusedIndicatorColor = if (phoneText.isNotBlank() && !isValid) Color.Red else MaterialTheme.colorScheme.primary,
+                unfocusedIndicatorColor = if (phoneText.isNotBlank() && !isValid) Color.Red else MaterialTheme.colorScheme.outline,
+                cursorColor = MaterialTheme.colorScheme.primary
+            )
+        )
+    }
+
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Select Region") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        label = { Text("Search") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                        items(filteredRegions) { r ->
+                            Text(
+                                text = "${r.flag} ${r.name} (${r.dialCode})",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        region = r
+                                        showDialog = false
+                                        searchQuery = ""
+                                        val fullNumber = "+${r.dialCode.filter(Char::isDigit)}$phoneText"
+                                        onValueChange(phoneText, Phone(fullNumber), r.code)
+                                    }
+                                    .padding(8.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+fun phoneVisualTransformation(regionCode: String): VisualTransformation {
+    return VisualTransformation { text ->
+        val nationalDigits = text.text.filter { it.isDigit() }
+
+        val formatted = try {
+            val formatter = PhoneNumberUtil.getInstance().getAsYouTypeFormatter(regionCode)
+            nationalDigits.fold("") { acc, c -> formatter.inputDigit(c) }
+        } catch (_: Exception) {
+            nationalDigits
+        }
+
+        TransformedText(
+            AnnotatedString(formatted),
+            OffsetMapping.Identity
+        )
+    }
+}
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CodeEntryScreen(
+    viewModel: SignInViewModel,
+    onBack: () -> Unit,
+    onSignedIn: () -> Unit,
+    signInWithCredential: (PhoneAuthCredential, () -> Unit, (String) -> Unit) -> Unit
+) {
+    val CodeVisualTransformation = VisualTransformation { text ->
+        val trimmed = text.text.take(6)
+        val formatted = trimmed.chunked(3).joinToString(" ")
+        val offsetMapping = object : OffsetMapping {
+            override fun originalToTransformed(offset: Int): Int =
+                if (offset <= 3) offset else offset + 1
+            override fun transformedToOriginal(offset: Int): Int =
+                if (offset <= 3) offset else offset - 1
+        }
+        TransformedText(AnnotatedString(formatted), offsetMapping)
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {},
+                navigationIcon = {
+                    IconButton(onClick = {
+                        viewModel.smsCode = ""
+                        viewModel.errorMessage = null
+                        onBack()
+                    }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .padding(innerPadding)
+                .fillMaxSize()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(Modifier.height(48.dp))
+
+            Image(
+                painter = painterResource(id = R.drawable.life_signal_logo),
+                contentDescription = "App Logo",
+                modifier = Modifier.size(100.dp)
+            )
+
+            Spacer(Modifier.height(24.dp))
+
+            Text(
+                text = "Enter SMS Code",
+                style = MaterialTheme.typography.headlineMedium,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(32.dp))
+
+            val formattedCode = remember(viewModel.smsCode) {
+                viewModel.smsCode.chunked(3).joinToString(" ")
+            }
+
+            OutlinedTextField(
+                value = viewModel.smsCode,
+                onValueChange = {
+                    viewModel.smsCode = it.filter(Char::isDigit).take(6)
+                },
+                visualTransformation = CodeVisualTransformation,
+                isError = viewModel.smsCode.length != 6 && viewModel.smsCode.isNotBlank(),
+                textStyle = LocalTextStyle.current.copy(
+                    textAlign = TextAlign.Center,
+                    fontSize = MaterialTheme.typography.headlineSmall.fontSize
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions.Default.copy(keyboardType = KeyboardType.NumberPassword),
+                singleLine = true
+            )
+
+            Spacer(Modifier.height(24.dp))
+
+            Button(
+                onClick = {
+                    val id = viewModel.verificationId
+                    if (viewModel.smsCode.length == 6 && id != null) {
+                        val credential = PhoneAuthProvider.getCredential(id, viewModel.smsCode)
+                        signInWithCredential(credential, onSignedIn) {
+                            viewModel.errorMessage = it
+                        }
+                    } else {
+                        viewModel.errorMessage = "Enter a valid 6-digit code"
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = viewModel.smsCode.length == 6
+            ) {
+                Text("Sign In")
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            viewModel.errorMessage?.let {
+                Text(it, color = MaterialTheme.colorScheme.error)
+            }
+        }
     }
 }
 
@@ -1284,6 +1690,138 @@ fun startPhoneVerification(
         .build()
 
     PhoneAuthProvider.verifyPhoneNumber(options)
+}
+
+@Composable
+fun PhoneInputScreen(
+    initialRegionCode: String = "US",
+    onPhoneChanged: (Phone, regionCode: String) -> Unit
+) {
+    val regions = remember { getAllRegions() }
+    var region by remember { mutableStateOf(regions.first { it.code == initialRegionCode }) }
+    var rawPhone by remember { mutableStateOf("") }
+    var showDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    val filteredRegions = regions.filter {
+        it.name.contains(searchQuery, ignoreCase = true) ||
+                it.code.contains(searchQuery, ignoreCase = true) ||
+                it.dialCode.contains(searchQuery)
+    }
+
+    val e164 = "+${region.dialCode.filter(Char::isDigit)}$rawPhone"
+    val phone = Phone(e164)
+    val isValid = phone.isValid(region.code)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Image(
+            painter = painterResource(id = R.drawable.life_signal_logo),
+            contentDescription = "App Logo",
+            modifier = Modifier.size(100.dp)
+        )
+
+        Spacer(Modifier.height(24.dp))
+
+        Text(
+            "Welcome to LifeSignal",
+            style = MaterialTheme.typography.headlineMedium,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(Modifier.height(32.dp))
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            OutlinedButton(
+                onClick = { showDialog = true },
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier
+                    .width(120.dp)
+                    .height(56.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text(region.flag, fontSize = 20.sp)
+                    Spacer(Modifier.width(4.dp))
+                    Text(region.dialCode, fontSize = 16.sp)
+                }
+            }
+
+            Spacer(Modifier.width(8.dp))
+
+            OutlinedTextField(
+                value = rawPhone,
+                onValueChange = {
+                    rawPhone = it.filter(Char::isDigit)
+                    onPhoneChanged(Phone(e164), region.code)
+                },
+                label = { Text("Phone Number") },
+                isError = rawPhone.isNotBlank() && !isValid,
+                trailingIcon = {
+                    if (rawPhone.isNotBlank()) {
+                        Icon(
+                            if (isValid) Icons.Default.Check else Icons.Default.Close,
+                            contentDescription = null,
+                            tint = if (isValid) Color.Green else Color.Red
+                        )
+                    }
+                },
+                keyboardOptions = KeyboardOptions.Default.copy(keyboardType = KeyboardType.Phone),
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Select Region") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        label = { Text("Search") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(Modifier.height(8.dp))
+
+                    LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                        items(filteredRegions) { r ->
+                            Text(
+                                text = "${r.flag} ${r.name} (${r.dialCode})",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        region = r
+                                        showDialog = false
+                                        searchQuery = ""
+                                    }
+                                    .padding(8.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -1344,17 +1882,21 @@ fun NameEntryScreenPreview() {
 //    }
 //}
 
-fun formatCountdown(seconds: Int): String {
-    val minutes = (seconds % 3600) / 60
-    val hours = (seconds % 86400) / 3600
-    val days = seconds / 86400
+fun formatCountdown(millis: Long): String {
+    if (millis <= 0) return "Timed Out"
 
-    return buildList {
-        if (days > 0) add("${days}d")
-        if (hours > 0) add("${hours}h")
-        if (minutes > 0) add("${minutes}m")
-    }.joinToString(" ")
+    val totalMinutes = (millis + 30_000L) / (1000 * 60)
+    val days = totalMinutes / (60 * 24)
+    val hours = (totalMinutes / 60) % 24
+    val minutes = totalMinutes % 60
+
+    return buildString {
+        if (days > 0) append("$days ${if (days == 1L) "day" else "days"} ")
+        if (hours > 0) append("$hours ${if (hours == 1L) "hour" else "hours"} ")
+        if (minutes > 0) append("$minutes ${if (minutes == 1L) "minute" else "minutes"} ")
+    }.trim()
 }
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1499,46 +2041,38 @@ fun HomeScreen(
 
             var dialogOpen by remember { mutableStateOf(false) }
 
+            val unitOptions = listOf("Days", "Hours")
+            val minDays = 1
+            val minHours = 8
+
             SettingCard(
                 icon = Icons.Default.AlarmOn,
                 title = "Check-in time interval",
-                subtitle = profile?.checkInInterval?.let { millis ->
-                    val days = millis / (1000 * 60 * 60 * 24)
-                    val remainingMillis = millis % (1000 * 60 * 60 * 24)
-                    val hours = remainingMillis / (1000 * 60 * 60)
-                    buildString {
-                        if (days > 0) append("$days ${if (days == 1L) "day" else "days"} ")
-                        if (hours > 0) append("$hours ${if (hours == 1L) "hour" else "hours"} ")
-                    }.trim()
-                } ?: "—",
+                subtitle = profile?.checkInInterval?.let(::formatCountdown) ?: "—",
                 onClick = { dialogOpen = true }
             )
 
-            var selectedIndex by remember { mutableIntStateOf(0) }
-            val unitOptions = listOf("Days", "Hours")
-            var selectedAmount by remember { mutableStateOf("1") }
+            val currentProfile = profile
 
-            if (dialogOpen) {
-                var selectedIndex by remember { mutableIntStateOf(0) }
-                var selectedAmount by remember { mutableStateOf("1") }
+            if (dialogOpen && currentProfile != null) {
+                var selectedIndex by remember {
+                    mutableIntStateOf(if ((currentProfile.checkInInterval / 1000 / 60 / 60) % 24 == 0L) 0 else 1)
+                }
 
-                val minDays = 1
-                val minHours = 8
-                val unitOptions = listOf("Days", "Hours")
+                var selectedAmount by remember {
+                    mutableStateOf(
+                        if (selectedIndex == 0)
+                            (currentProfile.checkInInterval / 1000 / 60 / 60 / 24).toString()
+                        else
+                            (currentProfile.checkInInterval / 1000 / 60 / 60).toString()
+                    )
+                }
 
                 val amountOptions = remember(selectedIndex) {
                     if (unitOptions[selectedIndex] == "Hours") {
-                        (minHours..99).map { it.toString() }
+                        (minHours..56 step 8).map { it.toString() }
                     } else {
-                        (minDays..99).map { it.toString() }
-                    }
-                }
-
-                SideEffect {
-                    val min = if (unitOptions[selectedIndex] == "Hours") minHours else minDays
-                    val current = selectedAmount.toIntOrNull() ?: 0
-                    if (current != min) {
-                        selectedAmount = min.toString()
+                        (minDays..14).map { it.toString() }
                     }
                 }
 
@@ -1546,7 +2080,7 @@ fun HomeScreen(
                     onDismissRequest = { dialogOpen = false },
                     confirmButton = {
                         TextButton(onClick = {
-                            val amount = selectedAmount.toIntOrNull() ?: 1
+                            val amount = selectedAmount.toLongOrNull() ?: 1
                             val millis = if (unitOptions[selectedIndex] == "Days") {
                                 amount * 24 * 60 * 60 * 1000L
                             } else {
@@ -1556,6 +2090,11 @@ fun HomeScreen(
                             dialogOpen = false
                         }) {
                             Text("OK")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { dialogOpen = false }) {
+                            Text("Cancel")
                         }
                     },
                     title = { Text("Select interval") },
@@ -1569,7 +2108,10 @@ fun HomeScreen(
                                     unitOptions.forEachIndexed { index, label ->
                                         SegmentedButton(
                                             shape = SegmentedButtonDefaults.itemShape(index, unitOptions.size),
-                                            onClick = { selectedIndex = index },
+                                            onClick = {
+                                                selectedIndex = index
+                                                selectedAmount = if (unitOptions[index] == "Hours") minHours.toString() else minDays.toString()
+                                            },
                                             selected = index == selectedIndex,
                                             label = { Text(label) }
                                         )
@@ -1741,10 +2283,19 @@ fun DropdownSelector(
 @Composable
 fun RespondersScreen(
     userViewModel: UserViewModel,
+    contactViewModel: ResolvedContactsViewModel = viewModel(),
     onContactClick: (ResolvedContact) -> Unit
 ) {
     val profile by userViewModel.profile.collectAsState()
-    val responders = profile?.contacts?.filter { it.isResponder } ?: emptyList()
+    val resolvedContacts by contactViewModel.resolvedContacts.collectAsState()
+
+    LaunchedEffect(profile?.contacts) {
+        if (profile != null) {
+            contactViewModel.loadAllResolvedContacts(profile!!.contacts)
+        }
+    }
+
+    val responders = resolvedContacts.filter { it.isResponder }
 
     Scaffold(
         topBar = {
@@ -1783,10 +2334,19 @@ fun RespondersScreen(
 @Composable
 fun DependentsScreen(
     onContactClick: (ResolvedContact) -> Unit,
-    userViewModel: UserViewModel
+    userViewModel: UserViewModel,
+    contactViewModel: ResolvedContactsViewModel = viewModel()
 ) {
     val profile by userViewModel.profile.collectAsState()
-    val dependents = profile?.contacts?.filter { it.isDependent } ?: emptyList()
+    val resolvedContacts by contactViewModel.resolvedContacts.collectAsState()
+
+    LaunchedEffect(profile?.contacts) {
+        if (profile != null) {
+            contactViewModel.loadAllResolvedContacts(profile!!.contacts)
+        }
+    }
+
+    val dependents = resolvedContacts.filter { it.isDependent }
 
     Scaffold(
         topBar = {
@@ -1801,24 +2361,24 @@ fun DependentsScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             items(dependents) { contact ->
-                var secondsLeft by remember(contact) {
+                var millisecondsLeft by remember(contact) {
                     mutableStateOf(
-                        ((contact.checkInExpiry.toDate().time - System.currentTimeMillis()) / 1000L).toInt().coerceAtLeast(0)
+                        (contact.checkInExpiry.toDate().time - System.currentTimeMillis())
+                            .coerceAtLeast(0)
                     )
                 }
 
                 LaunchedEffect(contact) {
-                    while (secondsLeft > 0) {
+                    while (millisecondsLeft > 0) {
                         delay(1000)
-                        secondsLeft--
+                        millisecondsLeft = (contact.checkInExpiry.toDate().time - System.currentTimeMillis())
+                            .coerceAtLeast(0)
                     }
                 }
 
-                val subtitle = formatCountdown(secondsLeft)
-
                 ContactCard(
                     name = contact.name,
-                    secondsLeft = secondsLeft,
+                    millisecondsLeft = millisecondsLeft,
                     contactType = ContactType.Dependent,
                     modifier = Modifier.clickable { onContactClick(contact) }
                 )
@@ -1826,6 +2386,7 @@ fun DependentsScreen(
         }
     }
 }
+
 
 //@Preview(showBackground = true)
 //@Composable
@@ -1870,13 +2431,49 @@ fun UserProfileScreen(
 
             Spacer(Modifier.height(8.dp))
 
-            Text(
-                text = userProfile?.name ?: "First Last",
-                style = MaterialTheme.typography.titleMedium
-            )
+            var showDialog by remember { mutableStateOf(false) }
+            var nameText by remember { mutableStateOf(userProfile?.name.orEmpty()) }
 
             Text(
-                text = userProfile?.phone?.number ?: "+1 (123) 456-7890",
+                text = userProfile?.name ?: "First Last",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.clickable { showDialog = true }
+            )
+
+            if (showDialog) {
+                val context = LocalContext.current
+
+                AlertDialog(
+                    onDismissRequest = { showDialog = false },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            userViewModel.updateName(nameText)
+                            showDialog = false
+
+                            Toast.makeText(context, "Updated Name", Toast.LENGTH_SHORT).show()
+                        }) { Text("Save") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDialog = false }) { Text("Cancel") }
+                    },
+                    title = { Text("Edit Name") },
+                    text = {
+                        OutlinedTextField(
+                            value = nameText,
+                            onValueChange = { nameText = it },
+                            singleLine = true
+                        )
+                    }
+                )
+            }
+
+            val formattedPhone = userProfile?.let {
+                formatPhoneNumber(it.phone.number, it.phoneRegion)
+            } ?: "+1 (123) 456-7890"
+
+
+            Text(
+                text = formattedPhone,
                 style = MaterialTheme.typography.bodyMedium
             )
 
@@ -1936,8 +2533,10 @@ fun UserProfileScreen(
 
             Spacer(Modifier.height(16.dp))
 
+            var showSignOutDialog by remember { mutableStateOf(false) }
+
             Button(
-                onClick = { FirebaseAuth.getInstance().signOut() },
+                onClick = { showSignOutDialog = true },
                 shape = RoundedCornerShape(24.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.errorContainer,
@@ -1947,8 +2546,44 @@ fun UserProfileScreen(
                 Text("Sign Out")
             }
 
+            val context = LocalContext.current
+
+            if (showSignOutDialog) {
+                AlertDialog(
+                    onDismissRequest = { showSignOutDialog = false },
+                    title = { Text("Sign Out") },
+                    text = { Text("Are you sure you want to sign out?") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showSignOutDialog = false
+                            FirebaseAuth.getInstance().signOut()
+
+                            Toast.makeText(context, "Signed Out", Toast.LENGTH_SHORT).show()
+                        }) {
+                            Text("Yes")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showSignOutDialog = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
+
             Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+fun formatPhoneNumber(number: String, regionCode: String): String {
+    val nationalDigits = number.filter { it.isDigit() }
+
+    return try {
+        val formatter = PhoneNumberUtil.getInstance().getAsYouTypeFormatter(regionCode)
+        nationalDigits.fold("") { acc, c -> formatter.inputDigit(c) }
+    } catch (_: Exception) {
+        nationalDigits
     }
 }
 
@@ -1963,28 +2598,21 @@ fun UserProfileScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContactDetailScreen(
-    contact: ResolvedContact,
-    onBack: () -> Unit,
-    onCallClick: () -> Unit,
-    onMessageClick: () -> Unit,
-    onResponderToggle: (Boolean) -> Unit,
-    onDependentToggle: (Boolean) -> Unit,
-    onDeleteClick: () -> Unit
+    userViewModel: UserViewModel,
+    resolvedContactsViewModel: ResolvedContactsViewModel,
+    onBack: () -> Unit
 ) {
+    val context = LocalContext.current
+
+    val contact = resolvedContactsViewModel.selectedResolvedContact.value ?: return
     val screenScroll = rememberScrollState()
     val noteScroll = rememberScrollState()
-
-    val name = contact.name
-    val phone = contact.phone.number
-    val note = contact.note
-    val isResponder = contact.isResponder
-    val isDependent = contact.isDependent
 
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    var localResponder by remember { mutableStateOf(isResponder) }
-    var localDependent by remember { mutableStateOf(isDependent) }
+    var localResponder by remember { mutableStateOf(contact.isResponder) }
+    var localDependent by remember { mutableStateOf(contact.isDependent) }
 
     fun enforceToggleState(type: String, newValue: Boolean) {
         val newResponder = if (type == "responder") newValue else localResponder
@@ -1999,16 +2627,11 @@ fun ContactDetailScreen(
 
         if (type == "responder") {
             localResponder = newValue
-            onResponderToggle(newValue)
+            resolvedContactsViewModel.toggleResponder()
         } else {
             localDependent = newValue
-            onDependentToggle(newValue)
+            resolvedContactsViewModel.toggleDependent()
         }
-    }
-
-
-    LaunchedEffect(contact) {
-        Log.d("ContactDetailScreen", "Showing contact: ${contact.name}")
     }
 
     Scaffold(
@@ -2037,16 +2660,16 @@ fun ContactDetailScreen(
         ) {
             Spacer(Modifier.height(24.dp))
 
-            Avatar(name = name, size = AvatarSize.Large)
+            Avatar(name = contact.name, size = AvatarSize.Large)
 
             Spacer(Modifier.height(8.dp))
 
-            Text(text = name, style = MaterialTheme.typography.titleMedium)
+            Text(text = contact.name, style = MaterialTheme.typography.titleMedium)
 
             val roleText = when {
-                isResponder && isDependent -> "Responder and Dependent"
-                isResponder -> "Responder"
-                isDependent -> "Dependent"
+                contact.isResponder && contact.isDependent -> "Responder and Dependent"
+                contact.isResponder -> "Responder"
+                contact.isDependent -> "Dependent"
                 else -> ""
             }
 
@@ -2060,21 +2683,42 @@ fun ContactDetailScreen(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(
-                    18.dp,
-                    Alignment.CenterHorizontally
-                )
+                horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterHorizontally)
             ) {
                 ActionButton(
                     icon = Icons.Default.PriorityHigh,
                     label = "Call",
-                    onClick = onCallClick
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_DIAL).apply {
+                            data = "tel:${contact.phone.number}".toUri()
+                        }
+                        context.startActivity(intent)
+                    }
                 )
 
                 ActionButton(
                     icon = Icons.Outlined.Sms,
                     label = "Message",
-                    onClick = onMessageClick
+                    onClick = {
+                        val phone = contact.phone.number
+
+                        val smsIntent = Intent(Intent.ACTION_SENDTO).apply {
+                            data = "smsto:$phone".toUri()
+                        }
+
+                        val whatsappIntent = Intent(Intent.ACTION_SENDTO).apply {
+                            data = "smsto:$phone".toUri()
+                            `package` = "com.whatsapp"
+                        }
+
+                        val chooserIntent = Intent.createChooser(smsIntent, "Choose app to message")
+
+                        if (whatsappIntent.resolveActivity(context.packageManager) != null) {
+                            chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(whatsappIntent))
+                        }
+
+                        context.startActivity(chooserIntent)
+                    }
                 )
             }
 
@@ -2083,9 +2727,7 @@ fun ContactDetailScreen(
             Text(
                 text = "Contact Note",
                 style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp)
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
             )
 
             Box(
@@ -2100,7 +2742,7 @@ fun ContactDetailScreen(
                     .padding(12.dp)
             ) {
                 Text(
-                    text = if (note.isNotBlank()) note else "This is sample text the contacts will see when they open this profile",
+                    text = if (contact.note.isNotBlank()) contact.note else "This is sample text the contacts will see when they open this profile",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -2134,14 +2776,41 @@ fun ContactDetailScreen(
 
             Spacer(Modifier.height(32.dp))
 
+            var showDeleteDialog by remember { mutableStateOf(false) }
+
             Button(
-                onClick = onDeleteClick,
+                onClick = { showDeleteDialog = true },
+                shape = RoundedCornerShape(24.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                ),
-                shape = RoundedCornerShape(24.dp)
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                )
             ) {
                 Text("Delete Contact")
+            }
+
+            if (showDeleteDialog) {
+                AlertDialog(
+                    onDismissRequest = { showDeleteDialog = false },
+                    title = { Text("Delete Contact") },
+                    text = { Text("Are you sure you want to delete this contact?") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            Toast.makeText(context, "Deleted Contact", Toast.LENGTH_SHORT).show()
+
+                            showDeleteDialog = false
+                            userViewModel.deleteContactReferencesFromUserAndContact(contact.reference)
+                            onBack()
+                        }) {
+                            Text("Yes")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDeleteDialog = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
             }
 
             Spacer(Modifier.height(24.dp))
@@ -2153,6 +2822,7 @@ fun ContactDetailScreen(
         }
     }
 }
+
 
 //@Preview(showBackground = true)
 //@Composable
@@ -2179,7 +2849,7 @@ fun ContactDetailScreen(
 fun QRCodeScannerScreen(
     onBack: () -> Unit,
     onNavigateToAddContact: () -> Unit,
-    contactViewModel: ContactViewModel = viewModel()
+    resolvedContactsViewModel: ResolvedContactsViewModel = viewModel()
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -2218,7 +2888,7 @@ fun QRCodeScannerScreen(
         BarcodeScanning.getClient().process(inputImage)
             .addOnSuccessListener { barcodes ->
                 barcodes.firstOrNull()?.rawValue?.let { qrContent ->
-                    contactViewModel.setScannedQr(qrContent)
+                    resolvedContactsViewModel.setScannedQr(qrContent)
                     onNavigateToAddContact()
                 }
             }
@@ -2247,7 +2917,7 @@ fun QRCodeScannerScreen(
                         BarcodeScanning.getClient().process(inputImage)
                             .addOnSuccessListener { barcodes ->
                                 barcodes.firstOrNull()?.rawValue?.let { qrContent ->
-                                    contactViewModel.setScannedQr(qrContent)
+                                    resolvedContactsViewModel.setScannedQr(qrContent)
                                     onNavigateToAddContact()
                                 }
                             }
@@ -2325,7 +2995,7 @@ fun QRCodeScannerScreen(
                             BarcodeScanning.getClient().process(inputImage)
                                 .addOnSuccessListener { barcodes ->
                                     barcodes.firstOrNull()?.rawValue?.let { qrContent ->
-                                        contactViewModel.setScannedQr(qrContent)
+                                        resolvedContactsViewModel.setScannedQr(qrContent)
                                         onNavigateToAddContact()
                                     }
                                 }
@@ -2536,6 +3206,7 @@ fun AddContactViaQRCodeScreen(
                         qrCodeId = qrCodeId,
                         isResponder = true,
                         isDependent = false,
+                        context = context,
                         onSuccess = {
                             Toast.makeText(context, "Added as Responder", Toast.LENGTH_SHORT).show()
                             onBack()
@@ -2558,6 +3229,7 @@ fun AddContactViaQRCodeScreen(
                         qrCodeId = qrCodeId,
                         isResponder = false,
                         isDependent = true,
+                        context = context,
                         onSuccess = {
                             Toast.makeText(context, "Added as Dependent", Toast.LENGTH_SHORT).show()
                             onBack()
@@ -2580,6 +3252,7 @@ fun AddContactViaQRCodeScreen(
                         qrCodeId = qrCodeId,
                         isResponder = true,
                         isDependent = true,
+                        context = context,
                         onSuccess = {
                             Toast.makeText(context, "Added as Both", Toast.LENGTH_SHORT).show()
                             onBack()
@@ -2663,10 +3336,10 @@ enum class ContactType {
 fun ContactCard(
     modifier: Modifier = Modifier,
     name: String,
-    secondsLeft: Int = 1,
+    millisecondsLeft: Long = 1,
     contactType: ContactType = ContactType.Responder
 ) {
-    val isAlert = contactType == ContactType.Dependent && secondsLeft <= 0
+    val isAlert = contactType == ContactType.Dependent && millisecondsLeft <= 0
 
     val cardColor = if (isAlert) {
         MaterialTheme.colorScheme.errorContainer
@@ -2683,7 +3356,7 @@ fun ContactCard(
     val subtitle = if (isAlert) {
         "Not Responsive"
     } else {
-        formatCountdown(secondsLeft)
+        formatCountdown(millisecondsLeft)
     }
 
     Surface(
@@ -2784,12 +3457,13 @@ fun SettingToggleCard(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
         tonalElevation = 1.dp,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) },
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Row(
-            modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(icon, contentDescription = null)
@@ -2801,7 +3475,7 @@ fun SettingToggleCard(
             )
             Switch(
                 checked = checked,
-                onCheckedChange = onCheckedChange
+                onCheckedChange = null
             )
         }
     }
