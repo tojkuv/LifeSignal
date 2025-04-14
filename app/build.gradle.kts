@@ -3,7 +3,8 @@
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 
-    id("org.jetbrains.kotlin.plugin.serialization") version "2.0.21"
+    kotlin("plugin.serialization") version "2.0.21"
+
     id("com.google.gms.google-services")
 }
 
@@ -61,7 +62,6 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
-    implementation(libs.material3)
 
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.animation)
@@ -69,6 +69,7 @@ dependencies {
     val nav_version = "2.8.9"
     implementation(libs.androidx.navigation.compose)
     implementation(libs.coil.compose)
+
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
@@ -79,13 +80,14 @@ dependencies {
     implementation("androidx.camera:camera-mlkit-vision:1.2.0-alpha02")
     implementation("com.google.mlkit:barcode-scanning:17.2.0")
 
+    // Firebase Messaging
     implementation(platform("com.google.firebase:firebase-bom:33.12.0"))
     implementation(libs.firebase.analytics)
     implementation(libs.firebase.auth)
     implementation(libs.firebase.firestore.ktx)
     implementation(libs.firebase.messaging)
-    implementation(libs.firebase.functions.ktx)
 
     implementation(libs.libphonenumber)
+
     implementation("com.google.zxing:core:3.5.2")
 }
