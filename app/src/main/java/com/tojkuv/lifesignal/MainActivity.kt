@@ -2,6 +2,7 @@
 
 // Android platform
 import android.Manifest
+import android.R.style
 import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -12,7 +13,12 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Bitmap.*
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -26,6 +32,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 
 // CameraX
 import androidx.camera.core.CameraSelector
@@ -66,6 +73,10 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 
 
 // Core utilities
@@ -123,6 +134,7 @@ import com.google.zxing.MultiFormatWriter
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.set
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
@@ -133,7 +145,6 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import coil.compose.rememberAsyncImagePainter
 import com.google.zxing.EncodeHintType
@@ -142,6 +153,9 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
 import androidx.core.net.toUri
+import androidx.navigation.NavHostController
+import com.google.firebase.auth.FirebaseUser
+import androidx.core.graphics.scale
 
 @JvmInline
 value class Phone(val number: String) {
@@ -573,7 +587,7 @@ class ResolvedContactsViewModel : ViewModel() {
                 ResolvedContact(
                     reference = ref.reference,
                     name = snapshot.getString("name") ?: "",
-                    phone = Phone(snapshot.getString("phone") ?: ""),
+                    phone = Phone(snapshot.getString("phoneNumber") ?: ""),
                     note = snapshot.getString("note") ?: "",
                     checkInInterval = snapshot.getLong("checkInInterval") ?: 86400000L,
                     lastCheckedIn = snapshot.getTimestamp("lastCheckedIn") ?: Timestamp.now(),
@@ -598,7 +612,7 @@ class ResolvedContactsViewModel : ViewModel() {
                 val refreshed = ResolvedContact(
                     reference = current.reference,
                     name = snap.getString("name") ?: "",
-                    phone = Phone(snap.getString("phone") ?: ""),
+                    phone = Phone(snap.getString("phoneNumber") ?: ""),
                     note = snap.getString("note") ?: "",
                     checkInInterval = snap.getLong("checkInInterval") ?: 86400000L,
                     lastCheckedIn = snap.getTimestamp("lastCheckedIn") ?: Timestamp.now(),
@@ -650,21 +664,41 @@ class AuthenticationViewModel : ViewModel() {
     private val auth = FirebaseAuth.getInstance()
     private val firestore = Firebase.firestore
 
-    var dialablePhoneNumber by mutableStateOf(Phone(""))
+    private var _currentUser by mutableStateOf(FirebaseAuth.getInstance().currentUser)
+    val currentUser: FirebaseUser? get() = _currentUser
+
+    fun updateCurrentUser() {
+        _currentUser = FirebaseAuth.getInstance().currentUser
+    }
+
     var phoneNumber by mutableStateOf("")
     var phoneRegion by mutableStateOf("US")
+
+    val dialablePhoneNumber: Phone
+        get() {
+            val digits = phoneNumber.filter(Char::isDigit)
+            val full = "+${getDialCode(phoneRegion)}$digits"
+            return Phone(full)
+        }
+
     var smsCode by mutableStateOf("")
     var verificationId by mutableStateOf<String?>(null)
 
-    var isLoading by mutableStateOf(false)
-        private set
+    var isVerifyingCode by mutableStateOf(false)
 
     var errorMessage by mutableStateOf<String?>(null)
 
     var verificationSent by mutableStateOf(false)
 
+    var autoRetrievedCredential by mutableStateOf<PhoneAuthCredential?>(null)
+
+
+
     fun resetVerification() {
         verificationSent = false
+        isVerifyingCode = false
+        smsCode = ""
+        verificationId = null
     }
 
     fun startPhoneVerification(
@@ -678,7 +712,7 @@ class AuthenticationViewModel : ViewModel() {
             .setActivity(activity)
             .setCallbacks(object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
                 override fun onVerificationCompleted(credential: PhoneAuthCredential) {
-                    auth.signInWithCredential(credential)
+                    autoRetrievedCredential = credential
                 }
 
                 override fun onVerificationFailed(e: FirebaseException) {
@@ -694,45 +728,68 @@ class AuthenticationViewModel : ViewModel() {
         PhoneAuthProvider.verifyPhoneNumber(options)
     }
 
-    fun signInWithCredential(
-        context: Context,
+    fun updatePhoneNumber(
         credential: PhoneAuthCredential,
-        onSuccess: () -> Unit
+        context: Context,
+        userViewModel: UserViewModel,
+        onSuccess: () -> Unit,
+        onFailure: () -> Unit
     ) {
-        isLoading = true
-        auth.signInWithCredential(credential).addOnCompleteListener { task ->
-            isLoading = false
-            if (task.isSuccessful) {
-                auth.currentUser?.let { user ->
-                    val sessionId = UUID.randomUUID().toString()
-                    SessionManager.saveSessionId(context, sessionId)
+        isVerifyingCode = true
 
-                    firestore.collection("users")
-                        .document(user.uid)
-                        .update(
-                            mapOf(
-                                "sessionId" to sessionId,
-                                "lastLoginAt" to FieldValue.serverTimestamp()
-                            )
-                        )
-                }
+        FirebaseAuth.getInstance().currentUser
+            ?.updatePhoneNumber(credential)
+            ?.addOnSuccessListener {
+                userViewModel.updatePhoneNumber(dialablePhoneNumber.number, phoneRegion)
+                resetVerification()
                 onSuccess()
-            } else {
-                errorMessage = task.exception?.message ?: "Sign-in failed"
             }
-        }
+            ?.addOnFailureListener {
+                isVerifyingCode = false
+                onFailure()
+            }
     }
 
-    fun reset() {
-        phoneNumber = ""
-        dialablePhoneNumber = Phone("")
-        phoneRegion = "US"
-        smsCode = ""
-        verificationId = null
-        errorMessage = null
-        isLoading = false
+    fun signInWithCredential(onSuccess: () -> Unit = { }, context: Context) {
+        isVerifyingCode = true
+
+        val credential = PhoneAuthProvider.getCredential(verificationId.toString(), smsCode)
+
+        auth.signInWithCredential(credential)
+            .addOnCompleteListener { task ->
+                isVerifyingCode = false
+
+                if (task.isSuccessful) {
+                    auth.currentUser?.let { user ->
+                        val sessionId = UUID.randomUUID().toString()
+                        SessionManager.saveSessionId(context, sessionId)
+
+                        firestore.collection("users")
+                            .document(user.uid)
+                            .update(
+                                mapOf(
+                                    "sessionId" to sessionId,
+                                    "lastLoginAt" to FieldValue.serverTimestamp()
+                                )
+                            )
+                    }
+                    resetVerification()
+                    updateCurrentUser()
+
+                    onSuccess()
+
+                    currentUser?.let {
+                        SessionManager.updateRemoteSession(context, it)
+                    }
+
+                    Toast.makeText(context, "Verification successful", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Enter a valid code", Toast.LENGTH_SHORT).show()
+                }
+            }
     }
 }
+
 
 object SessionManager {
 
@@ -748,9 +805,28 @@ object SessionManager {
         return prefs.getString("sessionId", null)
     }
 
+    fun updateRemoteSession(
+        context: Context,
+        user: FirebaseUser,
+        onComplete: () -> Unit = {}
+    ) {
+        val sessionId = UUID.randomUUID().toString()
+        saveSessionId(context, sessionId)
+
+        Firebase.firestore.collection("users")
+            .document(user.uid)
+            .update(
+                mapOf(
+                    "sessionId" to sessionId,
+                    "lastLoginAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .addOnSuccessListener { onComplete() }
+    }
+
     fun validateSession(context: Context, onInvalid: () -> Unit) {
         val currentUser = FirebaseAuth.getInstance().currentUser ?: return
-        val localSession = SessionManager.getSessionId(context)
+        val localSession = getSessionId(context)
 
         Firebase.firestore.collection("users")
             .document(currentUser.uid)
@@ -764,6 +840,12 @@ object SessionManager {
             }
     }
 
+    fun clearSessionId(context: Context) {
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit() {
+                remove("sessionId")
+            }
+    }
 }
 
 
@@ -901,6 +983,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -1001,16 +1084,26 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            val navController = rememberNavController()
+
             LifeSignalApp(
                 authenticationViewModel = authenticationViewModel,
                 userViewModel = userViewModel,
                 showLogin = showLogin,
                 millisecondsLeft = millisLeft,
-                onSignedIn = { showLogin = false }
+                onSignedIn = {
+                    showLogin = false
+                    navController.navigate(HomeRoute.route) {
+                        popUpTo(0) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                navController = navController
             )
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun watchSession(uid: String) {
         Firebase.firestore.collection("users")
             .document(uid)
@@ -1022,20 +1115,36 @@ class MainActivity : ComponentActivity() {
 
                 if (remoteSession != localSession) {
                     FirebaseAuth.getInstance().signOut()
+                    SessionManager.clearSessionId(this)
+
                     Toast.makeText(this, "You were signed out (session expired)", Toast.LENGTH_LONG).show()
                     showLogin = true
+
                     setContent {
+                        val authenticationViewModel: AuthenticationViewModel = viewModel()
+                        val userViewModel: UserViewModel = viewModel()
+                        val navController = rememberNavController()
+                        var millisLeft by remember { mutableStateOf(0L) }
+
                         LifeSignalApp(
-                            authenticationViewModel = AuthenticationViewModel(),
-                            userViewModel = UserViewModel(),
+                            authenticationViewModel = authenticationViewModel,
+                            userViewModel = userViewModel,
                             showLogin = true,
-                            millisecondsLeft = millisecondsLeft,
-                            onSignedIn = { showLogin = false }
+                            millisecondsLeft = millisLeft,
+                            onSignedIn = {
+                                showLogin = false
+                                navController.navigate(HomeRoute.route) {
+                                    popUpTo(0) { inclusive = true }
+                                    launchSingleTop = true
+                                }
+                            },
+                            navController = navController
                         )
                     }
                 }
             }
     }
+
 
     fun startPhoneVerification(
         phoneNumber: String,
@@ -1057,8 +1166,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+
+@OptIn(ExperimentalMaterial3Api::class)
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 @Composable
 fun LifeSignalApp(
+    navController: NavHostController,
     millisecondsLeft: Long,
     authenticationViewModel: AuthenticationViewModel,
     userViewModel: UserViewModel,
@@ -1068,42 +1181,36 @@ fun LifeSignalApp(
 ) {
     val context = LocalContext.current
     val activity = context.findActivity()
-    val navController = rememberNavController()
     val resolvedContactsViewModel: ResolvedContactsViewModel = viewModel()
     val profile by userViewModel.profile.collectAsState()
-    val authState = FirebaseAuth.getInstance().currentUser
 
-    LaunchedEffect(authState) {
-        if (authState != null) {
+    val currentEntry by navController.currentBackStackEntryAsState()
+    var hasNavigated by remember { mutableStateOf(false) }
+
+    LaunchedEffect(authenticationViewModel.currentUser) {
+        if (authenticationViewModel.currentUser != null && profile == null) {
             userViewModel.loadUserProfile()
         }
     }
 
+
     LifeSignalTheme {
         when {
-            showLogin || authState == null -> {
+            showLogin || authenticationViewModel.currentUser == null -> {
                 AuthenticationNavigationHost(
+                    userViewModel = userViewModel,
                     authenticationViewModel = authenticationViewModel,
-                    onSignedIn = onSignedIn,
-                    signInWithCredential = { credential, onSuccess, onFailure ->
-                        if (activity != null) {
-                            FirebaseAuth.getInstance().signInWithCredential(credential)
-                                .addOnCompleteListener(activity) { task ->
-                                    if (task.isSuccessful) {
-                                        authenticationViewModel.reset()
-                                        onSuccess()
-                                    } else {
-                                        onFailure(task.exception?.message ?: "Sign-in failed")
-                                    }
-                                }
+                    onSignedIn = {
+                        authenticationViewModel.updateCurrentUser()
+                        authenticationViewModel.currentUser?.let {
+                            SessionManager.updateRemoteSession(context, it)
+                            onSignedIn()
                         }
                     }
                 )
             }
 
-            profile == null -> {
-
-            }
+            profile == null -> {}
 
             profile?.name.isNullOrBlank() -> {
                 NameEntryScreen(
@@ -1115,19 +1222,59 @@ fun LifeSignalApp(
 
             else -> {
                 Scaffold(
+                    topBar = {
+                        val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
+                        val routeTitle = when (currentRoute) {
+                            HomeRoute.route -> "Home"
+                            RespondersRoute.route -> "Responders"
+                            DependentsRoute.route -> "Dependents"
+                            UserProfileRoute.route -> "Profile"
+                            "contactDetail" -> "Contact Details"
+                            "addContactViaQr" -> "Add Contact"
+                            "qrScanner" -> "Scan QR Code"
+                            else -> ""
+                        }
+
+                        val hideTopBar = currentRoute in listOf("qrScanner")
+
+                        if (!hideTopBar) {
+                            val showBackButton = currentRoute in listOf("contactDetail", "addContactViaQr")
+
+                            Surface(
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
+                                tonalElevation = 0.dp
+                            ) {
+                                TopAppBar(
+                                    title = { Text(routeTitle) },
+                                    navigationIcon = {
+                                        if (showBackButton) {
+                                            IconButton(onClick = { navController.popBackStack() }) {
+                                                Icon(Icons.Default.ArrowBackIosNew, contentDescription = "Back")
+                                            }
+                                        } else {
+                                            Spacer(Modifier.width(12.dp))
+                                        }
+                                    },
+                                    colors = TopAppBarDefaults.topAppBarColors(
+                                        containerColor = MaterialTheme.colorScheme.surface
+                                    )
+                                )
+                            }
+                        }
+                    },
                     bottomBar = {
                         val currentBackStackEntry by navController.currentBackStackEntryAsState()
                         val currentRoute = currentBackStackEntry?.destination?.route
 
                         Surface(
                             tonalElevation = 0.dp,
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f))
                         ) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                                    .background(MaterialTheme.colorScheme.surface),
                                 verticalArrangement = Arrangement.Center,
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
@@ -1136,18 +1283,21 @@ fun LifeSignalApp(
                                 Text(formatCountdown(millisecondsLeft), style = MaterialTheme.typography.titleLarge)
                                 Spacer(Modifier.height(8.dp))
 
-                                NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceVariant) {
+                                NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                                     val total = navigationBarScreens.size
                                     val middleIndex = total / 2
 
                                     navigationBarScreens.forEachIndexed { index, screen ->
                                         if (index == middleIndex) {
+                                            val context = LocalContext.current
+
                                             NavigationBarItem(
                                                 icon = { Icon(Icons.Default.MobileFriendly, contentDescription = "Check-In") },
                                                 label = { Text("Check-in", style = MaterialTheme.typography.labelSmall) },
                                                 selected = false,
                                                 onClick = {
                                                     userViewModel.updateLastCheckedIn()
+                                                    Toast.makeText(context, "Checked in. Timer reset.", Toast.LENGTH_SHORT).show()
                                                 }
                                             )
                                         }
@@ -1227,7 +1377,13 @@ fun LifeSignalApp(
                             }
 
                             composable(UserProfileRoute.route) {
-                                UserProfileScreen()
+                                UserProfileScreen(
+                                    onSignOut = {
+                                        FirebaseAuth.getInstance().signOut()
+                                        authenticationViewModel.updateCurrentUser()
+                                        authenticationViewModel.resetVerification()
+                                    }
+                                )
                             }
 
                             composable("qrScanner") {
@@ -1258,11 +1414,12 @@ fun LifeSignalApp(
 }
 
 
+
 @Composable
 fun AuthenticationNavigationHost(
+    userViewModel: UserViewModel,
     authenticationViewModel: AuthenticationViewModel,
     onSignedIn: () -> Unit,
-    signInWithCredential: (PhoneAuthCredential, () -> Unit, (String) -> Unit) -> Unit
 ) {
     val navController = rememberNavController()
 
@@ -1275,15 +1432,15 @@ fun AuthenticationNavigationHost(
                 }
             )
         }
+
         composable(AuthRoutes.Code) {
             VerificationCodeScreen(
+                userViewModel = userViewModel,
                 authenticationViewModel = authenticationViewModel,
                 onBack = {
-                    authenticationViewModel.reset()
+                    authenticationViewModel.verificationSent = false
                     navController.popBackStack()
-                },
-                onSignedIn = onSignedIn,
-                signInWithCredential = signInWithCredential
+                }
             )
         }
     }
@@ -1326,7 +1483,6 @@ fun PhoneNumberEntryScreen(
             regionCode = authenticationViewModel.phoneRegion,
             onValueChange = { digits, newPhone, newRegion ->
                 authenticationViewModel.phoneNumber = digits
-                authenticationViewModel.dialablePhoneNumber = newPhone
                 authenticationViewModel.phoneRegion = newRegion
             },
             modifier = Modifier.fillMaxWidth(),
@@ -1337,6 +1493,9 @@ fun PhoneNumberEntryScreen(
 
         Button(
             onClick = {
+                authenticationViewModel.verificationSent = true
+                onCodeSent()
+
                 if (activity != null) {
                     authenticationViewModel.startPhoneVerification(
                         activity = activity,
@@ -1344,8 +1503,6 @@ fun PhoneNumberEntryScreen(
                             authenticationViewModel.verificationId = id
                             authenticationViewModel.smsCode = ""
                             authenticationViewModel.errorMessage = null
-                            authenticationViewModel.verificationSent = true
-                            onCodeSent()
                         },
                         onError = { error ->
                             authenticationViewModel.errorMessage = error.message
@@ -1593,11 +1750,12 @@ fun phoneVisualTransformation(regionCode: String): VisualTransformation {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VerificationCodeScreen(
+    userViewModel: UserViewModel,
     authenticationViewModel: AuthenticationViewModel,
     onBack: () -> Unit,
-    onSignedIn: () -> Unit,
-    signInWithCredential: (PhoneAuthCredential, () -> Unit, (String) -> Unit) -> Unit
 ) {
+    val context = LocalContext.current
+
     val CodeVisualTransformation = VisualTransformation { text ->
         val trimmed = text.text.take(6)
         val formatted = trimmed.chunked(3).joinToString(" ")
@@ -1656,29 +1814,35 @@ fun VerificationCodeScreen(
             }
 
             VerificationCodeInput(
-                code = authenticationViewModel.smsCode,
-                onCodeChange = { authenticationViewModel.smsCode = it },
+                authenticationViewModel = authenticationViewModel,
+                userViewModel = userViewModel,
                 modifier = Modifier.fillMaxWidth(0.8f)
             )
 
+
             Spacer(Modifier.height(24.dp))
+
+            val context = LocalContext.current
 
             Button(
                 onClick = {
-                    val id = authenticationViewModel.verificationId
-                    if (authenticationViewModel.smsCode.length == 6 && id != null) {
-                        val credential = PhoneAuthProvider.getCredential(id, authenticationViewModel.smsCode)
-                        signInWithCredential(credential, onSignedIn) {
-                            authenticationViewModel.errorMessage = it
-                        }
-                    } else {
-                        authenticationViewModel.errorMessage = "Enter a valid 6-digit code"
+                    if (authenticationViewModel.smsCode.length == 6 && authenticationViewModel.verificationId != null) {
+                        authenticationViewModel.isVerifyingCode = true
+
+                        authenticationViewModel.signInWithCredential(context = context)
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = authenticationViewModel.smsCode.length == 6
+                enabled = authenticationViewModel.smsCode.length == 6 && !authenticationViewModel.isVerifyingCode
             ) {
-                Text("Verify")
+                if (authenticationViewModel.isVerifyingCode) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("Verify")
+                }
             }
 
             Spacer(Modifier.height(16.dp))
@@ -1694,10 +1858,15 @@ fun VerificationCodeScreen(
 @Composable
 fun VerificationCodeInput(
     modifier: Modifier = Modifier,
-    onCodeChange: (String) -> Unit,
-    label: String = "Verification Code",
-    code: String = ""
+    onSuccess: () -> Unit = { },
+    authenticationViewModel: AuthenticationViewModel,
+    userViewModel: UserViewModel,
+    label: String = "Verification Code"
 ) {
+    var context = LocalContext.current
+    val code = authenticationViewModel.smsCode
+    val verificationId = authenticationViewModel.verificationId
+
     val CodeVisualTransformation = remember {
         VisualTransformation { text ->
             val trimmed = text.text.take(6)
@@ -1712,7 +1881,16 @@ fun VerificationCodeInput(
 
     OutlinedTextField(
         value = code,
-        onValueChange = { onCodeChange(it.filter(Char::isDigit).take(6)) },
+        onValueChange = {
+            val filtered = it.filter(Char::isDigit).take(6)
+            authenticationViewModel.smsCode = filtered
+
+            if (filtered.length == 6 && !verificationId.isNullOrBlank()) {
+                val credential = PhoneAuthProvider.getCredential(verificationId, filtered)
+
+                authenticationViewModel.signInWithCredential(context = context, onSuccess = onSuccess)
+            }
+        },
         label = { Text(label) },
         visualTransformation = CodeVisualTransformation,
         textStyle = LocalTextStyle.current.copy(
@@ -1723,138 +1901,6 @@ fun VerificationCodeInput(
         singleLine = true,
         modifier = modifier
     )
-}
-
-@Composable
-fun AuthenticationScreen(
-    initialRegionCode: String = "US",
-    onPhoneChanged: (Phone, regionCode: String) -> Unit
-) {
-    val regions = remember { getAllRegions() }
-    var region by remember { mutableStateOf(regions.first { it.code == initialRegionCode }) }
-    var rawPhone by remember { mutableStateOf("") }
-    var showDialog by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
-
-    val filteredRegions = regions.filter {
-        it.name.contains(searchQuery, ignoreCase = true) ||
-                it.code.contains(searchQuery, ignoreCase = true) ||
-                it.dialCode.contains(searchQuery)
-    }
-
-    val e164 = "+${region.dialCode.filter(Char::isDigit)}$rawPhone"
-    val phone = Phone(e164)
-    val isValid = phone.isValid(region.code)
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 48.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Image(
-            painter = painterResource(id = R.drawable.life_signal_logo),
-            contentDescription = "App Logo",
-            modifier = Modifier.size(100.dp)
-        )
-
-        Spacer(Modifier.height(24.dp))
-
-        Text(
-            "Welcome to LifeSignal",
-            style = MaterialTheme.typography.headlineMedium,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(Modifier.height(32.dp))
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            OutlinedButton(
-                onClick = { showDialog = true },
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier
-                    .width(120.dp)
-                    .height(56.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Text(region.flag, fontSize = 20.sp)
-                    Spacer(Modifier.width(4.dp))
-                    Text(region.dialCode, fontSize = 16.sp)
-                }
-            }
-
-            Spacer(Modifier.width(8.dp))
-
-            OutlinedTextField(
-                value = rawPhone,
-                onValueChange = {
-                    rawPhone = it.filter(Char::isDigit)
-                    onPhoneChanged(Phone(e164), region.code)
-                },
-                label = { Text("Phone Number") },
-                isError = rawPhone.isNotBlank() && !isValid,
-                trailingIcon = {
-                    if (rawPhone.isNotBlank()) {
-                        Icon(
-                            if (isValid) Icons.Default.Check else Icons.Default.Close,
-                            contentDescription = null,
-                            tint = if (isValid) Color.Green else Color.Red
-                        )
-                    }
-                },
-                keyboardOptions = KeyboardOptions.Default.copy(keyboardType = KeyboardType.Phone),
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-
-    if (showDialog) {
-        AlertDialog(
-            onDismissRequest = { showDialog = false },
-            title = { Text("Select Region") },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        label = { Text("Search") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(Modifier.height(8.dp))
-
-                    LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
-                        items(filteredRegions) { r ->
-                            Text(
-                                text = "${r.flag} ${r.name} (${r.dialCode})",
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        region = r
-                                        showDialog = false
-                                        searchQuery = ""
-                                    }
-                                    .padding(8.dp)
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
 }
 
 @Composable
@@ -1903,18 +1949,6 @@ fun NameEntryScreenPreview() {
     }
 }
 
-
-//@Preview(showBackground = true)
-//@Composable
-//fun LifeSignalAppPreview() {
-//    LifeSignalTheme {
-//        LifeSignalApp(
-//            secondsLeft = 123456,
-//            onReset = {}
-//        )
-//    }
-//}
-
 fun formatCountdown(millis: Long): String {
     if (millis <= 0) return "Timed Out"
 
@@ -1924,9 +1958,9 @@ fun formatCountdown(millis: Long): String {
     val minutes = totalMinutes % 60
 
     return buildString {
-        if (days > 0) append("$days ${if (days == 1L) "day" else "days"} ")
-        if (hours > 0) append("$hours ${if (hours == 1L) "hour" else "hours"} ")
-        if (minutes > 0) append("$minutes ${if (minutes == 1L) "minute" else "minutes"} ")
+        if (days > 0) append("${days}d ")
+        if (hours > 0) append("${hours}h ")
+        if (minutes > 0) append("${minutes}m")
     }.trim()
 }
 
@@ -1956,8 +1990,6 @@ fun HomeScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        TopAppBar(title = { Text("Home") })
-
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -2026,7 +2058,7 @@ fun HomeScreen(
                             val qrCodeId = profile?.qrCodeId
                             if (!qrCodeId.isNullOrBlank()) {
                                 QrCodeView(
-                                    content = qrCodeId,
+                                    text = qrCodeId,
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .align(Alignment.Center)
@@ -2218,12 +2250,13 @@ fun HomeScreen(
     }
 }
 
+
 fun shareQrCode(context: Context, qrCodeId: String) {
-    val qrBitmap = generateQrCodeBitmap(qrCodeId)
+    val qrBitmap = generateQrCodeBitmap(context, qrCodeId)
 
     val file = File(context.cacheDir, "qr_code.png")
     FileOutputStream(file).use { out ->
-        qrBitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+        qrBitmap.compress(CompressFormat.PNG, 100, out)
     }
 
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
@@ -2237,38 +2270,77 @@ fun shareQrCode(context: Context, qrCodeId: String) {
     context.startActivity(Intent.createChooser(shareIntent, "Share QR Code"))
 }
 
-
 @Composable
-fun QrCodeView(content: String, modifier: Modifier = Modifier) {
-    val qrBitmap = remember(content) { generateQrCodeBitmap(content) }
+fun QrCodeView(text: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val qrBitmap = remember(text) {
+        generateQrCodeBitmap(context, text)
+    }
+
     Image(
         bitmap = qrBitmap.asImageBitmap(),
-        contentDescription = "QR Code",
-        modifier = modifier
-            .fillMaxSize()
+        contentDescription = "QR Code with Logo",
+        modifier = modifier.fillMaxSize()
     )
 }
 
-fun generateQrCodeBitmap(text: String, size: Int = 512): Bitmap {
+fun generateQrCodeBitmap(context: Context, text: String, size: Int = 512): Bitmap {
     val hints = mapOf(
         EncodeHintType.MARGIN to 1,
         EncodeHintType.CHARACTER_SET to "UTF-8",
-        EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.L
+        EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.H
     )
 
     val bitMatrix = MultiFormatWriter().encode(text, BarcodeFormat.QR_CODE, size, size, hints)
 
-    val bmp = createBitmap(size, size, Bitmap.Config.RGB_565)
+    val bmp = createBitmap(size, size)
 
     for (x in 0 until size) {
         for (y in 0 until size) {
-            bmp[x, y] =
-                if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+            val color = if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+            bmp[x, y] = color
         }
     }
+
+    val logoSize = (size * 0.25f).toInt()
+    val cornerRadius = logoSize * 0.2f
+    val centerX = (size - logoSize) / 2f
+    val centerY = (size - logoSize) / 2f
+
+    val canvas = android.graphics.Canvas(bmp)
+
+    val rect = RectF(centerX, centerY, centerX + logoSize, centerY + logoSize)
+
+    ContextCompat.getDrawable(context, R.drawable.ic_life_signal_logo_background)?.let { bg ->
+        val bgBitmap = createBitmap(logoSize, logoSize)
+        val bgCanvas = android.graphics.Canvas(bgBitmap)
+        bg.setBounds(0, 0, logoSize, logoSize)
+        bg.draw(bgCanvas)
+        val roundedBg = createBitmap(logoSize, logoSize)
+        val maskCanvas = android.graphics.Canvas(roundedBg)
+        val path = Path().apply {
+            addRoundRect(RectF(0f, 0f, logoSize.toFloat(), logoSize.toFloat()), cornerRadius, cornerRadius, Path.Direction.CW)
+        }
+        maskCanvas.clipPath(path)
+        maskCanvas.drawBitmap(bgBitmap, 0f, 0f, null)
+        canvas.drawBitmap(roundedBg, centerX, centerY, null)
+    }
+
+    ContextCompat.getDrawable(context, R.drawable.ic_life_signal_logo_foreground)?.let { fg ->
+        val scaleFactor = 1.3f
+        val extra = ((logoSize * scaleFactor) - logoSize) / 2f
+        fg.setBounds(
+            (rect.left - extra).toInt(),
+            (rect.top - extra).toInt(),
+            (rect.right + extra).toInt(),
+            (rect.bottom + extra).toInt()
+        )
+        fg.draw(canvas)
+    }
+
+
     return bmp
 }
-
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2332,11 +2404,7 @@ fun RespondersScreen(
 
     val responders = resolvedContacts.filter { it.isResponder }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text("Responders") })
-        }
-    ) { innerPadding ->
+    Scaffold() { innerPadding ->
         LazyColumn(
             contentPadding = innerPadding,
             modifier = Modifier
@@ -2383,11 +2451,7 @@ fun DependentsScreen(
 
     val dependents = resolvedContacts.filter { it.isDependent }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text("Dependents") })
-        }
-    ) { innerPadding ->
+    Scaffold() { innerPadding ->
         LazyColumn(
             contentPadding = innerPadding,
             modifier = Modifier
@@ -2436,6 +2500,7 @@ fun DependentsScreen(
 fun UserProfileScreen(
     authenticationViewModel: AuthenticationViewModel = viewModel(),
     userViewModel: UserViewModel = viewModel(),
+    onSignOut: () -> Unit,
     onUpdatePhoneClick: () -> Unit = {}
 ) {
     val screenScroll = rememberScrollState()
@@ -2447,7 +2512,6 @@ fun UserProfileScreen(
     }
 
     val context = LocalContext.current
-    val activity = context.findActivity()
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
@@ -2457,8 +2521,6 @@ fun UserProfileScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Profile") })
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -2477,8 +2539,8 @@ fun UserProfileScreen(
             var nameText by remember { mutableStateOf("") }
 
             Text(
-                text = userProfile?.name ?: "First Last",
-                style = MaterialTheme.typography.titleMedium,
+                text = userProfile?.name ?: "Placeholder First Last",
+                style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.clickable {
                     showDialog = true
                 }
@@ -2508,7 +2570,7 @@ fun UserProfileScreen(
                     dismissButton = {
                         TextButton(onClick = { showDialog = false }) { Text("Cancel") }
                     },
-                    title = { Text("Edit Name") },
+                    title = { Text("Edit profile name") },
                     text = {
                         OutlinedTextField(
                             value = nameText,
@@ -2537,14 +2599,14 @@ fun UserProfileScreen(
 
             Text(
                 text = formattedPhone,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyLarge
             )
 
             Spacer(Modifier.height(24.dp))
 
             Text(
-                text = "Contact Note",
-                style = MaterialTheme.typography.labelLarge,
+                text = "Profile note",
+                style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 8.dp)
@@ -2573,13 +2635,13 @@ fun UserProfileScreen(
                 if (displayNote.isEmpty()) {
                     Text(
                         text = "This is sample text the contacts will see when they open this profile",
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                     )
                 } else {
                     Text(
                         text = displayNote,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -2606,15 +2668,15 @@ fun UserProfileScreen(
                             Text("Cancel")
                         }
                     },
-                    title = { Text("Edit Note") },
+                    title = { Text("Edit profile note") },
                     text = {
                         val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-                        val textFieldHeight = screenHeight * 0.4f
+                        val textFieldHeight = screenHeight * 0.25f
 
                         OutlinedTextField(
                             value = tempNote,
                             onValueChange = { tempNote = it },
-                            label = { Text("Contact Note") },
+                            label = { Text("Profile note") },
                             singleLine = false,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2630,30 +2692,18 @@ fun UserProfileScreen(
             val authViewModel: AuthenticationViewModel = viewModel()
             var showPhoneDialog by remember { mutableStateOf(false) }
 
-            val regionCode = authViewModel.phoneRegion
-            val phoneText = try {
-                val parsed = phoneUtil.parse(authViewModel.phoneNumber, regionCode)
-                phoneUtil.format(parsed, PhoneNumberUtil.PhoneNumberFormat.NATIONAL)
-            } catch (e: Exception) {
-                ""
-            }
-
             fun resetPhoneVerificationState() {
                 focusManager.clearFocus()
                 keyboardController?.hide()
                 showPhoneDialog = false
-                authViewModel.resetVerification()
-                authViewModel.smsCode = ""
-                authViewModel.verificationId = null
             }
 
             Button(
                 onClick = {
-                    authViewModel.phoneRegion = userProfile?.phoneRegion ?: "US"
-                    authViewModel.phoneNumber = userProfile?.phoneNumber.orEmpty()
                     showPhoneDialog = true
                 },
-                shape = RoundedCornerShape(24.dp)
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier.fillMaxWidth(0.8f)
             ) {
                 Text("Update Phone Number")
             }
@@ -2666,33 +2716,44 @@ fun UserProfileScreen(
                     confirmButton = {
                         TextButton(
                             onClick = {
-                                val fullPhone = "+${getDialCode(authViewModel.phoneRegion)}${phoneText.filter(Char::isDigit)}"
-
                                 if (!authViewModel.verificationSent) {
-                                    authViewModel.dialablePhoneNumber = Phone(fullPhone)
-                                    authViewModel.startPhoneVerification(
-                                        activity = activity!!,
-                                        onCodeSent = { id -> authViewModel.verificationId = id; authViewModel.verificationSent = true },
-                                        onError = { Toast.makeText(context, "Phone verification failed", Toast.LENGTH_SHORT).show() }
-                                    )
+                                    authViewModel.verificationSent = true
+
+                                    val activity = context.findActivity()
+                                    if (activity != null) {
+                                        authViewModel.startPhoneVerification(
+                                            activity = activity,
+                                            onCodeSent = { id -> authViewModel.verificationId = id },
+                                            onError = {
+                                                Toast.makeText(context, "Phone verification failed", Toast.LENGTH_SHORT).show()
+                                            }
+                                        )
+                                    }
                                 } else {
                                     val id = authViewModel.verificationId ?: return@TextButton
                                     val credential = PhoneAuthProvider.getCredential(id, authViewModel.smsCode)
-                                    FirebaseAuth.getInstance().currentUser
-                                        ?.updatePhoneNumber(credential)
-                                        ?.addOnSuccessListener {
-                                            userViewModel.updatePhoneNumber(fullPhone, authViewModel.phoneRegion)
-                                            resetPhoneVerificationState()
-                                            Toast.makeText(context, "Phone number updated", Toast.LENGTH_SHORT).show()
-                                        }
-                                        ?.addOnFailureListener {
+
+                                    authViewModel.updatePhoneNumber(
+                                        credential = credential,
+                                        context = context,
+                                        userViewModel = userViewModel,
+                                        onSuccess = { resetPhoneVerificationState() },
+                                        onFailure = {
                                             Toast.makeText(context, "Invalid code", Toast.LENGTH_SHORT).show()
                                         }
+                                    )
                                 }
                             },
-                            enabled = !authViewModel.verificationSent || isCodeValid
+                            enabled = !authViewModel.isVerifyingCode && (!authViewModel.verificationSent || isCodeValid)
                         ) {
-                            Text(if (authViewModel.verificationSent) "Verify" else "Send Code")
+                            if (authViewModel.isVerifyingCode) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Text(if (authViewModel.verificationSent) "Verify" else "Send Code")
+                            }
                         }
                     },
                     dismissButton = {
@@ -2700,11 +2761,11 @@ fun UserProfileScreen(
                             Text("Cancel")
                         }
                     },
-                    title = { Text("Edit Phone Number") },
+                    title = { Text("Edit phone number") },
                     text = {
                         Column {
                             PhoneNumberInput(
-                                phoneText = phoneText,
+                                phoneText = authenticationViewModel.phoneNumber,
                                 regionCode = authViewModel.phoneRegion,
                                 onValueChange = { newText, _, newCode ->
                                     authViewModel.phoneNumber = newText
@@ -2717,9 +2778,12 @@ fun UserProfileScreen(
                             if (authViewModel.verificationSent) {
                                 Spacer(Modifier.height(12.dp))
                                 VerificationCodeInput(
-                                    code = authViewModel.smsCode,
-                                    onCodeChange = { authViewModel.smsCode = it },
-                                    modifier = Modifier.fillMaxWidth()
+                                    authenticationViewModel = authViewModel,
+                                    userViewModel = userViewModel,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onSuccess = {
+                                        showPhoneDialog = false
+                                    }
                                 )
                             }
                         }
@@ -2734,6 +2798,7 @@ fun UserProfileScreen(
             Button(
                 onClick = { showSignOutDialog = true },
                 shape = RoundedCornerShape(24.dp),
+                modifier = Modifier.fillMaxWidth(0.8f),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.errorContainer,
                     contentColor = MaterialTheme.colorScheme.onErrorContainer
@@ -2752,8 +2817,7 @@ fun UserProfileScreen(
                     confirmButton = {
                         TextButton(onClick = {
                             showSignOutDialog = false
-                            FirebaseAuth.getInstance().signOut()
-
+                            onSignOut()
                             Toast.makeText(context, "Signed out", Toast.LENGTH_SHORT).show()
                         }) {
                             Text("Yes")
@@ -2839,16 +2903,6 @@ fun ContactDetailScreen(
         snackbarHost = {
             SnackbarHost(hostState = snackbarHostState)
         },
-        topBar = {
-            TopAppBar(
-                title = { Text("Contact") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBackIosNew, contentDescription = "Back")
-                    }
-                }
-            )
-        }
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -2890,10 +2944,29 @@ fun ContactDetailScreen(
                     icon = Icons.Default.PriorityHigh,
                     label = "Call",
                     onClick = {
-                        val intent = Intent(Intent.ACTION_DIAL).apply {
-                            data = "tel:${contact.phone.number}".toUri()
+                        val phone = contact.phone.number
+
+                        val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                            data = "tel:$phone".toUri()
                         }
-                        context.startActivity(intent)
+
+                        val waIntents = listOf(
+                            "com.whatsapp",
+                            "com.whatsapp.w4b"
+                        ).mapNotNull { pkg ->
+                            Intent("android.intent.action.VIEW").apply {
+                                data = "https://wa.me/$phone".toUri()
+                                `package` = pkg
+                            }.takeIf { it.resolveActivity(context.packageManager) != null }
+                        }
+
+                        val chooser = Intent.createChooser(dialIntent, "Choose app to call").apply {
+                            if (waIntents.isNotEmpty()) {
+                                putExtra(Intent.EXTRA_INITIAL_INTENTS, waIntents.toTypedArray())
+                            }
+                        }
+
+                        context.startActivity(chooser)
                     }
                 )
 
@@ -2907,20 +2980,26 @@ fun ContactDetailScreen(
                             data = "smsto:$phone".toUri()
                         }
 
-                        val whatsappIntent = Intent(Intent.ACTION_SENDTO).apply {
-                            data = "smsto:$phone".toUri()
-                            `package` = "com.whatsapp"
+                        val waIntents = listOf(
+                            "com.whatsapp",
+                            "com.whatsapp.w4b"
+                        ).mapNotNull { pkg ->
+                            Intent(Intent.ACTION_SENDTO).apply {
+                                data = "smsto:$phone".toUri()
+                                `package` = pkg
+                            }.takeIf { it.resolveActivity(context.packageManager) != null }
                         }
 
-                        val chooserIntent = Intent.createChooser(smsIntent, "Choose app to message")
-
-                        if (whatsappIntent.resolveActivity(context.packageManager) != null) {
-                            chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(whatsappIntent))
+                        val chooser = Intent.createChooser(smsIntent, "Choose app to message").apply {
+                            if (waIntents.isNotEmpty()) {
+                                putExtra(Intent.EXTRA_INITIAL_INTENTS, waIntents.toTypedArray())
+                            }
                         }
 
-                        context.startActivity(chooserIntent)
+                        context.startActivity(chooser)
                     }
                 )
+
             }
 
             Spacer(Modifier.height(24.dp))
@@ -3047,6 +3126,8 @@ fun ContactDetailScreen(
 //    }
 //}
 
+
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 @androidx.annotation.OptIn(ExperimentalGetImage::class)
 @Composable
 fun QRCodeScannerScreen(
@@ -3059,21 +3140,40 @@ fun QRCodeScannerScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val cameraPermission = Manifest.permission.CAMERA
-    var hasRequested by remember { mutableStateOf(false) }
-    val permissionGranted = remember {
+    val mediaPermission = Manifest.permission.READ_MEDIA_IMAGES
+
+    var hasRequestedCamera by remember { mutableStateOf(false) }
+    var hasRequestedMedia by remember { mutableStateOf(false) }
+
+    val cameraGranted = remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, cameraPermission) == PackageManager.PERMISSION_GRANTED
         )
     }
 
+    val mediaGranted = remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, mediaPermission) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { granted -> permissionGranted.value = granted }
+    ) { granted -> cameraGranted.value = granted }
+
+    val mediaPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted -> mediaGranted.value = granted }
 
     LaunchedEffect(Unit) {
-        if (!permissionGranted.value && !hasRequested) {
-            hasRequested = true
+        if (!cameraGranted.value && !hasRequestedCamera) {
+            hasRequestedCamera = true
             permissionLauncher.launch(cameraPermission)
+        }
+
+        if (!mediaGranted.value && !hasRequestedMedia) {
+            hasRequestedMedia = true
+            mediaPermissionLauncher.launch(mediaPermission)
         }
     }
 
@@ -3081,18 +3181,21 @@ fun QRCodeScannerScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri ?: return@rememberLauncherForActivityResult
-        val bitmap = if (Build.VERSION.SDK_INT < 28) {
-            MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
-        } else {
-            val source = ImageDecoder.createSource(context.contentResolver, uri)
-            ImageDecoder.decodeBitmap(source)
-        }
+        val source = ImageDecoder.createSource(context.contentResolver, uri)
+        val bitmap = ImageDecoder.decodeBitmap(source)
         val inputImage = InputImage.fromBitmap(bitmap, 0)
         BarcodeScanning.getClient().process(inputImage)
             .addOnSuccessListener { barcodes ->
                 barcodes.firstOrNull()?.rawValue?.let { qrContent ->
                     resolvedContactsViewModel.setScannedQr(qrContent)
-                    onNavigateToAddContact()
+                    val matched = resolvedContactsViewModel.resolvedContacts.value
+                        .firstOrNull { it.reference.path == qrContent }
+
+                    if (matched != null) {
+                        onNavigateToAddContact()
+                    } else {
+                        Toast.makeText(context, "Contact not found. Please check the QR code.", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
             .addOnFailureListener {
@@ -3100,9 +3203,17 @@ fun QRCodeScannerScreen(
             }
     }
 
-    val recentImages = remember { loadRecentImages(context) }
+    val recentImages = remember { mutableStateListOf<Uri>() }
 
-    if (permissionGranted.value) {
+    LaunchedEffect(mediaGranted.value) {
+        if (mediaGranted.value) {
+            val loadedImages = loadRecentImages(context)
+            recentImages.clear()
+            recentImages.addAll(loadedImages)
+        }
+    }
+
+    if (cameraGranted.value) {
         val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
         val previewView = remember { PreviewView(context) }
 
@@ -3121,7 +3232,14 @@ fun QRCodeScannerScreen(
                             .addOnSuccessListener { barcodes ->
                                 barcodes.firstOrNull()?.rawValue?.let { qrContent ->
                                     resolvedContactsViewModel.setScannedQr(qrContent)
-                                    onNavigateToAddContact()
+                                    val matched = resolvedContactsViewModel.resolvedContacts.value
+                                        .firstOrNull { it.reference.path == qrContent }
+
+                                    if (matched != null) {
+                                        onNavigateToAddContact()
+                                    } else {
+                                        Toast.makeText(context, "Contact not found. Please check the QR code.", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             }
                             .addOnFailureListener {
@@ -3157,6 +3275,26 @@ fun QRCodeScannerScreen(
                 modifier = Modifier.fillMaxSize()
             )
 
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val canvasWidth = size.width
+                val canvasHeight = size.height
+                val boxSize = 280.dp.toPx()
+                val centerX = canvasWidth / 2
+                val centerY = canvasHeight / 2
+                val left = centerX - boxSize / 2
+                val top = centerY - boxSize / 2
+
+                drawRect(color = Color(0xAA000000))
+
+                drawRoundRect(
+                    color = Color.Transparent,
+                    topLeft = Offset(left, top),
+                    size = Size(boxSize, boxSize),
+                    cornerRadius = CornerRadius(32f, 32f),
+                    blendMode = BlendMode.Clear
+                )
+            }
+
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -3179,44 +3317,49 @@ fun QRCodeScannerScreen(
                     }
                 }
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xAA000000))
-                        .padding(vertical = 8.dp)
-                ) {
-                    ImageGalleryPreview(
-                        imageUris = recentImages,
-                        onImageClick = { uri ->
-                            val bitmap = if (Build.VERSION.SDK_INT < 28) {
-                                MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
-                            } else {
+                if (mediaGranted.value) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        ImageGalleryPreview(
+                            imageUris = recentImages,
+                            onImageClick = { uri ->
                                 val source = ImageDecoder.createSource(context.contentResolver, uri)
-                                ImageDecoder.decodeBitmap(source)
-                            }
-                            val inputImage = InputImage.fromBitmap(bitmap, 0)
-                            BarcodeScanning.getClient().process(inputImage)
-                                .addOnSuccessListener { barcodes ->
-                                    barcodes.firstOrNull()?.rawValue?.let { qrContent ->
-                                        resolvedContactsViewModel.setScannedQr(qrContent)
-                                        onNavigateToAddContact()
+                                val bitmap = ImageDecoder.decodeBitmap(source)
+                                val inputImage = InputImage.fromBitmap(bitmap, 0)
+                                BarcodeScanning.getClient().process(inputImage)
+                                    .addOnSuccessListener { barcodes ->
+                                        barcodes.firstOrNull()?.rawValue?.let { qrContent ->
+                                            resolvedContactsViewModel.setScannedQr(qrContent)
+                                            val matched = resolvedContactsViewModel.resolvedContacts.value
+                                                .firstOrNull { it.reference.path == qrContent }
+
+                                            if (matched != null) {
+                                                onNavigateToAddContact()
+                                            } else {
+                                                Toast.makeText(context, "Contact not found. Please check the QR code.", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
                                     }
-                                }
-                                .addOnFailureListener {
-                                    Log.e("QR", "Recent image scan failed", it)
-                                }
-                        }
-                    )
+                                    .addOnFailureListener {
+                                        Log.e("QR", "Recent image scan failed", it)
+                                    }
+                            }
+                        )
+                    }
                 }
             }
         }
-
     } else {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Camera permission required to scan QR codes.")
         }
     }
 }
+
 
 @Composable
 fun ImageGalleryPreview(
@@ -3226,23 +3369,24 @@ fun ImageGalleryPreview(
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .height(100.dp),
+            .height(120.dp),
         contentPadding = PaddingValues(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    )
-    {
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         items(imageUris) { uri ->
             Image(
                 painter = rememberAsyncImagePainter(uri),
                 contentDescription = null,
+                contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .size(80.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .size(104.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .clickable { onImageClick(uri) }
             )
         }
     }
 }
+
 
 fun loadRecentImages(context: Context, maxResults: Int = 6): List<Uri> {
     val images = mutableListOf<Uri>()
@@ -3310,16 +3454,6 @@ fun AddContactViaQRCodeScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Add Contact") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBackIosNew, contentDescription = "Back")
-                    }
-                }
-            )
-        }
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -3382,7 +3516,7 @@ fun AddContactViaQRCodeScreen(
                                 .aspectRatio(1f)
                         ) {
                             QrCodeView(
-                                content = qrCodeId,
+                                text = qrCodeId,
                                 modifier = Modifier
                                     .fillMaxSize(0.95f)
                                     .align(Alignment.Center)

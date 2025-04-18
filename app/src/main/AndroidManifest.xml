@@ -2,13 +2,21 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
         xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Hardware features -->
     <uses-feature
             android:name="android.hardware.camera"
             android:required="false" />
 
+    <!-- Permissions -->
     <uses-permission android:name="android.permission.CAMERA" />
-
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Package visibility -->
+    <queries>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
+    </queries>
 
     <application
             android:allowBackup="true"
@@ -21,6 +29,7 @@
             android:theme="@style/Theme.LifeSignal"
             tools:targetApi="31">
 
+        <!-- Launcher activity -->
         <activity
                 android:name=".MainActivity"
                 android:exported="true"
@@ -28,15 +37,16 @@
                 android:theme="@style/Theme.LifeSignal">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
+        <!-- Firebase messaging icon -->
         <meta-data
                 android:name="com.google.firebase.messaging.default_notification_icon"
                 android:resource="@mipmap/ic_life_signal_logo" />
 
+        <!-- Firebase messaging service -->
         <service
                 android:name=".MyFirebaseMessagingService"
                 android:exported="false">
@@ -45,6 +55,7 @@
             </intent-filter>
         </service>
 
+        <!-- FileProvider -->
         <provider
                 android:name="androidx.core.content.FileProvider"
                 android:authorities="${applicationId}.provider"
@@ -54,6 +65,7 @@
                     android:name="android.support.FILE_PROVIDER_PATHS"
                     android:resource="@xml/file_paths" />
         </provider>
+
     </application>
 
 </manifest>
