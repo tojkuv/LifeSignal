@@ -21,443 +21,423 @@ struct HomeView: View {
     @State private var pendingScannedCode: String? = nil
     @State private var shareImage: HomeShareImage? = nil
     @State private var showContactAddedAlert = false
-    @State private var showAlertToggleConfirmation = false
-    @State private var pendingAlertToggleValue: Bool? = nil
 
     func generateQRCodeImage(completion: @escaping () -> Void = {}) {
         if isGeneratingImage { return }
 
         isImageReady = false
         isGeneratingImage = true
-        let qrContent = userViewModel.qrCodeId
-        let content = AnyView(
-            QRCodeShareView(
-                name: userViewModel.name,
-                subtitle: "LifeSignal contact",
-                qrCodeId: qrContent,
-                footer: "Use LifeSignal's QR code scanner to add this contact"
-            )
-        )
 
-        QRCodeViewModel.generateQRCodeImage(content: content) { image in
-            qrCodeImage = image
-            isImageReady = true
-            isGeneratingImage = false
-            completion()
-        }
-    }
-
-    func shareQRCode() {
-        if isImageReady, let image = qrCodeImage {
-            shareImage = .qrCode(image)
-        } else if !isGeneratingImage {
-            generateQRCodeImage {
-                if let image = self.qrCodeImage {
-                    self.shareImage = .qrCode(image)
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Generate QR code image
+            if let qrImage = generateQRCode(from: userViewModel.qrCodeId) {
+                DispatchQueue.main.async {
+                    self.qrCodeImage = qrImage
+                    self.isImageReady = true
+                    self.isGeneratingImage = false
+                    completion()
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.isGeneratingImage = false
+                    // Handle error
                 }
             }
         }
-    }
-
-    func showQRCodeSheet() {
-        // Show the QR code sheet using our new QRCodeSheetView
-        let qrCodeSheetView = QRCodeSheetView(
-            name: userViewModel.name,
-            qrCodeId: userViewModel.qrCodeId,
-            onDismiss: {}
-        )
-
-        // In a real app, we would present this as a sheet
-        // For now, we'll just use the existing share functionality
-        shareQRCode()
-    }
-
-    func formatInterval(_ interval: TimeInterval) -> String {
-        return TimeFormatting.formatInterval(interval)
-    }
-
-    // MARK: - View Components
-
-    private var qrCodeSection: some View {
-        VStack(spacing: 8) {
-            // QR Code Card with avatar above (overlapping, improved layout)
-            // Use our new QRCodeCardView from the QRCodeSystem feature
-            QRCodeCardView(
-                name: userViewModel.name,
-                subtitle: "LifeSignal contact",
-                qrCodeId: userViewModel.qrCodeId,
-                footer: "Your QR code is unique. If you share it with someone, they can scan it and add you as a contact"
-            )
-            .padding(EdgeInsets(top: 16, leading: 0, bottom: 0, trailing: 0))
-
-            Button("Reset QR Code") {
-                userViewModel.generateNewQRCode()
-            }
-            .foregroundColor(.blue)
-            .buttonStyle(PlainButtonStyle())
-        }
-    }
-
-    private var addContactButton: some View {
-        Button(action: {
-            AVCaptureDevice.requestAccess(for: .video) { granted in
-                if granted {
-                    DispatchQueue.main.async {
-                        showQRScanner = true
-                    }
-                } else {
-                    DispatchQueue.main.async {
-                        showCameraDeniedAlert = true
-                    }
-                }
-            }
-        }) {
-            Text("Add Contact")
-                .fontWeight(.semibold)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(.blue)
-        .frame(width: 200)
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.vertical, 16)
-    }
-
-    private var checkInStatusSection: some View {
-        HStack {
-            Text("Check-in status")
-                .foregroundColor(.primary)
-            Spacer()
-            Text("Active")
-                .foregroundColor(.green)
-        }
-        .padding(.vertical, 12)
-        .padding(.horizontal)
-        .frame(maxWidth: .infinity)
-        .background(Color(UIColor.systemGray5))
-        .cornerRadius(12)
-        .padding(.horizontal)
-    }
-
-    private var settingsSection: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            // Section: Check-in Interval
-            VStack(alignment: .leading, spacing: 8) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Button(action: {
-                        showIntervalPicker = true
-                    }) {
-                        HStack {
-                            Text("Check-in time interval")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Text("\(formatInterval(Double(userViewModel.checkInInterval * 3600)))")
-                                .foregroundColor(.secondary)
-                            Image(systemName: "chevron.right")
-                                .foregroundColor(.secondary)
-                        }
-                        .padding(.vertical, 12)
-                        .padding(.horizontal)
-                        .frame(maxWidth: .infinity)
-                        .background(Color(UIColor.systemGray5))
-                        .cornerRadius(12)
-                    }
-
-                    Text("Time until your countdown expires and responders are notified if you don't check in.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal)
-                }
-                .padding(.horizontal)
-                .frame(maxWidth: .infinity, alignment: .center)
-            }
-
-            // Section: Notifications
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Check-in notification")
-                    .foregroundColor(.primary)
-                    .padding(.horizontal)
-                    .padding(.leading)
-                Picker("Check-in notification", selection: $userViewModel.notificationLeadTime) {
-                    Text("30 mins").tag(30)
-                    Text("2 hours").tag(120)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                Text("Choose when you'd like to be reminded before your countdown expires.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal)
-                    .frame(maxWidth: .infinity, alignment: .center)
-            }
-            .onAppear {
-                if ![30, 120].contains(userViewModel.notificationLeadTime) {
-                    userViewModel.notificationLeadTime = 30
-                }
-            }
-
-            // Section: Help/Instructions
-            VStack(alignment: .leading, spacing: 8) {
-                Button(action: {
-                    showInstructions = true
-                }) {
-                    HStack {
-                        Text("Review instructions")
-                            .foregroundColor(.primary)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 12)
-                    .padding(.horizontal)
-                    .frame(maxWidth: .infinity)
-                    .background(Color(UIColor.systemGray5))
-                    .cornerRadius(12)
-                }
-                .padding(.horizontal)
-            }
-
-            // Alert Toggle Row
-            Button(action: {
-                pendingAlertToggleValue = !userViewModel.sendAlertActive
-                showAlertToggleConfirmation = true
-            }) {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.red)
-                        .font(.system(size: 20))
-                        .padding(.trailing, 4)
-                    Text("Alert to responders")
-                        .foregroundColor(.primary)
-                        .fontWeight(.medium)
-                    Spacer()
-                    Text(userViewModel.sendAlertActive ? "Active" : "Inactive")
-                        .foregroundColor(userViewModel.sendAlertActive ? .red : .secondary)
-                        .fontWeight(userViewModel.sendAlertActive ? .semibold : .medium)
-                }
-                .frame(height: 35)
-                .padding(.vertical, 12)
-                .padding(.horizontal)
-                .frame(maxWidth: .infinity)
-                .background(
-                    userViewModel.sendAlertActive ?
-                        Color.red.opacity(0.15) :
-                        Color(UIColor.systemGray5)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(userViewModel.sendAlertActive ? Color.red.opacity(0.3) : Color.clear, lineWidth: 2)
-                )
-                .cornerRadius(12)
-            }
-            .buttonStyle(PlainButtonStyle())
-            .padding(.horizontal)
-            .shadow(color: userViewModel.sendAlertActive ? Color.red.opacity(0.1) : Color.clear, radius: 4, x: 0, y: 2)
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 16) {
+            VStack(spacing: 24) {
+                // QR Code Section
                 qrCodeSection
-                addContactButton
-                checkInStatusSection
+
+                // Settings Section
                 settingsSection
             }
-            .padding(.bottom, 60)
+            .padding(.vertical)
         }
-        .background(Color(.systemBackground))
-        .sheet(isPresented: $showQRScanner, onDismiss: {
-            if let code = pendingScannedCode {
-                newContact = Contact(
-                    id: UUID().uuidString,
-                    name: "Alex Morgan",
-                    phone: "555-123-4567",
-                    qrCodeId: code,
-                    lastCheckIn: Date(),
-                    note: "I frequently go hiking alone on weekends at Mount Ridge trails. If unresponsive, check the main trail parking lot for my blue Honda Civic (plate XYZ-123). I carry an emergency beacon in my red backpack. I have a peanut allergy and keep an EpiPen in my backpack.",
-                    manualAlertActive: false,
-                    isNonResponsive: false,
-                    hasIncomingPing: false,
-                    incomingPingTimestamp: nil,
-                    isResponder: false,
-                    isDependent: false
-                )
-                pendingScannedCode = nil
-            }
-        }) {
-            // Use our new QRScannerView from the QRCodeSystem feature
-            QRScannerView { result in
-                pendingScannedCode = result
-            }
+        .background(Color(UIColor.systemGroupedBackground))
+        .navigationTitle("Home")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            generateQRCodeImage()
         }
-        .sheet(item: $newContact, onDismiss: { newContact = nil }) { contact in
-            // Use our new AddContactSheetView from the QRCodeSystem feature
-            AddContactSheetView(
-                qrCodeId: contact.qrCodeId,
-                onAddContact: { _ in
-                    // Show alert after sheet closes
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        showContactAddedAlert = true
-                    }
-                },
-                onClose: { newContact = nil }
-            )
+        .sheet(isPresented: $showQRScanner) {
+            QRScannerView(onScanned: { code in
+                pendingScannedCode = code
+                showQRScanner = false
+                // Process scanned code
+                if let code = pendingScannedCode {
+                    newContact = Contact(
+                        id: UUID().uuidString,
+                        name: "New Contact",
+                        phone: "",
+                        qrCodeId: code,
+                        lastCheckIn: Date(),
+                        note: "",
+                        manualAlertActive: false,
+                        isNonResponsive: false,
+                        hasIncomingPing: false,
+                        incomingPingTimestamp: nil,
+                        isResponder: true,
+                        isDependent: false,
+                        hasOutgoingPing: false,
+                        outgoingPingTimestamp: nil,
+                        checkInInterval: 24 * 60 * 60,
+                        manualAlertTimestamp: nil
+                    )
+                    showContactAddedAlert = true
+                }
+            })
         }
         .sheet(isPresented: $showIntervalPicker) {
             IntervalPickerView(
-                interval: Double(userViewModel.checkInInterval * 3600),
-                onSave: { newInterval in
-                    userViewModel.checkInInterval = Int(newInterval / 3600)
+                interval: userViewModel.checkInInterval,
+                onSave: { interval in
+                    userViewModel.checkInInterval = interval
+                    showIntervalPicker = false
                 }
             )
             .presentationDetents([.medium])
         }
         .sheet(isPresented: $showInstructions) {
-            InstructionsView()
-        }
-        .sheet(item: $shareImage) { shareImageItem in
-            ShareSheet(activityItems: [shareImageItem.image], title: "Share QR Code")
-        }
-        .onAppear {
-            generateQRCodeImage()
-        }
-        .onChange(of: userViewModel.qrCodeId) { oldValue, newValue in
-            generateQRCodeImage()
-        }
-        .alert(isPresented: $showCheckInConfirmation) {
-            Alert(
-                title: Text("Confirm Check-in"),
-                message: Text("Are you sure you want to check in now? This will reset your timer."),
-                primaryButton: .default(Text("Check In")) {
-                    userViewModel.updateLastCheckedIn()
-                },
-                secondaryButton: .cancel()
-            )
-        }
-        .alert(isPresented: $showCameraDeniedAlert) {
-            Alert(
-                title: Text("Camera Access Denied"),
-                message: Text("Please enable camera access in Settings to scan QR codes."),
-                dismissButton: .default(Text("OK"))
-            )
-        }
-        .alert(isPresented: $showContactAddedAlert) {
-            Alert(
-                title: Text("Contact Added"),
-                message: Text("The contact was successfully added."),
-                dismissButton: .default(Text("OK"))
-            )
-        }
-        .alert(isPresented: $showAlertToggleConfirmation) {
-            Alert(
-                title: Text(userViewModel.sendAlertActive ? "Deactivate Alert?" : "Send Alert?"),
-                message: Text(userViewModel.sendAlertActive ? "Are you sure you want to deactivate the alert to responders?" : "Are you sure you want to send an alert to responders?"),
-                primaryButton: .destructive(Text(userViewModel.sendAlertActive ? "Deactivate" : "Activate")) {
-                    if let value = pendingAlertToggleValue {
-                        userViewModel.sendAlertActive = value
-                    }
-                    pendingAlertToggleValue = nil
-                },
-                secondaryButton: .cancel {
-                    pendingAlertToggleValue = nil
-                }
-            )
-        }
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: {
-                    shareQRCode()
-                }) {
-                    Image(systemName: "square.and.arrow.up")
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Instructions
-struct InstructionsView: View {
-    @Environment(\.presentationMode) var presentationMode
-    @EnvironmentObject private var userViewModel: UserViewModel
-    @State private var showCheckInConfirmation = false
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    instructionSection(
-                        title: "Welcome to LifeSignal",
-                        content: "LifeSignal helps you stay connected with your trusted contacts. It automatically notifies your responders if you don't check in within your specified time interval.",
-                        icon: "app.badge.checkmark.fill"
-                    )
-
-                    instructionSection(
-                        title: "Setting Up",
-                        content: "1. Set your check-in interval in the Home tab\n2. Add responders by scanning their QR code\n3. Enable notifications to receive reminders before timeout",
-                        icon: "gear"
-                    )
-
-                    instructionSection(
-                        title: "Regular Check-ins",
-                        content: "Remember to check in regularly by tapping the 'Check-In' tab in the navigation bar. This resets your timer and prevents notifications from being sent to your responders.",
-                        icon: "clock.fill"
-                    )
-
-                    instructionSection(
-                        title: "Adding Responders",
-                        content: "Responders are people who will be notified if you don't check in. To add a responder:\n1. Go to the Responders tab\n2. Tap the QR code icon in the navigation bar\n3. Scan their QR code",
-                        icon: "person.2.fill"
-                    )
-
-                    instructionSection(
-                        title: "Adding Dependents",
-                        content: "Dependents are people you're responsible for. You'll be notified if they don't check in. To add a dependent:\n1. Go to the Dependents tab\n2. Tap the QR code icon in the navigation bar\n3. Scan their QR code",
-                        icon: "person.3.fill"
-                    )
-
-                    instructionSection(
-                        title: "Notifications",
-                        content: "You can choose to receive notifications:\n• 30 minutes before timeout\n• 2 hours before timeout\n\nThese help remind you to check in before your responders are alerted.",
-                        icon: "bell.fill"
-                    )
-
-                    instructionSection(
-                        title: "Privacy & Security",
-                        content: "Your data is private and secure. Your location is never shared without your explicit permission. You can reset your QR code at any time from the Home screen.",
-                        icon: "lock.shield.fill"
-                    )
-                }
-                .padding()
-            }
-            .navigationTitle("Instructions")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                }
-            }
-        }
-    }
-
-    private func instructionSection(title: String, content: String, icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Image(systemName: icon)
-                    .font(.title2)
-                    .foregroundColor(.blue)
-
-                Text(title)
-                    .font(.title3)
+            VStack(alignment: .leading, spacing: 20) {
+                Text("How to use LifeSignal")
+                    .font(.title)
                     .fontWeight(.bold)
-            }
+                    .padding(.bottom, 10)
 
-            Text(content)
-                .font(.body)
-                .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 15) {
+                    instructionItem(
+                        number: "1",
+                        title: "Set your check-in interval",
+                        description: "Choose how often you need to check in. This is the maximum time before your contacts are alerted if you don't check in."
+                    )
+
+                    instructionItem(
+                        number: "2",
+                        title: "Add responders",
+                        description: "Share your QR code with trusted contacts who will respond if you need help. They'll be notified if you miss a check-in."
+                    )
+
+                    instructionItem(
+                        number: "3",
+                        title: "Check in regularly",
+                        description: "Tap the check-in button before your timer expires. This resets your countdown and lets your contacts know you're safe."
+                    )
+
+                    instructionItem(
+                        number: "4",
+                        title: "Emergency alert",
+                        description: "If you need immediate help, activate the alert to notify all your responders instantly."
+                    )
+                }
+
+                Spacer()
+
+                Button(action: {
+                    showInstructions = false
+                }) {
+                    Text("Got it")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+                .padding(.top)
+            }
+            .padding()
+        }
+        .alert("Contact Added", isPresented: $showContactAddedAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("New responder has been added to your contacts.")
+        }
+        .alert("Camera Access Denied", isPresented: $showCameraDeniedAlert) {
+            Button("OK", role: .cancel) { }
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+        } message: {
+            Text("Please allow camera access in Settings to scan QR codes.")
+        }
+
+        .sheet(isPresented: $showShareSheet) {
+            if let shareImage = shareImage {
+                // Add a descriptive text along with the image
+                let text = "My LifeSignal QR Code"
+                ShareSheet(items: [text, shareImage.image])
+            }
+        }
+    }
+
+    // Generate a QR code from a string
+    private func generateQRCode(from string: String) -> UIImage? {
+        let data = string.data(using: .utf8)
+        if let filter = CIFilter(name: "CIQRCodeGenerator") {
+            filter.setValue(data, forKey: "inputMessage")
+            filter.setValue("H", forKey: "inputCorrectionLevel")
+            if let ciImage = filter.outputImage {
+                let transform = CGAffineTransform(scaleX: 10, y: 10)
+                let scaledCIImage = ciImage.transformed(by: transform)
+                let context = CIContext()
+                if let cgImage = context.createCGImage(scaledCIImage, from: scaledCIImage.extent) {
+                    return UIImage(cgImage: cgImage)
+                }
+            }
+        }
+        return nil
+    }
+
+    // Format an interval for display
+    private func formatInterval(_ interval: TimeInterval) -> String {
+        let hours = Int(interval / 3600)
+        let days = hours / 24
+
+        if days > 0 {
+            return "\(days) day\(days == 1 ? "" : "s")"
+        } else {
+            return "\(hours) hour\(hours == 1 ? "" : "s")"
+        }
+    }
+
+    // Break up the complex expression into smaller parts
+    private var settingsSection: some View {
+        settingsSectionContent
+    }
+
+    private var settingsSectionContent: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            // Section: Check-in Interval
+            checkInIntervalSection
+
+            // Section: Notifications
+            notificationsSection
+
+            // Section: Help/Instructions
+            helpSection
+        }
+    }
+
+    private var checkInIntervalSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Check-in interval")
+                .foregroundColor(.primary)
+                .padding(.horizontal)
+                .padding(.leading)
+
+            Button(action: {
+                showIntervalPicker = true
+            }) {
+                HStack {
+                    Text(formatInterval(userViewModel.checkInInterval))
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 12)
+                .padding(.horizontal)
+                .frame(maxWidth: .infinity)
+                .background(Color(UIColor.systemGray5))
+                .cornerRadius(12)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .padding(.horizontal)
+
+            Text("This is how long before your contacts are alerted if you don't check in.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+
+    private var notificationsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Check-in notification")
+                .foregroundColor(.primary)
+                .padding(.horizontal)
+                .padding(.leading)
+            Picker("Check-in notification", selection: Binding(
+                get: {
+                    if !userViewModel.notificationsEnabled {
+                        return 0
+                    } else if userViewModel.notify2HoursBefore {
+                        return 120
+                    } else {
+                        return 30
+                    }
+                },
+                set: { newValue in
+                    switch newValue {
+                    case 0: // Disabled
+                        userViewModel.notificationsEnabled = false
+                    case 30: // 30 minutes
+                        userViewModel.notificationsEnabled = true
+                        userViewModel.notify30MinBefore = true
+                        userViewModel.notify2HoursBefore = false
+                    case 120: // 2 hours
+                        userViewModel.notificationsEnabled = true
+                        userViewModel.notify30MinBefore = false
+                        userViewModel.notify2HoursBefore = true
+                    default:
+                        break
+                    }
+                }
+            )) {
+                Text("Disabled").tag(0)
+                Text("30 mins").tag(30)
+                Text("2 hours").tag(120)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            Text("Choose when you'd like to be reminded before your countdown expires.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
+        // No onAppear needed
+    }
+
+    private var helpSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: {
+                showInstructions = true
+            }) {
+                HStack {
+                    Text("Review instructions")
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 12)
+                .padding(.horizontal)
+                .frame(maxWidth: .infinity)
+                .background(Color(UIColor.systemGray5))
+                .cornerRadius(12)
+            }
+            .padding(.horizontal)
+        }
+    }
+
+    private var qrCodeSection: some View {
+        VStack(spacing: 16) {
+            // QR Code Card
+            VStack(spacing: 16) {
+                if isImageReady, let qrImage = qrCodeImage {
+                    Image(uiImage: qrImage)
+                        .resizable()
+                        .interpolation(.none)
+                        .scaledToFit()
+                        .frame(width: 200, height: 200)
+                } else {
+                    ProgressView()
+                        .frame(width: 200, height: 200)
+                }
+
+                Text("Your LifeSignal QR Code")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+
+                Text("Share this with trusted contacts who will respond if you need help")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+            .padding()
+            .background(Color(UIColor.secondarySystemBackground))
+            .cornerRadius(16)
+            .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+            .padding(.horizontal)
+
+            // Action Buttons - Standardized sizing and padding
+            HStack(spacing: 12) {
+                // Scan QR Button
+                Button(action: {
+                    showQRScanner = true
+                }) {
+                    VStack(spacing: 8) { // Standardized spacing
+                        Image(systemName: "qrcode.viewfinder")
+                            .font(.system(size: 24))
+                        Text("Scan QR")
+                            .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 80) // Standardized height
+                    .background(Color(UIColor.systemGray5))
+                    .foregroundColor(.primary)
+                    .cornerRadius(12)
+                }
+
+                // Share QR Button
+                Button(action: {
+                    // Always generate a fresh QR code image before showing the share sheet
+                    // This ensures the image is ready when the sheet appears
+                    generateQRCodeImage {
+                        if let qrImage = self.qrCodeImage, let cgImage = qrImage.cgImage {
+                            let copy = UIImage(cgImage: cgImage)
+                            self.shareImage = .qrCode(copy)
+                            self.showShareSheet = true
+                        }
+                    }
+                }) {
+                    VStack(spacing: 8) { // Standardized spacing
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 24))
+                        Text("Share QR")
+                            .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 80) // Standardized height
+                    .background(Color(UIColor.systemGray5))
+                    .foregroundColor(.primary)
+                    .cornerRadius(12)
+                }
+
+                // Notification Center Button
+                NavigationLink(destination: NotificationCenterView()) {
+                    VStack(spacing: 8) { // Standardized spacing
+                        Image(systemName: "bell.square")
+                            .font(.system(size: 24))
+                        Text("Notifications")
+                            .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 80) // Standardized height
+                    .background(Color(UIColor.systemGray5))
+                    .foregroundColor(.primary)
+                    .cornerRadius(12)
+                }
+            }
+            .padding(.horizontal, 16) // Standardized padding
+        }
+    }
+
+    private func instructionItem(number: String, title: String, description: String) -> some View {
+        HStack(alignment: .top, spacing: 15) {
+            Text(number)
+                .font(.headline)
+                .foregroundColor(.white)
+                .frame(width: 30, height: 30)
+                .background(Color.blue)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title)
+                    .font(.headline)
+                Text(description)
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.bottom, 10)
     }

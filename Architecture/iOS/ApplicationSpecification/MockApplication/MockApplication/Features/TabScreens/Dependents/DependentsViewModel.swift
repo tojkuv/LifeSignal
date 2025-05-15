@@ -89,8 +89,9 @@ class DependentsViewModel: ObservableObject {
         case .countdown:
             return dependents.sorted { (a, b) -> Bool in
                 guard let aInterval = a.checkInInterval, let bInterval = b.checkInInterval else { return false }
-                let aExpiration = a.lastCheckIn.addingTimeInterval(aInterval)
-                let bExpiration = b.lastCheckIn.addingTimeInterval(bInterval)
+                guard let aLastCheckIn = a.lastCheckIn, let bLastCheckIn = b.lastCheckIn else { return false }
+                let aExpiration = aLastCheckIn.addingTimeInterval(aInterval)
+                let bExpiration = bLastCheckIn.addingTimeInterval(bInterval)
                 return aExpiration < bExpiration
             }
         case .recentlyAdded:

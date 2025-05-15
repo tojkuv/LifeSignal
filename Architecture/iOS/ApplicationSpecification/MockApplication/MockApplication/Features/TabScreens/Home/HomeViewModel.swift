@@ -45,12 +45,6 @@ class HomeViewModel: ObservableObject {
     /// Whether the contact added alert is showing
     @Published var showContactAddedAlert: Bool = false
 
-    /// Whether the alert toggle confirmation is showing
-    @Published var showAlertToggleConfirmation: Bool = false
-
-    /// The pending alert toggle value
-    @Published var pendingAlertToggleValue: Bool? = nil
-
     // MARK: - Private Properties
 
     /// The user view model
@@ -120,6 +114,13 @@ class HomeViewModel: ObservableObject {
     /// - Parameter interval: The interval in seconds
     /// - Returns: A formatted string representation of the interval
     func formatInterval(_ interval: TimeInterval) -> String {
-        return TimeFormattingUtility.formatHourInterval(Int(interval / 3600))
+        let hours = Int(interval / 3600)
+        let days = hours / 24
+
+        if days > 0 {
+            return "\(days) day\(days == 1 ? "" : "s")"
+        } else {
+            return "\(hours) hour\(hours == 1 ? "" : "s")"
+        }
     }
 }

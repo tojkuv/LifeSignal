@@ -86,24 +86,67 @@ struct NotificationView: View {
 struct NotificationHistoryRow: View {
     let notification: NotificationEvent
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(notification.title)
-                    .font(.headline)
-                Spacer()
-                Text(notification.timestamp, style: .relative)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Text(notification.body)
-                .font(.body)
-                .foregroundColor(.secondary)
+    /// Get the color for the notification type
+    private var notificationColor: Color {
+        switch notification.type {
+        case .manualAlert:
+            return .red
+        case .checkInReminder:
+            return .green
+        case .pingNotification:
+            return .blue
         }
-        .padding()
-        .background(Color(UIColor.systemBackground))
-        .cornerRadius(8)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Notification content
+            HStack(alignment: .top, spacing: 12) {
+                // Icon with color based on notification type
+                Image(systemName: iconForType(notification.type))
+                    .foregroundColor(notificationColor)
+                    .font(.system(size: 18))
+                    .frame(width: 24, height: 24)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(notification.title)
+                            .font(.headline)
+
+                        Spacer()
+
+                        Text(notification.timestamp, style: .relative)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Text(notification.body)
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding()
+            .background(Color(UIColor.systemBackground))
+            .cornerRadius(8)
+
+            // Divider (will appear between items)
+            Divider()
+                .padding(.vertical, 4)
+        }
+    }
+
+    /// Get the icon for the notification type
+    /// - Parameter type: The notification type
+    /// - Returns: The system image name
+    private func iconForType(_ type: NotificationType) -> String {
+        switch type {
+        case .manualAlert:
+            return "exclamationmark.octagon.fill"
+        case .checkInReminder:
+            return "checkmark.circle.fill"
+        case .pingNotification:
+            return "bell.fill"
+        }
     }
 }
 

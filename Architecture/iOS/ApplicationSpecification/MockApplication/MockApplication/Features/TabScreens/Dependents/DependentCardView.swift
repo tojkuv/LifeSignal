@@ -2,6 +2,42 @@ import SwiftUI
 import Foundation
 import UIKit
 
+/// A view modifier that creates a flashing animation
+struct FlashingAnimation: ViewModifier {
+    @State private var isAnimating = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isAnimating ? 0.5 : 1.0)
+            .onAppear {
+                withAnimation(Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                    isAnimating = true
+                }
+            }
+    }
+}
+
+/// A view modifier that creates a flashing animation for the entire card
+struct CardFlashingAnimation: ViewModifier {
+    let isActive: Bool
+    @State private var isAnimating = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.red.opacity(isAnimating && isActive ? 0.2 : 0.1))
+            )
+            .onAppear {
+                if isActive {
+                    withAnimation(Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                        isAnimating = true
+                    }
+                }
+            }
+    }
+}
+
 struct DependentCardView: View {
     @EnvironmentObject private var userViewModel: UserViewModel
     let contact: Contact
@@ -11,6 +47,9 @@ struct DependentCardView: View {
     @State private var showPingAlert = false
     @State private var isPingConfirmation = false
     @State private var selectedContactID: ContactID?
+
+    // Debug state
+    @State private var hasLogged = false
 
     var statusColor: Color {
         if contact.manualAlertActive {
@@ -33,40 +72,82 @@ struct DependentCardView: View {
     }
 
     var body: some View {
-        ContactCardView(
-            contact: contact,
-            statusColor: statusColor,
-            statusText: statusText,
-            context: .dependent,
-            trailingContent: {
-                if contact.hasOutgoingPing {
-                    Button(action: {
-                        // Show clear ping alert
-                        isPingConfirmation = false
-                        showPingAlert = true
-                    }) {
-                        Circle()
-                            .fill(Color(UIColor.systemBackground))
-                            .frame(width: 40, height: 40)
-                            .overlay(
-                                Image(systemName: "bell.fill")
-                                    .foregroundColor(.blue)
-                                    .font(.system(size: 18))
-                            )
+        HStack(spacing: 12) {
+            // Debug logging using onAppear
+            Text("")
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .onAppear {
+                    if !hasLogged {
+                        print("DependentCardView for \(contact.name) (isDependent: \(contact.isDependent), isResponder: \(contact.isResponder))")
+                        hasLogged = true
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    .accessibilityLabel("Clear ping to \(contact.name)")
-                } else {
-                    Circle()
-                        .fill(Color.clear)
-                        .frame(width: 40, height: 40)
                 }
-            },
-            onTap: {
-                triggerHaptic()
-                selectedContactID = ContactID(id: contact.id)
+            // Avatar with badge
+            ZStack(alignment: .topTrailing) {
+                // Avatar circle
+                Circle()
+                    .fill(Color.blue.opacity(0.1))
+                    .frame(width: 50, height: 50)
+                    .overlay(
+                        Text(String(contact.name.prefix(1)))
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.blue)
+                    )
+
+                // Badge for alert status
+                if contact.manualAlertActive || contact.isNonResponsive || contact.hasOutgoingPing {
+                    Circle()
+                        .fill(contact.manualAlertActive ? Color.red :
+                              contact.isNonResponsive ? Color.yellow :
+                              Color.blue)
+                        .frame(width: 20, height: 20)
+                        .overlay(
+                            Image(systemName: contact.manualAlertActive ? "exclamationmark.octagon.fill" :
+                                  contact.isNonResponsive ? "exclamationmark.triangle.fill" :
+                                  "bell.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.white)
+                                .modifier(FlashingAnimation())
+                        )
+                        .offset(x: 5, y: -5)
+                }
             }
+
+            // Name and status
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(contact.name)
+                        .font(.body)
+                        .foregroundColor(.primary)
+                }
+
+                if !statusText.isEmpty {
+                    Text(statusText)
+                        .font(.footnote)
+                        .foregroundColor(statusColor)
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .center)
+
+            Spacer()
+
+            // No ping icon here - removed as requested
+        }
+        .padding()
+        .background(
+            contact.manualAlertActive ? Color.red.opacity(0.1) :
+            contact.isNonResponsive ? Color.yellow.opacity(0.15) :
+            Color(UIColor.systemGray6)
         )
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+        .modifier(CardFlashingAnimation(isActive: contact.manualAlertActive))
+        .onTapGesture {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            selectedContactID = ContactID(id: contact.id)
+        }
         .sheet(item: $selectedContactID) { id in
             if let contact = userViewModel.contacts.first(where: { $0.id == id.id }) {
                 ContactDetailsSheet(contact: contact)

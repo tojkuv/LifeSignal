@@ -15,6 +15,26 @@ struct CheckInView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
+                // Alert to Responders button
+                Button(action: {
+                    // Show alert confirmation
+                    userViewModel.showAlertConfirmation = true
+                }) {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 18))
+                        Text("Alert to Responders")
+                            .fontWeight(.semibold)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(Color.red)
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
+                    .padding(.horizontal, 40)
+                }
+                .padding(.top, 20)
+
                 // Countdown circle
                 ZStack {
                     // Background circle
@@ -57,61 +77,45 @@ struct CheckInView: View {
                 Button(action: {
                     viewModel.showCheckInConfirmation = true
                 }) {
-                    HStack {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 20))
-                        Text("Check In Now")
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
-                    .padding(.horizontal, 40)
+                    Text("Check-in Now")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(Color.green)
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
+                        .padding(.horizontal, 40)
                 }
                 .padding(.top, 20)
 
-                // Interval information
-                VStack(spacing: 16) {
-                    HStack {
-                        Text("Check-in interval:")
-                            .foregroundColor(.primary)
-                        Spacer()
-                        Text(viewModel.formatInterval(viewModel.checkInInterval))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal)
-
-                    HStack {
-                        Text("Last checked in:")
-                            .foregroundColor(.primary)
-                        Spacer()
-                        Text(viewModel.formatDate(viewModel.lastCheckedIn))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal)
-
-                    HStack {
-                        Text("Next check-in due:")
-                            .foregroundColor(.primary)
-                        Spacer()
-                        Text(viewModel.formatDate(userViewModel.checkInExpiration))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal)
-                }
-                .padding()
-                .background(Color(UIColor.systemGray6))
-                .cornerRadius(12)
-                .padding(.horizontal)
-                .padding(.top, 20)
+                // Removed interval information section as per requirements
 
                 Spacer()
             }
             .padding()
             .navigationTitle("Check-In")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack(spacing: 16) {
+                        Button(action: {
+                            // Show check-in history
+                            // This would be implemented in a real app
+                        }) {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .foregroundColor(.primary)
+                        }
+
+                        Button(action: {
+                            // Show QR code sharing sheet
+                            userViewModel.showQRCodeSheet = true
+                        }) {
+                            Image(systemName: "qrcode")
+                                .foregroundColor(.primary)
+                        }
+                    }
+                }
+            }
             .onAppear {
                 // Sync view model with user view model
                 viewModel.lastCheckedIn = userViewModel.lastCheckIn
@@ -126,6 +130,16 @@ struct CheckInView: View {
                         // Update both view models
                         viewModel.updateLastCheckedIn()
                         userViewModel.checkIn()
+                    },
+                    secondaryButton: .cancel()
+                )
+            }
+            .alert(isPresented: $userViewModel.showAlertConfirmation) {
+                Alert(
+                    title: Text("Confirm Alert"),
+                    message: Text("Are you sure you want to send an alert to your responders?"),
+                    primaryButton: .destructive(Text("Send Alert")) {
+                        userViewModel.triggerAlert()
                     },
                     secondaryButton: .cancel()
                 )

@@ -12,14 +12,14 @@ import Foundation
 struct MainTabView: View {
     @EnvironmentObject private var userViewModel: UserViewModel
     @EnvironmentObject private var appState: AppState
-    @StateObject private var viewModel = MainTabViewModel()
-
-    // MARK: - Lifecycle
+    @StateObject private var viewModel: MainTabViewModel
 
     init() {
-        // Create a view model
-        _viewModel = StateObject(wrappedValue: MainTabViewModel())
+        // Initialize the view model with Check-in as the default tab
+        _viewModel = StateObject(wrappedValue: MainTabViewModel(initialTab: 0))
     }
+
+    // MARK: - Lifecycle
 
     var body: some View {
         TabView(selection: $viewModel.selectedTab) {
@@ -28,28 +28,6 @@ struct MainTabView: View {
                 HomeView()
                     .navigationTitle("Home")
                     .navigationBarTitleDisplayMode(.large)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            NavigationLink(destination: AlertView()) {
-                                Image(systemName: "exclamationmark.triangle")
-                                    .foregroundColor(viewModel.isAlertActive ? .red : .primary)
-                            }
-                        }
-
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            NavigationLink(destination: PingView()) {
-                                Image(systemName: "bell")
-                                    .foregroundColor(viewModel.pendingPingsCount > 0 ? .blue : .primary)
-                            }
-                        }
-
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            NavigationLink(destination: NotificationView()) {
-                                Image(systemName: "bell.badge")
-                                    .foregroundColor(.primary)
-                            }
-                        }
-                    }
             }
             .tabItem {
                 Label("Home", systemImage: "house.fill")
@@ -77,7 +55,7 @@ struct MainTabView: View {
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("Check-In", systemImage: "iphone.circle.fill")
+                Label("Check-In", systemImage: "iphone")
             }
             .tag(2)
 
@@ -102,7 +80,7 @@ struct MainTabView: View {
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("Profile", systemImage: "person.crop.circle.fill")
+                Label("Profile", systemImage: "person.crop.circle.dashed")
             }
             .tag(4)
         }

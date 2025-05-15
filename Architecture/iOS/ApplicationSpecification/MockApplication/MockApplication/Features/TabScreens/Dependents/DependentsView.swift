@@ -4,15 +4,40 @@ import UIKit
 import AVFoundation
 import PhotosUI
 
+/// Sort mode for the dependents list
+enum SortMode: String, CaseIterable, Identifiable {
+    case name = "Name"
+    case lastCheckIn = "Last Check-in"
+    case status = "Status"
+
+    var id: String { self.rawValue }
+}
+
 struct DependentsView: View {
     @EnvironmentObject private var userViewModel: UserViewModel
     @StateObject private var viewModel = DependentsViewModel()
+
+    // State variables
+    @State private var refreshID = UUID()
+    @State private var showQRScanner = false
+    @State private var showCameraDeniedAlert = false
+    @State private var showContactAddedAlert = false
+    @State private var showCheckInConfirmation = false
+    @State private var pendingScannedCode: String? = nil
+    @State private var newContact: Contact? = nil
+    @State private var sortMode: SortMode = .name
+
+    // Debug state to track dependent count
+    @State private var dependentCount: Int = 0
 
     // MARK: - Lifecycle
 
     init() {
         // Create a view model
-        _viewModel = StateObject(wrappedValue: DependentsViewModel())
+        let viewModel = DependentsViewModel()
+        // Set initial sort mode
+        viewModel.selectedSortMode = .alphabetical
+        _viewModel = StateObject(wrappedValue: viewModel)
     }
 
     /// Computed property to get sorted dependents from the view model
@@ -21,10 +46,31 @@ struct DependentsView: View {
         return viewModel.getSortedDependents()
     }
 
+    /// Convert between the view's SortMode and the view model's SortMode
+    private func convertSortMode(_ mode: SortMode) -> DependentsViewModel.SortMode {
+        switch mode {
+        case .name:
+            return .alphabetical
+        case .lastCheckIn:
+            return .countdown
+        case .status:
+            return .countdown // Default to countdown for status
+        }
+    }
+
     var body: some View {
         VStack {
             ScrollView {
                 LazyVStack(spacing: 12) {
+                    // Empty text for debug logging
+                    Text("")
+                        .frame(width: 0, height: 0)
+                        .opacity(0)
+                        .onChange(of: userViewModel.dependents.count) { _, newCount in
+                            dependentCount = newCount
+                            print("DependentsView has \(dependentCount) dependents")
+                        }
+
                     if userViewModel.dependents.isEmpty {
                         Text("No dependents yet")
                             .foregroundColor(.secondary)
@@ -48,9 +94,23 @@ struct DependentsView: View {
                 refreshID = UUID()
             }
 
+            // Set the user view model to ensure data is loaded
+            viewModel.setUserViewModel(userViewModel)
+
             // Force refresh when view appears to ensure sort is applied
             refreshID = UUID()
+            viewModel.forceRefresh()
             print("DependentsView appeared with sort mode: \(sortMode.rawValue)")
+            print("DependentsView has \(userViewModel.dependents.count) dependents")
+
+            // Debug: print all dependents
+            for (index, dependent) in userViewModel.dependents.enumerated() {
+                print("Dependent \(index+1): \(dependent.name) (isDependent: \(dependent.isDependent))")
+            }
+        }
+        .onChange(of: userViewModel.dependents) { _, _ in
+            // Refresh when dependents change
+            viewModel.forceRefresh()
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
@@ -58,8 +118,11 @@ struct DependentsView: View {
                     ForEach(SortMode.allCases) { mode in
                         Button(action: {
                             sortMode = mode
+                            // Update view model's sort mode
+                            viewModel.selectedSortMode = convertSortMode(mode)
                             // Force refresh when sort mode changes
                             refreshID = UUID()
+                            viewModel.forceRefresh()
                             print("Sort mode changed to: \(mode.rawValue)")
                         }) {
                             Label(mode.rawValue, systemImage: sortMode == mode ? "checkmark" : "")
@@ -105,11 +168,12 @@ struct DependentsView: View {
                     isNonResponsive: false,
                     hasIncomingPing: false,
                     incomingPingTimestamp: nil,
+                    isResponder: false,
+                    isDependent: true,
                     hasOutgoingPing: false,
                     outgoingPingTimestamp: nil,
-                    manualAlertTimestamp: nil,
-                    isResponder: false,
-                    isDependent: true
+                    checkInInterval: 24 * 60 * 60,
+                    manualAlertTimestamp: nil
                 )
                 pendingScannedCode = nil
             }

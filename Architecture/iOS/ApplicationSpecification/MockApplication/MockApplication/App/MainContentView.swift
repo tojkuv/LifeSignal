@@ -47,7 +47,7 @@ struct MainContentView: View {
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("Check-In", systemImage: "iphone.circle.fill")
+                Label("Check-In", systemImage: "iphone")
             }
             .tag(2)
 
@@ -72,7 +72,7 @@ struct MainContentView: View {
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("Profile", systemImage: "person.crop.circle.fill")
+                Label("Profile", systemImage: "person.crop.circle.dashed")
             }
             .tag(4)
         }

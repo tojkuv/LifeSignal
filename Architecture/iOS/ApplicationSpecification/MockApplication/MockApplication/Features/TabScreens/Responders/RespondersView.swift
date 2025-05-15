@@ -4,6 +4,24 @@ import UIKit
 import AVFoundation
 import PhotosUI
 
+// Extension to add partitioned functionality to Array
+extension Array {
+    func partitioned(by predicate: (Element) -> Bool) -> ([Element], [Element]) {
+        var matching = [Element]()
+        var nonMatching = [Element]()
+
+        for element in self {
+            if predicate(element) {
+                matching.append(element)
+            } else {
+                nonMatching.append(element)
+            }
+        }
+
+        return (matching, nonMatching)
+    }
+}
+
 struct RespondersView: View {
     @EnvironmentObject private var userViewModel: UserViewModel
     @State private var showQRScanner = false
@@ -77,9 +95,14 @@ struct RespondersView: View {
                     for contact in userViewModel.contacts.filter({ $0.hasIncomingPing }) {
                         userViewModel.respondToPing(from: contact)
                     }
+                    // Force refresh immediately
+                    refreshID = UUID()
+                    // Post notification to refresh other views that might be affected
+                    NotificationCenter.default.post(name: NSNotification.Name("RefreshRespondersView"), object: nil)
                 }) {
-                    Text("Respond to All")
-                        .foregroundColor(userViewModel.pendingPingsCount > 0 ? .blue : .gray)
+                    Image(systemName: userViewModel.pendingPingsCount > 0 ? "bell.badge.slash.fill" : "bell.fill")
+                        .foregroundColor(userViewModel.pendingPingsCount > 0 ? .blue : Color.blue.opacity(0.5))
+                        .font(.system(size: 18))
                 }
                 .disabled(userViewModel.pendingPingsCount == 0)
             }

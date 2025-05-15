@@ -113,7 +113,26 @@ class CheckInViewModel: ObservableObject {
 
     /// Update the last check-in date
     func updateLastCheckedIn() {
-        lastCheckedIn = Date()
-        checkInExpiration = Date().addingTimeInterval(Double(checkInInterval) * 3600)
+        let now = Date()
+        lastCheckedIn = now
+        checkInExpiration = now.addingTimeInterval(Double(checkInInterval) * 3600)
+
+        // Save to UserDefaults
+        UserDefaults.standard.set(now, forKey: "lastCheckedIn")
+        UserDefaults.standard.set(checkInExpiration, forKey: "checkInExpiration")
+
+        // Show silent local notification
+        showCheckInNotification()
+    }
+
+    /// Show a silent local notification for check-in
+    private func showCheckInNotification() {
+        let content = UNMutableNotificationContent()
+        content.title = "Check-in Completed"
+        content.body = "You have successfully checked in."
+        content.sound = .none
+
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 }

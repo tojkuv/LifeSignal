@@ -77,25 +77,28 @@
 
 
 # Pending Features
-- make a notification preference view used instead of the current check in reminder.
-- add a toggle all notifications view and view model with confirmation dialog and notification change feedback that dismisses itself
-- make our mock qrscanner (@Architecture/iOS/ApplicationSpecification/MockApplication/MockApplication/UI/QRCodeSystem) UI and ux be exactly like our production app's (@Architecture/iOSApplication/LifeSignal/LifeSignal/Features/QRCodeSystem) ui and ux. copy the same folder and file structure
 
-- we need to add permissions for the image gallery sheet and the recent images carousel of the qr scanner in the plist
+- in the profile tab, the update avatar options should be implemented (the user should be able to take a photo to replace their avatar, choose a photo, and delete the current photo if the avatar has a photo). change the delete button text to "Delete avatar photo". the delete button should be disabled if the user does not have a photo for their avatar (the user is simply using the devault avatar view).
+- in the profile tab, we will eventually implement the change phone number feature to use our backend to change the authenticated phone number (lets mock this for the purpose of this mock project). created the necessary views and viewmodels (we should be using a view now instead of a sheet since we we will do phone number change verification)
+- the gallery carousel is covering the flashing helper text. move the text higher so its not covered and make it smaller in font and also almost completly fade out in its animation.
+- make the open photons button of the scanner a gallery icon instead and center it.
+- pressing the open photos galery is displacing our qrscanner sheet and makeing it impossible to close it.
+- the carousel gallery items should not have rounded cornders (check if there is some view extension or something that is still doing it). make the items have less space between them.
+- contact state changes are not persisting as they should when the user changes the role or send a new ping (or does anyhing from the contact details sheet)
+    - update the ping button to say pined and have a lighter blue background when the contact is curretly pinged.
+- the respodners and dependents views are not updating when changes are made in the contact details sheet and the sheet is dismissed
+- responders that sent you pings should not have the contact ping button set to pinged since they are the ones that pinged you (this button is only for pinging dependents)
+- similar to how the contact details sheet shows that a dependent sent out an alert, there should also be a similar component of the sheet in the same place and style that shows when they are not responsive (description text and time ago). both should be able to appear at the same time if they have to.
+- qrscanner x button does not work
+- the pinged state of the contact details sheet ping button, has an issue with its blue background, it has a system gray background behind it. the blue background is not applying to the entire button as it should. use the "bell.and.waves.left.and.right.fill" when in this state
+- remove the top app bar icons from the checkin view. lets rework the view. give me some variations. it only has three functions: shows the current time remaining, has the check-in button, has the manual alert button. app a button in the top app bar that lets me switch between the variations. we will eventually only pick one and delete the rest so keep that in mind.
 
-
-- responder cards should never turn red like dependent cards do (since this functionality is strictly a dependents list functionality)
-- pressing the ping icon in the responder card should not clear the ping. We don’t need that feature
-- the respond to all button in the responders view should be like a grayed out blue when inactive
-- share qr code should always be an image (not "Any" so the user has the option to save to gallery)
-
-- show a alert icon (exclamationmark.octagon) next to a dependent that has sent out a manual alert (just like how we show a ping icon). Make it flash. This state of the card take precedence over warning and ping states.
-- show a triangle warning icon (similar in style to the ping icon we show) next to a dependent that is not responsive (just like how we show a ping icon)
-- show a silent local notification when the user toggles a contact’s role
-- show a local notification when a user sends a ping (instead of the alert box that we currently have)
-- use a “bell.badge.fill” icon for responder cards that sent the user a ping instead of the current icon
-- use a “person.crop.circle.dashed” icon for the profile tab icon
-- update the checkin tab bar logo to use “iphone” icon
-- move alert to responders to the top of check in screen
-- remove the check-in interval and check in interval, last checked in, and next check in data section of the check in screen
-- check in now button should not have a leading icon and have the label “Check-in Now”
+## final touches to mvp:
+- Fix and clean up our notification manager. local notifications are not showing. for instance, show a local notification that after showing does not get stored in the notification center of the phone (its meant to act like an app toast)
+    - show a local notification when the user toggles a contact’s role
+    - show a local notification when a user sends a ping (instead of the alert box that we currently have)
+    - show a local notification for when the user checks in.
+- migrate over the manual alert button from the production application
+- update our dependents list sorter
+- add haptic feedback to all interactions
+- make the home qr code smaller and add a white background that has some passing and rounder corners. make the grey background they sit on have consistent padding on all sides. 

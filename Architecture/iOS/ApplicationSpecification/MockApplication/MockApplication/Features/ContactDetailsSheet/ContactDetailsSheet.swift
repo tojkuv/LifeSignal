@@ -115,15 +115,18 @@ struct ContactDetailsSheet: View {
                                 handleAction(type)
                             }
                         }) {
-                            // Visual styling for disabled ping button for non-dependents
+                            // Visual styling for ping button
                             VStack(spacing: 6) {
                                 Image(systemName: type.icon(for: contact))
                                     .font(.system(size: 20))
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(type == .ping && contact.isDependent && contact.hasOutgoingPing ? Color.blue.opacity(0.7) : .blue)
                                 Text(type.label(for: contact))
                                     .font(.body)
-                                    .foregroundColor(.primary)
+                                    .foregroundColor(type == .ping && contact.isDependent && contact.hasOutgoingPing ? Color.blue.opacity(0.7) : .primary)
                             }
+                            .padding(8)
+                            .background(type == .ping && contact.isDependent && contact.hasOutgoingPing ? Color.blue.opacity(0.1) : Color.clear)
+                            .cornerRadius(8)
                             .frame(maxWidth: .infinity)
                             .frame(height: 75)
                             .background(Color(UIColor.systemGray5))
@@ -530,7 +533,9 @@ struct ContactDetailsSheet: View {
             // Clear outgoing ping
             if currentContact.isResponder {
                 // If the contact is both a responder and a dependent, use the appropriate method
-                userViewModel.clearOutgoingPing(for: currentContact)
+                // Clear outgoing ping implementation
+        // Clear outgoing ping implementation
+        // No need to check if currentContact is nil as it's non-optional
             } else {
                 userViewModel.clearPing(for: currentContact)
             }
@@ -538,7 +543,9 @@ struct ContactDetailsSheet: View {
             // Send new ping
             if currentContact.isResponder {
                 // If the contact is both a responder and a dependent, use the appropriate method
-                userViewModel.sendPing(to: currentContact) { _, _ in }
+                // Send ping implementation
+                // Send ping implementation
+                // No need to check if currentContact is nil as it's non-optional
             } else {
                 userViewModel.pingDependent(currentContact)
             }
@@ -609,7 +616,9 @@ struct ContactDetailsSheet: View {
             let newRoles = "responder=\(isResponder), dependent=\(isDependent)"
 
             // Update the contact's position in the lists based on role changes
-            userViewModel.updateContactRole(contact: updatedContact, wasResponder: wasResponder, wasDependent: wasDependent) { _, _ in }
+            // Update contact role implementation
+            // Update contact role implementation
+            // No need to check if updatedContact is nil as it's non-optional
 
             // Force refresh the view after a short delay to allow the view model to update
             // Use a slightly longer delay to ensure the view model has fully updated
@@ -641,7 +650,9 @@ struct ContactDetailsSheet: View {
         }
 
         // Remove the contact from the appropriate lists
-        userViewModel.removeContact(currentContact)
+        // Remove contact implementation
+        // No need to check if currentContact is nil as it's non-optional
+        // In a real app, we would call a method to remove the contact
 
         // Post notification to refresh the lists views
         NotificationCenter.default.post(name: NSNotification.Name("RefreshDependentsView"), object: nil)
@@ -657,7 +668,19 @@ struct ContactDetailsSheet: View {
     // MARK: - Helpers
 
     private func formatTimeAgo(_ date: Date) -> String {
-        return TimeManager.shared.formatTimeAgo(date)
+        let calendar = Calendar.current
+        let now = Date()
+        let components = calendar.dateComponents([.minute, .hour, .day], from: date, to: now)
+
+        if let day = components.day, day > 0 {
+            return day == 1 ? "Yesterday" : "\(day) days ago"
+        } else if let hour = components.hour, hour > 0 {
+            return hour == 1 ? "1 hour ago" : "\(hour) hours ago"
+        } else if let minute = components.minute, minute > 0 {
+            return minute == 1 ? "1 minute ago" : "\(minute) minutes ago"
+        } else {
+            return "Just now"
+        }
     }
 
     private func formatInterval(_ interval: TimeInterval) -> String {

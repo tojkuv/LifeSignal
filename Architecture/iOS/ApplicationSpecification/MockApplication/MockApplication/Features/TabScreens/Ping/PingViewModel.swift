@@ -24,31 +24,76 @@ class PingViewModel: ObservableObject {
     // MARK: - Initialization
 
     init() {
-        // Generate mock ping history
+        // Generate mock ping history with diverse scenarios
         pingHistory = [
+            // Recent outgoing ping, still pending
             PingEvent(
                 id: UUID().uuidString,
-                timestamp: Date().addingTimeInterval(-3600),
+                timestamp: Date().addingTimeInterval(-15 * 60), // 15 minutes ago
+                contactId: "5",
+                contactName: "Michael Rodriguez",
+                direction: .outgoing,
+                status: .pending
+            ),
+
+            // Recent incoming ping, responded to
+            PingEvent(
+                id: UUID().uuidString,
+                timestamp: Date().addingTimeInterval(-45 * 60), // 45 minutes ago
+                contactId: "4",
+                contactName: "Emily Chen",
+                direction: .incoming,
+                status: .responded
+            ),
+
+            // Older outgoing ping, responded to
+            PingEvent(
+                id: UUID().uuidString,
+                timestamp: Date().addingTimeInterval(-3 * 60 * 60), // 3 hours ago
                 contactId: "1",
                 contactName: "John Doe",
                 direction: .outgoing,
                 status: .responded
             ),
+
+            // Older incoming ping, responded to
             PingEvent(
                 id: UUID().uuidString,
-                timestamp: Date().addingTimeInterval(-86400),
-                contactId: "2",
-                contactName: "Jane Smith",
+                timestamp: Date().addingTimeInterval(-6 * 60 * 60), // 6 hours ago
+                contactId: "7",
+                contactName: "Alex Thompson",
                 direction: .incoming,
                 status: .responded
             ),
+
+            // Yesterday's outgoing ping, responded to
             PingEvent(
                 id: UUID().uuidString,
-                timestamp: Date().addingTimeInterval(-86400 * 2),
-                contactId: "3",
-                contactName: "Bob Johnson",
+                timestamp: Date().addingTimeInterval(-25 * 60 * 60), // 25 hours ago
+                contactId: "2",
+                contactName: "Jane Smith",
                 direction: .outgoing,
                 status: .responded
+            ),
+
+            // Yesterday's incoming ping, responded to
+            PingEvent(
+                id: UUID().uuidString,
+                timestamp: Date().addingTimeInterval(-30 * 60 * 60), // 30 hours ago
+                contactId: "3",
+                contactName: "Bob Johnson",
+                direction: .incoming,
+                status: .responded
+            ),
+
+            // Older outgoing ping, still pending (unusual case)
+            PingEvent(
+                id: UUID().uuidString,
+                timestamp: Date().addingTimeInterval(-48 * 60 * 60), // 2 days ago
+                contactId: "6",
+                contactName: "Olivia Wilson",
+                direction: .outgoing,
+                status: .pending
             )
         ]
     }

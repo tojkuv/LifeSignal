@@ -5,32 +5,64 @@ import AVFoundation
 /// A SwiftUI view for scanning QR codes
 struct QRScannerView: View {
     // MARK: - Properties
-    
+
     /// The view model for the QR scanner
     @StateObject private var viewModel = QRScannerViewModel()
-    
+
     /// The callback for when a QR code is scanned
     var onScanned: (String) -> Void
-    
+
     // MARK: - Initialization
-    
+
     /// Initialize with a callback for when a QR code is scanned
     /// - Parameter onScanned: The callback for when a QR code is scanned
     init(onScanned: @escaping (String) -> Void) {
         self.onScanned = onScanned
     }
-    
+
     // MARK: - Body
-    
+
     var body: some View {
         ZStack {
+            // Show gallery picker if needed
+            if viewModel.isShowingGallery {
+                PhotoPickerView(onImageSelected: { image in
+                    viewModel.isShowingGallery = false
+                    // Process the selected image for QR codes
+                    // In a real app, this would scan the image for QR codes
+                    // For now, we'll just simulate a successful scan
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                        onScanned("gallery-qr-code-\(Int.random(in: 1000...9999))")
+                    }
+                })
+            }
             // Camera view or camera failed view
             if viewModel.cameraLoadFailed {
                 cameraFailedView
             } else {
                 cameraView
+                    .environmentObject(viewModel)
+
+                // Helper text with fade animation
+                VStack {
+                    Spacer()
+
+                    Text("Scan or upload a LifeSignal QR code")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Color.black.opacity(0.6))
+                        .cornerRadius(8)
+                        .padding(.bottom, 100)
+                        .opacity(viewModel.helperTextOpacity)
+                        .onAppear {
+                            withAnimation(Animation.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                                viewModel.helperTextOpacity = 0.7
+                            }
+                        }
+                }
             }
-            
+
             // Overlay controls
             VStack {
                 // Top controls
@@ -44,63 +76,76 @@ struct QRScannerView: View {
                             .foregroundColor(.white)
                             .padding()
                     }
-                    
+
                     Spacer()
-                    
+
                     // Torch button
                     Button(action: {
                         viewModel.toggleTorch()
                     }) {
-                        Image(systemName: viewModel.torchOn ? "bolt.fill" : "bolt.slash.fill")
+                        Image(systemName: viewModel.torchOn ? "flashlight.on.fill" : "flashlight.off.fill")
                             .font(.title2)
-                            .foregroundColor(.white)
+                            .foregroundColor(viewModel.torchOn ? .yellow : .white)
                             .padding()
                     }
                 }
-                
+
                 Spacer()
-                
+
                 // Bottom controls
                 VStack {
                     // Gallery carousel
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            // Gallery thumbnails
-                            ForEach(0..<viewModel.galleryThumbnails.count, id: \.self) { index in
+                    VStack(spacing: 10) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                // Gallery thumbnails
+                                ForEach(0..<viewModel.galleryThumbnails.count, id: \.self) { index in
+                                    Button(action: {
+                                        viewModel.setSelectedGalleryIndex(index)
+                                    }) {
+                                        Image(uiImage: viewModel.galleryThumbnails[index])
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fill)
+                                            .frame(width: 80, height: 80)
+                                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    }
+                                }
+
+                                // Gallery picker button
                                 Button(action: {
-                                    viewModel.setSelectedGalleryIndex(index)
+                                    viewModel.isShowingGallery = true
                                 }) {
-                                    Image(uiImage: viewModel.galleryThumbnails[index])
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                        .frame(width: 60, height: 60)
+                                    Image(systemName: "photo.on.rectangle")
+                                        .font(.system(size: 30))
+                                        .foregroundColor(.white)
+                                        .frame(width: 80, height: 80)
+                                        .background(Color.gray.opacity(0.5))
                                         .clipShape(RoundedRectangle(cornerRadius: 8))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .stroke(viewModel.selectedGalleryIndex == index ? Color.blue : Color.white, lineWidth: 2)
-                                        )
                                 }
                             }
-                            
-                            // Gallery picker button
-                            Button(action: {
-                                viewModel.isShowingGallery = true
-                            }) {
-                                Image(systemName: "photo.on.rectangle")
-                                    .font(.system(size: 30))
-                                    .foregroundColor(.white)
-                                    .frame(width: 60, height: 60)
-                                    .background(Color.gray.opacity(0.5))
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                            }
+                            .padding(.horizontal)
                         }
+                        .frame(height: 90)
+
+                        // Open Photos button
+                        Button(action: {
+                            viewModel.isShowingGallery = true
+                        }) {
+                            Text("Open Photos")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                                .padding(.vertical, 8)
+                                .padding(.horizontal, 16)
+                                .background(Color.blue)
+                                .cornerRadius(8)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal)
+                        .padding(.bottom, 10)
                     }
-                    .frame(height: 80)
-                    .padding(.bottom)
                 }
             }
-            
+
             // Processing overlay
             if viewModel.isProcessingQRCode {
                 Color.black.opacity(0.5)
@@ -110,7 +155,7 @@ struct QRScannerView: View {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                 .scaleEffect(1.5)
-                            
+
                             Text("Processing QR Code...")
                                 .font(.headline)
                                 .foregroundColor(.white)
@@ -124,17 +169,15 @@ struct QRScannerView: View {
             viewModel.onQRCodeScanned = { qrCode in
                 onScanned(qrCode)
             }
-            
+
             // Initialize the camera
             viewModel.initializeCamera()
         }
         .sheet(isPresented: $viewModel.isShowingGallery) {
             // Photo picker
-            PhotoPickerView { image in
-                if let image = image {
-                    viewModel.loadAndProcessFullImage(image)
-                }
-            }
+            PhotoPickerView(onImageSelected: { image in
+                viewModel.loadAndProcessFullImage(image)
+            })
         }
         .alert("No QR Code Found", isPresented: $viewModel.showNoQRCodeAlert) {
             Button("OK", role: .cancel) { }
@@ -142,52 +185,45 @@ struct QRScannerView: View {
             Text("The selected image does not contain a valid QR code. Please try another image.")
         }
     }
-    
+
     // MARK: - Subviews
-    
+
     /// The camera view
     private var cameraView: some View {
         ZStack {
-            // Mock camera view (black background with scanning animation)
-            Color.black
+            // Camera view with scanning animation
+            CameraPreviewView(torchOn: viewModel.torchOn)
                 .edgesIgnoringSafeArea(.all)
                 .overlay(
                     ZStack {
-                        // Scanning animation
-                        if viewModel.isCameraReady {
-                            ScanningAnimationView()
-                        } else {
-                            // Loading indicator
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(1.5)
-                        }
+                        // Scanning animation - always show it immediately without loading state
+                        ScanningAnimationView()
                     }
                 )
         }
     }
-    
+
     /// The camera failed view
     private var cameraFailedView: some View {
         ZStack {
             Color.black
                 .edgesIgnoringSafeArea(.all)
-            
+
             VStack(spacing: 20) {
                 Image(systemName: "camera.fill")
                     .font(.system(size: 60))
                     .foregroundColor(.white)
-                
+
                 Text("Camera Access Required")
                     .font(.title2)
                     .foregroundColor(.white)
-                
+
                 Text("Please allow camera access in Settings to scan QR codes.")
                     .font(.body)
                     .foregroundColor(.white)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
-                
+
                 Button(action: {
                     // Open settings
                     if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -201,7 +237,7 @@ struct QRScannerView: View {
                         .background(Color.blue)
                         .cornerRadius(10)
                 }
-                
+
                 Button(action: {
                     viewModel.isShowingGallery = true
                 }) {
@@ -218,84 +254,58 @@ struct QRScannerView: View {
     }
 }
 
-/// A SwiftUI view for the scanning animation
+/// A SwiftUI view for the scanning animation - simplified without animation line
 struct ScanningAnimationView: View {
-    @State private var animationOffset: CGFloat = -200
-    
     var body: some View {
-        ZStack {
-            // Scanner frame
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.white, lineWidth: 2)
-                .frame(width: 250, height: 250)
-            
-            // Scanning line
-            Rectangle()
-                .fill(
-                    LinearGradient(
-                        gradient: Gradient(colors: [.clear, .blue, .clear]),
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(width: 250, height: 2)
-                .offset(y: animationOffset)
-        }
-        .onAppear {
-            withAnimation(
-                Animation.easeInOut(duration: 2.0)
-                    .repeatForever(autoreverses: true)
-            ) {
-                animationOffset = 200
-            }
-        }
+        // Empty view - removed scanning animation and center square as requested
+        Color.clear
     }
 }
 
 /// A SwiftUI view for picking photos
 struct PhotoPickerView: UIViewControllerRepresentable {
     @Environment(\.presentationMode) var presentationMode
-    var onImagePicked: (UIImage?) -> Void
-    
+    var onImageSelected: (UIImage) -> Void
+
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var configuration = PHPickerConfiguration()
         configuration.filter = .images
         configuration.selectionLimit = 1
-        
+
         let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = context.coordinator
         return picker
     }
-    
+
     func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
-    
+
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
-    
+
     class Coordinator: NSObject, PHPickerViewControllerDelegate {
         let parent: PhotoPickerView
-        
+
         init(_ parent: PhotoPickerView) {
             self.parent = parent
         }
-        
+
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             parent.presentationMode.wrappedValue.dismiss()
-            
+
             guard let provider = results.first?.itemProvider else {
-                parent.onImagePicked(nil)
+                // No image selected
                 return
             }
-            
+
             if provider.canLoadObject(ofClass: UIImage.self) {
                 provider.loadObject(ofClass: UIImage.self) { image, error in
-                    DispatchQueue.main.async {
-                        self.parent.onImagePicked(image as? UIImage)
+                    if let uiImage = image as? UIImage {
+                        DispatchQueue.main.async {
+                            self.parent.onImageSelected(uiImage)
+                        }
                     }
                 }
-            } else {
-                parent.onImagePicked(nil)
             }
         }
     }
