@@ -123,6 +123,10 @@ class AddContactSheetViewModel: ObservableObject {
             if Double.random(in: 0...1) < 0.9 {
                 // Success
                 self.isAddingContact = false
+
+                // Show a notification for adding a contact
+                NotificationManager.shared.showContactAddedNotification(contactName: self.contact.name)
+
                 completion(true)
             } else {
                 // Failure

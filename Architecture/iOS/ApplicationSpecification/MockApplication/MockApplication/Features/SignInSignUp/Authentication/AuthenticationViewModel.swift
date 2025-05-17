@@ -10,7 +10,7 @@ class AuthenticationViewModel: ObservableObject {
     @Published var showPhoneEntry: Bool = true
 
     /// The phone number
-    @Published var phoneNumber: String = "+11234567890" // Test phone number
+    @Published var phoneNumber: String = "" // Empty by default
 
     /// The verification code
     @Published var verificationCode: String = "123456" // Test verification code
@@ -27,6 +27,12 @@ class AuthenticationViewModel: ObservableObject {
     /// Whether to show an error
     @Published var showError: Bool = false
 
+    /// The selected region
+    @Published var selectedRegion: String = "US"
+
+    /// Whether to show the region picker
+    @Published var showRegionPicker: Bool = false
+
     // MARK: - Methods
 
     /// Send a verification code
@@ -41,6 +47,9 @@ class AuthenticationViewModel: ObservableObject {
             self.verificationId = "mock-verification-id"
             self.showPhoneEntry = false
             completion(true)
+
+            // Clear the verification code when showing the verification view
+            self.verificationCode = ""
         }
     }
 
@@ -56,7 +65,7 @@ class AuthenticationViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             self.isLoading = false
 
-            // For the mock app, we'll always succeed and need onboarding
+            // For the mock app, we'll always succeed and show onboarding
             needsOnboarding(true)
             completion(true)
         }

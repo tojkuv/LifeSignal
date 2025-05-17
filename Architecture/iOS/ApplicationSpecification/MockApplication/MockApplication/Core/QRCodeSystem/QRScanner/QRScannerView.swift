@@ -2,6 +2,7 @@ import SwiftUI
 import PhotosUI
 import AVFoundation
 
+
 /// A SwiftUI view for scanning QR codes
 struct QRScannerView: View {
     // MARK: - Properties
@@ -11,6 +12,15 @@ struct QRScannerView: View {
 
     /// The callback for when a QR code is scanned
     var onScanned: (String) -> Void
+
+    /// Environment presentation mode for dismissing the sheet
+    @Environment(\.presentationMode) var presentationMode
+
+    /// Whether to show the add contact sheet
+    @State private var showAddContactSheet = false
+
+    /// The scanned QR code for the add contact sheet
+    @State private var scannedQRCode: String? = nil
 
     // MARK: - Initialization
 
@@ -24,18 +34,7 @@ struct QRScannerView: View {
 
     var body: some View {
         ZStack {
-            // Show gallery picker if needed
-            if viewModel.isShowingGallery {
-                PhotoPickerView(onImageSelected: { image in
-                    viewModel.isShowingGallery = false
-                    // Process the selected image for QR codes
-                    // In a real app, this would scan the image for QR codes
-                    // For now, we'll just simulate a successful scan
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                        onScanned("gallery-qr-code-\(Int.random(in: 1000...9999))")
-                    }
-                })
-            }
+            // Camera view will be shown behind the gallery sheet
             // Camera view or camera failed view
             if viewModel.cameraLoadFailed {
                 cameraFailedView
@@ -43,24 +42,7 @@ struct QRScannerView: View {
                 cameraView
                     .environmentObject(viewModel)
 
-                // Helper text with fade animation
-                VStack {
-                    Spacer()
-
-                    Text("Scan or upload a LifeSignal QR code")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .padding()
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(8)
-                        .padding(.bottom, 100)
-                        .opacity(viewModel.helperTextOpacity)
-                        .onAppear {
-                            withAnimation(Animation.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
-                                viewModel.helperTextOpacity = 0.7
-                            }
-                        }
-                }
+                // Buttons will be moved to a horizontal stack at the bottom
             }
 
             // Overlay controls
@@ -69,26 +51,30 @@ struct QRScannerView: View {
                 HStack {
                     // Close button
                     Button(action: {
+                        HapticFeedback.triggerHaptic()
                         viewModel.setShowScanner(false)
+                        presentationMode.wrappedValue.dismiss()
                     }) {
                         Image(systemName: "xmark")
                             .font(.title2)
                             .foregroundColor(.white)
-                            .padding()
+                            .padding(12)
                     }
 
                     Spacer()
 
                     // Torch button
                     Button(action: {
+                        HapticFeedback.triggerHaptic()
                         viewModel.toggleTorch()
                     }) {
                         Image(systemName: viewModel.torchOn ? "flashlight.on.fill" : "flashlight.off.fill")
                             .font(.title2)
                             .foregroundColor(viewModel.torchOn ? .yellow : .white)
-                            .padding()
+                            .padding(12)
                     }
                 }
+                .padding(4)
 
                 Spacer()
 
@@ -97,92 +83,223 @@ struct QRScannerView: View {
                     // Gallery carousel
                     VStack(spacing: 10) {
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
+                            HStack(spacing: 5) { // Reduced spacing between items
                                 // Gallery thumbnails
                                 ForEach(0..<viewModel.galleryThumbnails.count, id: \.self) { index in
                                     Button(action: {
+                                        HapticFeedback.lightImpact()
                                         viewModel.setSelectedGalleryIndex(index)
                                     }) {
                                         Image(uiImage: viewModel.galleryThumbnails[index])
                                             .resizable()
                                             .aspectRatio(contentMode: .fill)
-                                            .frame(width: 80, height: 80)
-                                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                                            .frame(width: 90, height: 90) // Increased item size
+                                            .clipShape(Rectangle()) // Removed rounded corners
                                     }
-                                }
-
-                                // Gallery picker button
-                                Button(action: {
-                                    viewModel.isShowingGallery = true
-                                }) {
-                                    Image(systemName: "photo.on.rectangle")
-                                        .font(.system(size: 30))
-                                        .foregroundColor(.white)
-                                        .frame(width: 80, height: 80)
-                                        .background(Color.gray.opacity(0.5))
-                                        .clipShape(RoundedRectangle(cornerRadius: 8))
                                 }
                             }
                             .padding(.horizontal)
                         }
-                        .frame(height: 90)
+                        .frame(height: 100) // Increased height for larger items
 
-                        // Open Photos button
-                        Button(action: {
-                            viewModel.isShowingGallery = true
-                        }) {
-                            Text("Open Photos")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .padding(.vertical, 8)
-                                .padding(.horizontal, 16)
-                                .background(Color.blue)
-                                .cornerRadius(8)
+                        // Horizontal stack for buttons
+                        HStack {
+                            // Manual Entry button
+                            Button(action: {
+                                HapticFeedback.triggerHaptic()
+                                viewModel.isShowingManualEntry = true
+                            }) {
+                                Text("By QR Code ID")
+                                    .font(.subheadline)
+                                    .foregroundColor(.white)
+                                    .padding(.vertical, 8)
+                                    .padding(.horizontal, 12)
+                                    .cornerRadius(8)
+                            }
+
+                            Spacer()
+
+                            // Gallery button
+                            Button(action: {
+                                HapticFeedback.triggerHaptic()
+                                viewModel.isShowingGallery = true
+                            }) {
+                                Image(systemName: "photo.on.rectangle")
+                                    .font(.system(size: 24))
+                                    .foregroundColor(.white)
+                                    .padding(12)
+                                    .cornerRadius(8)
+                            }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal)
-                        .padding(.bottom, 10)
+                        .padding(.bottom, 48)
                     }
                 }
             }
 
-            // Processing overlay
-            if viewModel.isProcessingQRCode {
-                Color.black.opacity(0.5)
-                    .edgesIgnoringSafeArea(.all)
-                    .overlay(
-                        VStack {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(1.5)
-
-                            Text("Processing QR Code...")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .padding(.top)
-                        }
-                    )
-            }
+            // No processing overlay is shown
         }
         .onAppear {
+            // Ensure no processing state is shown when view appears
+            viewModel.isProcessingQRCode = false
+
             // Set up the QR code handler
             viewModel.onQRCodeScanned = { qrCode in
-                onScanned(qrCode)
+                // Stop processing state
+                viewModel.isProcessingQRCode = false
+                // Store the scanned QR code and show the add contact sheet
+                scannedQRCode = qrCode
+                showAddContactSheet = true
             }
 
             // Initialize the camera
             viewModel.initializeCamera()
         }
+        .sheet(isPresented: $viewModel.isShowingManualEntry) {
+            NavigationStack {
+                VStack(alignment: .center, spacing: 20) {
+                    Text("Enter QR Code ID")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .padding(.top, 20)
+
+                    // Verification code style text field with paste button
+                    ZStack(alignment: .trailing) {
+                        TextField("QR Code ID", text: $viewModel.manualQRCode)
+                            .keyboardType(.default)
+                            .font(.body)
+                            .padding(.vertical, 12)
+                            .padding(.horizontal)
+                            .background(Color(UIColor.secondarySystemGroupedBackground))
+                            .cornerRadius(12)
+                            .foregroundColor(.primary)
+                            .multilineTextAlignment(.center)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                            .onChange(of: viewModel.manualQRCode) { oldValue, newValue in
+                                // Limit to 36 characters (UUID format)
+                                if newValue.count > 36 {
+                                    viewModel.manualQRCode = String(newValue.prefix(36))
+                                }
+                            }
+
+                        // Paste button that only shows when text field is empty
+                        if viewModel.manualQRCode.isEmpty {
+                            Button(action: {
+                                HapticFeedback.lightImpact()
+                                // Get text from clipboard
+                                let pasteboard = UIPasteboard.general
+                                if let pastedText = pasteboard.string {
+                                    // Check if it's a valid UUID
+                                    if UUID(uuidString: pastedText) != nil {
+                                        viewModel.manualQRCode = pastedText
+                                    } else {
+                                        // Show alert for invalid UUID
+                                        viewModel.showInvalidUUIDAlert = true
+                                    }
+                                }
+                            }) {
+                                Image(systemName: "doc.on.clipboard")
+                                    .foregroundColor(.blue)
+                                    .padding(.trailing, 16)
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+
+                    // Add validation for QR code format
+                    let isValidFormat = viewModel.isValidQRCodeFormat(viewModel.manualQRCode)
+
+                    // Verify button style
+                    Button(action: {
+                        if !viewModel.manualQRCode.isEmpty && isValidFormat {
+                            HapticFeedback.notificationFeedback(type: .success)
+                            // Process the manually entered QR code
+                            viewModel.handleScannedQRCode(viewModel.manualQRCode)
+                            viewModel.isShowingManualEntry = false
+                        }
+                    }) {
+                        Text("Add Contact")
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                    }
+                    .background(viewModel.manualQRCode.isEmpty || !isValidFormat ? Color.gray : Color.blue)
+                    .cornerRadius(12)
+                    .padding(.horizontal)
+                    .disabled(viewModel.manualQRCode.isEmpty || !isValidFormat)
+
+                    Spacer()
+                }
+                .padding()
+                .background(Color(UIColor.systemGroupedBackground))
+                .navigationBarTitle("Manual Entry", displayMode: .inline)
+                .navigationBarItems(leading: Button("Cancel") {
+                    HapticFeedback.triggerHaptic()
+                    viewModel.isShowingManualEntry = false
+                    viewModel.manualQRCode = ""
+                })
+            }
+        }
         .sheet(isPresented: $viewModel.isShowingGallery) {
-            // Photo picker
+            // Photo picker as a sheet instead of fullScreenCover
             PhotoPickerView(onImageSelected: { image in
-                viewModel.loadAndProcessFullImage(image)
+                viewModel.isShowingGallery = false
+
+                // Ensure no processing state is shown
+                viewModel.isProcessingQRCode = false
+
+                // Check if the image contains a QR code
+                // For the mock app, we'll simulate QR code detection
+                // In a real app, we would use a QR code detector
+                // Use a random chance of finding a QR code for demo purposes
+                // In production, this would be a real QR code detection
+                let randomChance = Double.random(in: 0...1)
+                let qrCodeFound = randomChance < 0.9 // 90% chance of finding a QR code
+
+                if qrCodeFound {
+                    // QR code found - store the scanned QR code and show the add contact sheet
+                    let generatedCode = "gallery-qr-code-\(Int.random(in: 1000...9999))"
+                    scannedQRCode = generatedCode
+                    showAddContactSheet = true
+                } else {
+                    // No QR code found - show alert
+                    viewModel.showNoQRCodeAlert = true
+                }
             })
         }
         .alert("No QR Code Found", isPresented: $viewModel.showNoQRCodeAlert) {
             Button("OK", role: .cancel) { }
         } message: {
             Text("The selected image does not contain a valid QR code. Please try another image.")
+        }
+        .alert("Invalid UUID Format", isPresented: $viewModel.showInvalidUUIDAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("The clipboard content is not a valid UUID format.")
+        }
+        .sheet(isPresented: $showAddContactSheet, onDismiss: {
+            // When the add contact sheet is dismissed, call the onScanned callback with the scanned QR code
+            // and dismiss the QR scanner sheet
+            if let code = scannedQRCode {
+                onScanned(code)
+                presentationMode.wrappedValue.dismiss()
+            }
+        }) {
+            if let code = scannedQRCode {
+                AddContactSheetView(
+                    qrCodeId: code,
+                    onAddContact: { contact in
+                        // Close the add contact sheet
+                        showAddContactSheet = false
+                    },
+                    onClose: {
+                        // Close the add contact sheet
+                        showAddContactSheet = false
+                    }
+                )
+            }
         }
     }
 
@@ -225,6 +342,7 @@ struct QRScannerView: View {
                     .padding(.horizontal)
 
                 Button(action: {
+                    HapticFeedback.triggerHaptic()
                     // Open settings
                     if let url = URL(string: UIApplication.openSettingsURLString) {
                         UIApplication.shared.open(url)
@@ -239,6 +357,9 @@ struct QRScannerView: View {
                 }
 
                 Button(action: {
+                    HapticFeedback.triggerHaptic()
+                    // Ensure no processing state is shown
+                    viewModel.isProcessingQRCode = false
                     viewModel.isShowingGallery = true
                 }) {
                     Text("Select from Gallery")

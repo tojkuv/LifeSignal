@@ -15,14 +15,23 @@ struct MainTabView: View {
     @StateObject private var viewModel: MainTabViewModel
 
     init() {
-        // Initialize the view model with Check-in as the default tab
+        // Initialize the view model with Home as the default tab
         _viewModel = StateObject(wrappedValue: MainTabViewModel(initialTab: 0))
     }
 
     // MARK: - Lifecycle
 
     var body: some View {
-        TabView(selection: $viewModel.selectedTab) {
+        TabView(selection: Binding(
+            get: { viewModel.selectedTab },
+            set: { newValue in
+                // Add haptic feedback when tab changes
+                if viewModel.selectedTab != newValue {
+                    HapticFeedback.selectionFeedback()
+                }
+                viewModel.selectedTab = newValue
+            }
+        )) {
             // Home tab
             NavigationStack {
                 HomeView()
@@ -91,6 +100,14 @@ struct MainTabView: View {
             viewModel.isAlertActive = userViewModel.isAlertActive
             viewModel.pendingPingsCount = userViewModel.pendingPingsCount
             viewModel.nonResponsiveDependentsCount = userViewModel.nonResponsiveDependentsCount
+        }
+        .onChange(of: userViewModel.pendingPingsCount) { _, newValue in
+            // Update badge count when pending pings change
+            viewModel.pendingPingsCount = newValue
+        }
+        .onChange(of: userViewModel.nonResponsiveDependentsCount) { _, newValue in
+            // Update badge count when non-responsive dependents change
+            viewModel.nonResponsiveDependentsCount = newValue
         }
     }
 }

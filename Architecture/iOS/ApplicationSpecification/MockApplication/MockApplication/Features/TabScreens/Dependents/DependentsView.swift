@@ -6,9 +6,9 @@ import PhotosUI
 
 /// Sort mode for the dependents list
 enum SortMode: String, CaseIterable, Identifiable {
+    case timeLeft = "Time Left"
     case name = "Name"
-    case lastCheckIn = "Last Check-in"
-    case status = "Status"
+    case dateAdded = "Date Added"
 
     var id: String { self.rawValue }
 }
@@ -25,7 +25,7 @@ struct DependentsView: View {
     @State private var showCheckInConfirmation = false
     @State private var pendingScannedCode: String? = nil
     @State private var newContact: Contact? = nil
-    @State private var sortMode: SortMode = .name
+    @State private var sortMode: SortMode = .timeLeft
 
     // Debug state to track dependent count
     @State private var dependentCount: Int = 0
@@ -36,7 +36,7 @@ struct DependentsView: View {
         // Create a view model
         let viewModel = DependentsViewModel()
         // Set initial sort mode
-        viewModel.selectedSortMode = .alphabetical
+        viewModel.selectedSortMode = .countdown
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
@@ -49,45 +49,34 @@ struct DependentsView: View {
     /// Convert between the view's SortMode and the view model's SortMode
     private func convertSortMode(_ mode: SortMode) -> DependentsViewModel.SortMode {
         switch mode {
+        case .timeLeft:
+            return .countdown
         case .name:
             return .alphabetical
-        case .lastCheckIn:
-            return .countdown
-        case .status:
-            return .countdown // Default to countdown for status
+        case .dateAdded:
+            return .recentlyAdded
         }
     }
 
     var body: some View {
-        VStack {
-            ScrollView {
-                LazyVStack(spacing: 12) {
-                    // Empty text for debug logging
-                    Text("")
-                        .frame(width: 0, height: 0)
-                        .opacity(0)
-                        .onChange(of: userViewModel.dependents.count) { _, newCount in
-                            dependentCount = newCount
-                            print("DependentsView has \(dependentCount) dependents")
-                        }
-
-                    if userViewModel.dependents.isEmpty {
-                        Text("No dependents yet")
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.top, 40)
-                    } else {
-                        ForEach(sortedDependents) { dependent in
-                            DependentCardView(contact: dependent, refreshID: viewModel.refreshID)
-                        }
+        // Simplified scrollable view with direct LazyVStack
+        ScrollView(.vertical, showsIndicators: true) {
+            LazyVStack(spacing: 12) {
+                if userViewModel.dependents.isEmpty {
+                    Text("No dependents yet")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 40)
+                } else {
+                    ForEach(sortedDependents) { dependent in
+                        DependentCardView(contact: dependent, refreshID: viewModel.refreshID)
                     }
                 }
-                .padding()
-                .padding(.bottom, 30)
             }
-            .background(Color(.systemBackground))
+            .padding(.horizontal)
+            .padding(.vertical, 16)
         }
-        .background(Color(.systemBackground))
+        .background(Color(UIColor.systemGroupedBackground))
         .onAppear {
             // Add observer for refresh notifications
             NotificationCenter.default.addObserver(forName: NSNotification.Name("RefreshDependentsView"), object: nil, queue: .main) { _ in
@@ -117,6 +106,7 @@ struct DependentsView: View {
                 Menu {
                     ForEach(SortMode.allCases) { mode in
                         Button(action: {
+                            HapticFeedback.selectionFeedback()
                             sortMode = mode
                             // Update view model's sort mode
                             viewModel.selectedSortMode = convertSortMode(mode)
@@ -136,51 +126,42 @@ struct DependentsView: View {
                     }
                 }
                 .accessibilityLabel("Sort Dependents")
+                .hapticFeedback(style: .light)
             }
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: {
-                    AVCaptureDevice.requestAccess(for: .video) { granted in
-                        if granted {
-                            DispatchQueue.main.async {
-                                showQRScanner = true
-                            }
-                        } else {
-                            DispatchQueue.main.async {
-                                showCameraDeniedAlert = true
-                            }
-                        }
-                    }
-                }) {
-                    Image(systemName: "qrcode.viewfinder")
+                NavigationLink(destination: NotificationCenterView()) {
+                    Image(systemName: "square.fill.text.grid.1x2")
                 }
+                .hapticFeedback(style: .light)
             }
         }
-        .sheet(isPresented: $showQRScanner, onDismiss: {
-            if let code = pendingScannedCode {
-                newContact = Contact(
-                    id: UUID().uuidString,
-                    name: "Jordan Taylor",
-                    phone: "555-123-4567",
-                    qrCodeId: code,
-                    lastCheckIn: Date(),
-                    note: "I work night shifts at City Hospital (7PM-7AM). If no response, contact my supervisor Dr. Smith at 555-999-8888. I have a service dog named Max who stays with me. Emergency contacts: Sister Amy (555-777-4444), Building security (555-666-5555). I have a heart condition and take medication daily.",
-                    manualAlertActive: false,
-                    isNonResponsive: false,
-                    hasIncomingPing: false,
-                    incomingPingTimestamp: nil,
-                    isResponder: false,
-                    isDependent: true,
-                    hasOutgoingPing: false,
-                    outgoingPingTimestamp: nil,
-                    checkInInterval: 24 * 60 * 60,
-                    manualAlertTimestamp: nil
-                )
-                pendingScannedCode = nil
-            }
-        }) {
+        .sheet(isPresented: $showQRScanner) {
             // Use our new QRScannerView from the QRCodeSystem feature
             QRScannerView { result in
                 pendingScannedCode = result
+                showQRScanner = false
+                // Directly create contact and show Add Contact sheet
+                if let code = pendingScannedCode {
+                    newContact = Contact(
+                        id: UUID().uuidString,
+                        name: "Jordan Taylor",
+                        phone: "555-123-4567",
+                        qrCodeId: code,
+                        lastCheckIn: Date(),
+                        note: "I work night shifts at City Hospital (7PM-7AM). If no response, contact my supervisor Dr. Smith at 555-999-8888. I have a service dog named Max who stays with me. Emergency contacts: Sister Amy (555-777-4444), Building security (555-666-5555). I have a heart condition and take medication daily.",
+                        manualAlertActive: false,
+                        isNonResponsive: false,
+                        hasIncomingPing: false,
+                        incomingPingTimestamp: nil,
+                        isResponder: false,
+                        isDependent: true,
+                        hasOutgoingPing: false,
+                        outgoingPingTimestamp: nil,
+                        checkInInterval: 24 * 60 * 60,
+                        manualAlertTimestamp: nil
+                    )
+                    pendingScannedCode = nil
+                }
             }
         }
         .sheet(item: $newContact, onDismiss: {
@@ -205,7 +186,7 @@ struct DependentsView: View {
                 title: Text("Confirm Check-in"),
                 message: Text("Are you sure you want to check in now? This will reset your timer."),
                 primaryButton: .default(Text("Check In")) {
-                    userViewModel.updateLastCheckedIn()
+                    userViewModel.checkIn()
                 },
                 secondaryButton: .cancel()
             )

@@ -29,8 +29,7 @@ class AppViewModel: ObservableObject {
     // MARK: - Initialization
 
     init() {
-        // In a real app, we would load authentication state from a service
-        // For the mock app, we'll default to not authenticated
+        // Start with the authentication flow
         self.isAuthenticated = false
         self.needsOnboarding = false
     }
@@ -51,8 +50,20 @@ class AppViewModel: ObservableObject {
 
     /// Sign out the user
     func signOut() {
-        isAuthenticated = false
-        needsOnboarding = false
+        print("AppState.signOut() called")
+
+        // Reset authentication state
+        self.isAuthenticated = false
+        self.needsOnboarding = false
+
+        // Publish changes to ensure UI updates
+        objectWillChange.send()
+
+        // Post notification for app-wide sign out
+        NotificationCenter.default.post(name: NSNotification.Name("UserSignedOut"), object: nil)
+
+        // Log for debugging
+        print("User signed out: isAuthenticated = \(isAuthenticated)")
     }
 
     /// Set error message

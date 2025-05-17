@@ -6,6 +6,9 @@ import AVFoundation
 // Import QRCodeSystem components
 import PhotosUI
 
+// Import HapticFeedback
+
+
 struct HomeView: View {
     @EnvironmentObject private var userViewModel: UserViewModel
     @State private var showQRScanner = false
@@ -21,6 +24,10 @@ struct HomeView: View {
     @State private var pendingScannedCode: String? = nil
     @State private var shareImage: HomeShareImage? = nil
     @State private var showContactAddedAlert = false
+    @State private var selectedQRDesign: QRCodeDesign = .standard
+    @State private var showResetQRConfirmation = false
+    @State private var showIntervalChangeConfirmation = false
+    @State private var pendingIntervalChange: TimeInterval? = nil
 
     func generateQRCodeImage(completion: @escaping () -> Void = {}) {
         if isGeneratingImage { return }
@@ -67,7 +74,7 @@ struct HomeView: View {
             QRScannerView(onScanned: { code in
                 pendingScannedCode = code
                 showQRScanner = false
-                // Process scanned code
+                // Process scanned code and directly show the Add Contact sheet
                 if let code = pendingScannedCode {
                     newContact = Contact(
                         id: UUID().uuidString,
@@ -87,7 +94,6 @@ struct HomeView: View {
                         checkInInterval: 24 * 60 * 60,
                         manualAlertTimestamp: nil
                     )
-                    showContactAddedAlert = true
                 }
             })
         }
@@ -95,11 +101,51 @@ struct HomeView: View {
             IntervalPickerView(
                 interval: userViewModel.checkInInterval,
                 onSave: { interval in
+                    // Apply the interval change directly without confirmation
                     userViewModel.checkInInterval = interval
                     showIntervalPicker = false
                 }
             )
             .presentationDetents([.medium])
+        }
+        .alert("Change Notification Setting?", isPresented: $showIntervalChangeConfirmation) {
+            Button("Cancel", role: .cancel) {
+                pendingIntervalChange = nil
+            }
+            Button("Change") {
+                if let interval = pendingIntervalChange {
+                    switch Int(interval) {
+                    case 0: // Disabled
+                        userViewModel.notificationsEnabled = false
+                    case 30: // 30 minutes
+                        userViewModel.notificationsEnabled = true
+                        userViewModel.notify30MinBefore = true
+                        userViewModel.notify2HoursBefore = false
+                    case 120: // 2 hours
+                        userViewModel.notificationsEnabled = true
+                        userViewModel.notify30MinBefore = false
+                        userViewModel.notify2HoursBefore = true
+                    default:
+                        break
+                    }
+                    pendingIntervalChange = nil
+                }
+            }
+        } message: {
+            if let interval = pendingIntervalChange {
+                switch Int(interval) {
+                case 0:
+                    Text("Are you sure you want to disable check-in notifications?")
+                case 30:
+                    Text("You'll be notified 30 minutes before your check-in expires. Is this correct?")
+                case 120:
+                    Text("You'll be notified 2 hours before your check-in expires. Is this correct?")
+                default:
+                    Text("Are you sure you want to change your notification setting?")
+                }
+            } else {
+                Text("Are you sure you want to change your notification setting?")
+            }
         }
         .sheet(isPresented: $showInstructions) {
             VStack(alignment: .leading, spacing: 20) {
@@ -111,7 +157,7 @@ struct HomeView: View {
                 VStack(alignment: .leading, spacing: 15) {
                     instructionItem(
                         number: "1",
-                        title: "Set your check-in interval",
+                        title: "Set your interval",
                         description: "Choose how often you need to check in. This is the maximum time before your contacts are alerted if you don't check in."
                     )
 
@@ -137,6 +183,7 @@ struct HomeView: View {
                 Spacer()
 
                 Button(action: {
+                    HapticFeedback.triggerHaptic()
                     showInstructions = false
                 }) {
                     Text("Got it")
@@ -148,6 +195,7 @@ struct HomeView: View {
                         .cornerRadius(10)
                 }
                 .padding(.top)
+                .hapticFeedback()
             }
             .padding()
         }
@@ -165,6 +213,18 @@ struct HomeView: View {
             }
         } message: {
             Text("Please allow camera access in Settings to scan QR codes.")
+        }
+        .alert("Reset QR Code", isPresented: $showResetQRConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Reset") {
+                // Generate a new QR code ID
+                userViewModel.generateNewQRCode()
+                // The QR code will automatically refresh due to the onChange handler in QRCodeVariationView
+                // Show a silent local notification
+                NotificationManager.shared.showQRCodeResetNotification()
+            }
+        } message: {
+            Text("Are you sure you want to reset your QR code? This will invalidate any previously shared QR codes.")
         }
 
         .sheet(isPresented: $showShareSheet) {
@@ -197,8 +257,14 @@ struct HomeView: View {
     // Format an interval for display
     private func formatInterval(_ interval: TimeInterval) -> String {
         let hours = Int(interval / 3600)
-        let days = hours / 24
 
+        // Special case for our specific hour values (8, 16, 32)
+        if hours == 8 || hours == 16 || hours == 32 {
+            return "\(hours) hours"
+        }
+
+        // For other values, use the standard formatting
+        let days = hours / 24
         if days > 0 {
             return "\(days) day\(days == 1 ? "" : "s")"
         } else {
@@ -229,9 +295,9 @@ struct HomeView: View {
             Text("Check-in interval")
                 .foregroundColor(.primary)
                 .padding(.horizontal)
-                .padding(.leading)
 
             Button(action: {
+                HapticFeedback.triggerHaptic()
                 showIntervalPicker = true
             }) {
                 HStack {
@@ -244,7 +310,7 @@ struct HomeView: View {
                 .padding(.vertical, 12)
                 .padding(.horizontal)
                 .frame(maxWidth: .infinity)
-                .background(Color(UIColor.systemGray5))
+                .background(Color(UIColor.secondarySystemGroupedBackground))
                 .cornerRadius(12)
             }
             .buttonStyle(PlainButtonStyle())
@@ -254,7 +320,7 @@ struct HomeView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
-                .frame(maxWidth: .infinity, alignment: .center)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -263,7 +329,6 @@ struct HomeView: View {
             Text("Check-in notification")
                 .foregroundColor(.primary)
                 .padding(.horizontal)
-                .padding(.leading)
             Picker("Check-in notification", selection: Binding(
                 get: {
                     if !userViewModel.notificationsEnabled {
@@ -275,20 +340,10 @@ struct HomeView: View {
                     }
                 },
                 set: { newValue in
-                    switch newValue {
-                    case 0: // Disabled
-                        userViewModel.notificationsEnabled = false
-                    case 30: // 30 minutes
-                        userViewModel.notificationsEnabled = true
-                        userViewModel.notify30MinBefore = true
-                        userViewModel.notify2HoursBefore = false
-                    case 120: // 2 hours
-                        userViewModel.notificationsEnabled = true
-                        userViewModel.notify30MinBefore = false
-                        userViewModel.notify2HoursBefore = true
-                    default:
-                        break
-                    }
+                    // Store the pending interval change and show confirmation
+                    pendingIntervalChange = TimeInterval(newValue)
+                    HapticFeedback.selectionFeedback()
+                    showIntervalChangeConfirmation = true
                 }
             )) {
                 Text("Disabled").tag(0)
@@ -301,7 +356,7 @@ struct HomeView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
-                .frame(maxWidth: .infinity, alignment: .center)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         // No onAppear needed
     }
@@ -309,6 +364,7 @@ struct HomeView: View {
     private var helpSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button(action: {
+                HapticFeedback.triggerHaptic()
                 showInstructions = true
             }) {
                 HStack {
@@ -321,7 +377,7 @@ struct HomeView: View {
                 .padding(.vertical, 12)
                 .padding(.horizontal)
                 .frame(maxWidth: .infinity)
-                .background(Color(UIColor.systemGray5))
+                .background(Color(UIColor.secondarySystemGroupedBackground))
                 .cornerRadius(12)
             }
             .padding(.horizontal)
@@ -330,50 +386,38 @@ struct HomeView: View {
 
     private var qrCodeSection: some View {
         VStack(spacing: 16) {
-            // QR Code Card
-            VStack(spacing: 16) {
-                if isImageReady, let qrImage = qrCodeImage {
-                    Image(uiImage: qrImage)
-                        .resizable()
-                        .interpolation(.none)
-                        .scaledToFit()
-                        .frame(width: 200, height: 200)
-                } else {
-                    ProgressView()
-                        .frame(width: 200, height: 200)
+            // QR Code Variations
+            QRCodeVariationView(
+                qrCodeId: userViewModel.qrCodeId,
+                design: selectedQRDesign,
+                userName: userViewModel.name,
+                onRefresh: {
+                    // Generate a new QR code ID
+                    userViewModel.generateNewQRCode()
+                    // Force refresh the QR code image
+                    generateQRCodeImage()
+                    // Show a silent local notification
+                    NotificationManager.shared.showQRCodeResetNotification()
                 }
-
-                Text("Your LifeSignal QR Code")
-                    .font(.headline)
-                    .foregroundColor(.primary)
-
-                Text("Share this with trusted contacts who will respond if you need help")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-            }
-            .padding()
-            .background(Color(UIColor.secondarySystemBackground))
-            .cornerRadius(16)
-            .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
-            .padding(.horizontal)
+            )
 
             // Action Buttons - Standardized sizing and padding
             HStack(spacing: 12) {
-                // Scan QR Button
+                // Reset QR Code Button
                 Button(action: {
-                    showQRScanner = true
+                    // Show confirmation alert
+                    HapticFeedback.triggerHaptic()
+                    showResetQRConfirmation = true
                 }) {
                     VStack(spacing: 8) { // Standardized spacing
-                        Image(systemName: "qrcode.viewfinder")
+                        Image(systemName: "arrow.triangle.2.circlepath")
                             .font(.system(size: 24))
-                        Text("Scan QR")
+                        Text("Reset QR")
                             .font(.caption)
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 80) // Standardized height
-                    .background(Color(UIColor.systemGray5))
+                    .background(Color(UIColor.secondarySystemGroupedBackground))
                     .foregroundColor(.primary)
                     .cornerRadius(12)
                 }
@@ -382,10 +426,22 @@ struct HomeView: View {
                 Button(action: {
                     // Always generate a fresh QR code image before showing the share sheet
                     // This ensures the image is ready when the sheet appears
-                    generateQRCodeImage {
-                        if let qrImage = self.qrCodeImage, let cgImage = qrImage.cgImage {
-                            let copy = UIImage(cgImage: cgImage)
-                            self.shareImage = .qrCode(copy)
+                    HapticFeedback.triggerHaptic()
+
+                    // Create a QRCodeShareView with the user's QR code ID
+                    let content = AnyView(
+                        QRCodeShareView(
+                            name: userViewModel.name,
+                            subtitle: "LifeSignal contact",
+                            qrCodeId: userViewModel.qrCodeId,
+                            footer: "Use LifeSignal's QR code scanner to add this contact"
+                        )
+                    )
+
+                    // Generate an image from the QRCodeShareView
+                    QRCodeViewModel.generateQRCodeImage(content: content) { image in
+                        if let image = image {
+                            self.shareImage = .qrCode(image)
                             self.showShareSheet = true
                         }
                     }
@@ -398,22 +454,25 @@ struct HomeView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 80) // Standardized height
-                    .background(Color(UIColor.systemGray5))
+                    .background(Color(UIColor.secondarySystemGroupedBackground))
                     .foregroundColor(.primary)
                     .cornerRadius(12)
                 }
 
-                // Notification Center Button
-                NavigationLink(destination: NotificationCenterView()) {
+                // Scan QR Button
+                Button(action: {
+                    HapticFeedback.triggerHaptic()
+                    showQRScanner = true
+                }) {
                     VStack(spacing: 8) { // Standardized spacing
-                        Image(systemName: "bell.square")
+                        Image(systemName: "qrcode.viewfinder")
                             .font(.system(size: 24))
-                        Text("Notifications")
+                        Text("Scan QR")
                             .font(.caption)
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 80) // Standardized height
-                    .background(Color(UIColor.systemGray5))
+                    .background(Color(UIColor.secondarySystemGroupedBackground))
                     .foregroundColor(.primary)
                     .cornerRadius(12)
                 }

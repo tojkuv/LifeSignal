@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Combine
 import UserNotifications
+import UIKit
 
 /// View model for user data
 /// This class is designed to mirror the structure of UserFeature.State in the TCA implementation
@@ -18,7 +19,7 @@ class UserViewModel: ObservableObject {
     @Published var phone: String = "+1 (555) 987-6543"
 
     /// The user's QR code ID
-    @Published var qrCodeId: String = "qr-"+UUID().uuidString
+    @Published var qrCodeId: String = UUID().uuidString.uppercased()
 
     /// The user's emergency profile description
     @Published var profileDescription: String = "I have type 1 diabetes. My insulin and supplies are in the refrigerator. Emergency contacts: Mom (555-111-2222), Roommate Jen (555-333-4444). Allergic to penicillin. My doctor is Dr. Martinez at City Medical Center (555-777-8888)."
@@ -46,6 +47,9 @@ class UserViewModel: ObservableObject {
     /// Whether the user has an active alert
     @Published var isAlertActive: Bool = false
 
+    /// Whether the user has enabled sending alerts to responders
+    @Published var sendAlertActive: Bool = false
+
     /// The user's contacts
     @Published var contacts: [Contact] = Contact.mockContacts()
 
@@ -57,6 +61,23 @@ class UserViewModel: ObservableObject {
     /// The user's dependents (contacts who are dependents)
     var dependents: [Contact] {
         contacts.filter { $0.isDependent }
+    }
+
+    /// Debug function to print all contacts and their roles
+    func debugPrintContacts() {
+        print("\n===== DEBUG: ALL CONTACTS =====")
+        for (index, contact) in contacts.enumerated() {
+            print("\(index): \(contact.name) - ID: \(contact.id) - Responder: \(contact.isResponder) - Dependent: \(contact.isDependent)")
+        }
+        print("===== DEBUG: RESPONDERS =====")
+        for (index, contact) in responders.enumerated() {
+            print("\(index): \(contact.name) - ID: \(contact.id)")
+        }
+        print("===== DEBUG: DEPENDENTS =====")
+        for (index, contact) in dependents.enumerated() {
+            print("\(index): \(contact.name) - ID: \(contact.id)")
+        }
+        print("==============================\n")
     }
 
     /// The number of pending pings
@@ -75,6 +96,14 @@ class UserViewModel: ObservableObject {
     /// Whether to show the QR code sheet
     @Published var showQRCodeSheet: Bool = false
 
+    /// The user's avatar image
+    @Published var avatarImage: UIImage? = nil
+
+    /// Whether the user is using the default avatar
+    var isUsingDefaultAvatar: Bool {
+        return avatarImage == nil
+    }
+
     // MARK: - Initialization
 
     init() {
@@ -87,6 +116,17 @@ class UserViewModel: ObservableObject {
     /// Check in the user
     func checkIn() {
         lastCheckIn = Date()
+
+        // Save to UserDefaults
+        UserDefaults.standard.set(lastCheckIn, forKey: "lastCheckIn")
+        UserDefaults.standard.set(checkInExpiration, forKey: "checkInExpiration")
+
+        // Force UI update
+        objectWillChange.send()
+
+        // Show a silent notification for check-in
+        NotificationManager.shared.showCheckInNotification()
+
         // In a real app, we would update the server
     }
 
@@ -94,12 +134,38 @@ class UserViewModel: ObservableObject {
     /// - Parameter interval: The new interval in seconds
     func updateCheckInInterval(_ interval: TimeInterval) {
         checkInInterval = interval
+
+        // Save to UserDefaults
+        UserDefaults.standard.set(interval, forKey: "checkInInterval")
+
+        // Force UI update
+        objectWillChange.send()
+
+        // In a real app, we would update the server
+    }
+
+    /// Update notification preferences
+    /// - Parameters:
+    ///   - notify30Min: Whether to notify 30 minutes before check-in expiration
+    ///   - notify2Hours: Whether to notify 2 hours before check-in expiration
+    func updateNotificationPreferences(notify30Min: Bool, notify2Hours: Bool) {
+        notify30MinBefore = notify30Min
+        notify2HoursBefore = notify2Hours
+
+        // Save to UserDefaults
+        UserDefaults.standard.set(notify30Min, forKey: "notify30MinBefore")
+        UserDefaults.standard.set(notify2Hours, forKey: "notify2HoursBefore")
+
+        // Force UI update
+        objectWillChange.send()
+
         // In a real app, we would update the server
     }
 
     /// Generate a new QR code ID
     func generateNewQRCode() {
-        qrCodeId = UUID().uuidString
+        // Generate a new UUID in the format 1B987C92-73FC-4425-A11B-CBE41D2C0FF9
+        qrCodeId = UUID().uuidString.uppercased()
         // In a real app, we would update the server
     }
 
@@ -107,6 +173,8 @@ class UserViewModel: ObservableObject {
     /// - Parameter contact: The contact to add
     func addContact(_ contact: Contact) {
         contacts.append(contact)
+        // Show a notification for adding a contact
+        NotificationManager.shared.showContactAddedNotification(contactName: contact.name)
         // In a real app, we would update the server
     }
 
@@ -130,7 +198,15 @@ class UserViewModel: ObservableObject {
     /// Remove a contact
     /// - Parameter id: The ID of the contact to remove
     func removeContact(id: String) {
+        // Get the contact name before removing
+        let contactName = contacts.first(where: { $0.id == id })?.name ?? "Unknown contact"
+
+        // Remove the contact
         contacts.removeAll { $0.id == id }
+
+        // Show a notification for removing a contact
+        NotificationManager.shared.showContactRemovedNotification(contactName: contactName)
+
         // In a real app, we would update the server
     }
 
@@ -200,8 +276,14 @@ class UserViewModel: ObservableObject {
             contact.incomingPingTimestamp = nil
         }
 
+        // Save to UserDefaults
+        savePingStates()
+
         // Notify that a ping was responded to
         NotificationCenter.default.post(name: NSNotification.Name("PingResponded"), object: nil, userInfo: ["contactId": contact.id])
+
+        // Force UI update
+        objectWillChange.send()
     }
 
     /// Respond to a ping from a contact by ID
@@ -212,8 +294,14 @@ class UserViewModel: ObservableObject {
             contact.incomingPingTimestamp = nil
         }
 
+        // Save to UserDefaults
+        savePingStates()
+
         // Notify that a ping was responded to
         NotificationCenter.default.post(name: NSNotification.Name("PingResponded"), object: nil, userInfo: ["contactId": id])
+
+        // Force UI update
+        objectWillChange.send()
     }
 
     /// Send a ping to a contact
@@ -249,6 +337,9 @@ class UserViewModel: ObservableObject {
 
         // Show a silent local notification
         NotificationManager.shared.showPingNotification(contactName: contact.name)
+
+        // Force UI update
+        objectWillChange.send()
     }
 
     /// Clear a ping for a contact
@@ -267,6 +358,9 @@ class UserViewModel: ObservableObject {
 
         // Show a silent local notification
         showSilentLocalNotification(title: "Ping Cleared", body: "You cleared the ping to \(contact.name)", type: .pingNotification)
+
+        // Force UI update
+        objectWillChange.send()
     }
 
     /// Show a silent local notification
@@ -283,17 +377,7 @@ class UserViewModel: ObservableObject {
         }
     }
 
-    /// Update the last checked in time
-    func updateLastCheckedIn() {
-        lastCheckIn = Date()
-
-        // Save to UserDefaults
-        UserDefaults.standard.set(lastCheckIn, forKey: "lastCheckIn")
-        UserDefaults.standard.set(checkInExpiration, forKey: "checkInExpiration")
-
-        // Show a silent notification
-        NotificationManager.shared.showCheckInNotification()
-    }
+    // Note: updateLastCheckedIn has been replaced by the checkIn method
 
     /// Load persisted data from UserDefaults
     private func loadPersistedData() {
@@ -301,6 +385,26 @@ class UserViewModel: ObservableObject {
         if let lastCheckIn = UserDefaults.standard.object(forKey: "lastCheckIn") as? Date {
             self.lastCheckIn = lastCheckIn
         }
+
+        // Load check-in interval
+        if let checkInInterval = UserDefaults.standard.object(forKey: "checkInInterval") as? TimeInterval {
+            self.checkInInterval = checkInInterval
+        }
+
+        // Load notification preferences
+        if UserDefaults.standard.object(forKey: "notify30MinBefore") != nil {
+            self.notify30MinBefore = UserDefaults.standard.bool(forKey: "notify30MinBefore")
+        }
+
+        if UserDefaults.standard.object(forKey: "notify2HoursBefore") != nil {
+            self.notify2HoursBefore = UserDefaults.standard.bool(forKey: "notify2HoursBefore")
+        }
+
+        // Load send alert active state
+        sendAlertActive = UserDefaults.standard.bool(forKey: "sendAlertActive")
+
+        // Load avatar image if available
+        loadAvatarImage()
 
         // Load contact roles and ping states
         if let contactRoles = UserDefaults.standard.dictionary(forKey: "contactRoles") as? [String: [String: Bool]] {
@@ -461,7 +565,87 @@ class UserViewModel: ObservableObject {
     func triggerAlert() {
         isAlertActive = true
 
-        // Show a silent notification
-        showSilentLocalNotification(title: "Alert Sent", body: "You have sent an alert to your responders.", type: .manualAlert)
+        // Show a notification for alert activation
+        NotificationManager.shared.showAlertActivationNotification()
+    }
+
+    /// Toggle the send alert active state
+    /// - Parameter active: The new state
+    func toggleSendAlertActive(_ active: Bool) {
+        sendAlertActive = active
+
+        // Save to UserDefaults
+        UserDefaults.standard.set(sendAlertActive, forKey: "sendAlertActive")
+
+        // Show appropriate notification based on the state change
+        if active {
+            // Alert was activated
+            NotificationManager.shared.showAlertActivationNotification()
+        } else {
+            // Alert was deactivated
+            NotificationManager.shared.showAlertDeactivationNotification()
+        }
+    }
+
+    // MARK: - Avatar Methods
+
+    /// Set the user's avatar image
+    /// - Parameter image: The new avatar image
+    func setAvatarImage(_ image: UIImage) {
+        self.avatarImage = image
+        saveAvatarImage(image)
+    }
+
+    /// Delete the user's avatar image
+    func deleteAvatarImage() {
+        self.avatarImage = nil
+        removeAvatarImage()
+        // Add haptic feedback when deleting avatar
+        HapticFeedback.notificationFeedback(type: .success)
+    }
+
+    /// Save the avatar image to UserDefaults
+    /// - Parameter image: The image to save
+    private func saveAvatarImage(_ image: UIImage) {
+        if let imageData = image.jpegData(compressionQuality: 0.8) {
+            UserDefaults.standard.set(imageData, forKey: "userAvatarImage")
+        }
+    }
+
+    /// Load the avatar image from UserDefaults
+    private func loadAvatarImage() {
+        if let imageData = UserDefaults.standard.data(forKey: "userAvatarImage") {
+            self.avatarImage = UIImage(data: imageData)
+        }
+    }
+
+    /// Remove the avatar image from UserDefaults
+    private func removeAvatarImage() {
+        UserDefaults.standard.removeObject(forKey: "userAvatarImage")
+    }
+
+    /// Reset user data when signing out
+    func resetUserData() {
+        // Clear any user-specific data from UserDefaults
+        UserDefaults.standard.removeObject(forKey: "lastCheckIn")
+        UserDefaults.standard.removeObject(forKey: "checkInExpiration")
+        UserDefaults.standard.removeObject(forKey: "checkInInterval")
+        UserDefaults.standard.removeObject(forKey: "notify30MinBefore")
+        UserDefaults.standard.removeObject(forKey: "notify2HoursBefore")
+        UserDefaults.standard.removeObject(forKey: "userAvatarImage")
+        UserDefaults.standard.removeObject(forKey: "contactRoles")
+        UserDefaults.standard.removeObject(forKey: "pingStates")
+        UserDefaults.standard.removeObject(forKey: "alertStates")
+        UserDefaults.standard.removeObject(forKey: "contactDetails")
+
+        // Reset in-memory state
+        avatarImage = nil
+        isAlertActive = false
+        sendAlertActive = false
+        contacts = Contact.mockContacts() // Reset to default mock contacts
+        lastCheckIn = Date().addingTimeInterval(-5 * 60 * 60) // Reset to default
+        checkInInterval = 12 * 60 * 60 // Reset to default
+        notify30MinBefore = true // Reset to default
+        notify2HoursBefore = true // Reset to default
     }
 }

@@ -78,26 +78,36 @@
 
 # Pending Features
 
-- in the profile tab, the update avatar options should be implemented (the user should be able to take a photo to replace their avatar, choose a photo, and delete the current photo if the avatar has a photo). change the delete button text to "Delete avatar photo". the delete button should be disabled if the user does not have a photo for their avatar (the user is simply using the devault avatar view).
-- in the profile tab, we will eventually implement the change phone number feature to use our backend to change the authenticated phone number (lets mock this for the purpose of this mock project). created the necessary views and viewmodels (we should be using a view now instead of a sheet since we we will do phone number change verification)
-- the gallery carousel is covering the flashing helper text. move the text higher so its not covered and make it smaller in font and also almost completly fade out in its animation.
-- make the open photons button of the scanner a gallery icon instead and center it.
+- in the profile tab, remove the option to take a photo for the update avatar.
 - pressing the open photos galery is displacing our qrscanner sheet and makeing it impossible to close it.
-- the carousel gallery items should not have rounded cornders (check if there is some view extension or something that is still doing it). make the items have less space between them.
-- contact state changes are not persisting as they should when the user changes the role or send a new ping (or does anyhing from the contact details sheet)
-    - update the ping button to say pined and have a lighter blue background when the contact is curretly pinged.
-- the respodners and dependents views are not updating when changes are made in the contact details sheet and the sheet is dismissed
-- responders that sent you pings should not have the contact ping button set to pinged since they are the ones that pinged you (this button is only for pinging dependents)
-- similar to how the contact details sheet shows that a dependent sent out an alert, there should also be a similar component of the sheet in the same place and style that shows when they are not responsive (description text and time ago). both should be able to appear at the same time if they have to.
+- responders that sent you pings should not have the contact ping button set to pinged since they are the ones that pinged you (this button is only for pinging dependents). we should have two different types of pings for data (incoming from responders and outgoing to dependents)
 - qrscanner x button does not work
-- the pinged state of the contact details sheet ping button, has an issue with its blue background, it has a system gray background behind it. the blue background is not applying to the entire button as it should. use the "bell.and.waves.left.and.right.fill" when in this state
-- remove the top app bar icons from the checkin view. lets rework the view. give me some variations. it only has three functions: shows the current time remaining, has the check-in button, has the manual alert button. app a button in the top app bar that lets me switch between the variations. we will eventually only pick one and delete the rest so keep that in mind.
+- the send verification code button should be disabled until the phone number entered is in a valid format. this also goes for the verification code (its a 6 digit code. we should display it in this format when entered: XXX-XXX)
+- remove the opage background from the x button in the qrscanner and from the fadding text above the photos carousel. make the open gallery button below the carousel be in pill form with its current backround. add a little more padding at the botom so the button is not so close to the edge. 
+- instead of the alert dialog box that shows. we should be taking the user to the add contact sheet so they can add the contact if they wish to.
+- the responders tab icon still shows a badge after i cleared all the pings from the responders view. either the badge is not updating or there is some state issue there (the ping icons are cleared successfully in the responders view). could this be the same contacts state issue that we have with the contacts details sheet?
+- sign out button in the profile tab should sign out the user and navigate back to the sign in view.
+- sending a ping to dependents contact that is not responsive does not update the state. there is a systemic issue here with the state changes of a contact. find out what it is and fix it.
+- we should be able to stack badges in the dependents view avatar (alert at the top, not responsive next, and ping last). make sure this follows good ui principles for stacked badges on avatars
+- for check in view variations, do not show seconds (only days, hours, minutes). remove the minimal view. in the vertical view, move the alert button directly below the counter (do the same in the circular view). move the check in button to the bottom of the view for both. generate two move variations that we will review
+- some tab views seem to have some padding at the bottom of the views. find it and remove it
+- add a confirmation alert for role toggle in contact details sheet
+
+
+- remove the alert and warning badges from the dependents view cards, use icons with a system background circle instead (placed to the right end of the card). it should be the same size as the avatar
+- the check-in interval display values are inconsistent, fix it (sometimes it shows days for when we have hours selected)
+- add a description to the contact details sheet sent out an alert component. check the not responsive info component for reference
+
+
+- update the shared qr code to look like our implementation in our production app with the formatting we added to the image. use the production app for reference only @iOSApplication
+
 
 ## final touches to mvp:
 - Fix and clean up our notification manager. local notifications are not showing. for instance, show a local notification that after showing does not get stored in the notification center of the phone (its meant to act like an app toast)
     - show a local notification when the user toggles a contact’s role
     - show a local notification when a user sends a ping (instead of the alert box that we currently have)
     - show a local notification for when the user checks in.
+    - show a local notification for successfully changing the phone number
 - migrate over the manual alert button from the production application
 - update our dependents list sorter
 - add haptic feedback to all interactions

@@ -3,15 +3,15 @@ import SwiftUI
 /// A SwiftUI view for sharing QR codes
 struct QRCodeShareSheetView: View {
     // MARK: - Properties
-    
+
     /// The view model for the QR code share sheet
     @ObservedObject var viewModel: QRCodeShareSheetViewModel
-    
+
     /// The callback for when the sheet is dismissed
     var onDismiss: () -> Void
-    
+
     // MARK: - Initialization
-    
+
     /// Initialize with a QR code ID, name, and dismiss callback
     /// - Parameters:
     ///   - qrCodeId: The QR code ID
@@ -28,7 +28,7 @@ struct QRCodeShareSheetView: View {
         )
         self.onDismiss = onDismiss
     }
-    
+
     /// Initialize with a view model and dismiss callback
     /// - Parameters:
     ///   - viewModel: The view model
@@ -40,25 +40,32 @@ struct QRCodeShareSheetView: View {
         self.viewModel = viewModel
         self.onDismiss = onDismiss
     }
-    
+
     // MARK: - Body
-    
+
     var body: some View {
         VStack(spacing: 20) {
             Text("Share QR Code")
                 .font(.title)
                 .padding(.top)
-            
+
             Text("Share this QR code with others to add \(viewModel.name) as a contact")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
-            
+
+            // Force the QR code to generate on first appearance
             QRCodeView(viewModel: viewModel.qrCodeViewModel)
                 .padding()
                 .frame(width: 250, height: 250)
-            
+                .onAppear {
+                    // Force regenerate QR code image immediately
+                    DispatchQueue.main.async {
+                        viewModel.qrCodeViewModel.generateQRCodeImage()
+                    }
+                }
+
             Button(action: {
                 viewModel.setShowingShareSheet(true)
             }) {
@@ -71,7 +78,7 @@ struct QRCodeShareSheetView: View {
                     .cornerRadius(10)
             }
             .padding(.horizontal)
-            
+
             Button(action: {
                 onDismiss()
             }) {

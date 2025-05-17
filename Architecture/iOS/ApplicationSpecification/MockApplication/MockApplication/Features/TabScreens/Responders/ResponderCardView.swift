@@ -2,6 +2,7 @@ import SwiftUI
 import Foundation
 import UIKit
 
+
 struct ResponderCardView: View {
     let contact: Contact
     let refreshID: UUID // Used to force refresh when ping state changes
@@ -61,7 +62,7 @@ struct ResponderCardView: View {
             if contact.hasIncomingPing {
                 // Display ping icon without button functionality
                 Circle()
-                    .fill(Color(UIColor.systemBackground))
+                    .fill(Color(UIColor.tertiarySystemGroupedBackground))
                     .frame(width: 40, height: 40)
                     .overlay(
                         Image(systemName: "bell.badge.fill")
@@ -73,12 +74,11 @@ struct ResponderCardView: View {
         }
         .padding()
         .background(
-            contact.hasIncomingPing ? Color.blue.opacity(0.1) : Color(UIColor.systemGray6)
+            contact.hasIncomingPing ? Color.blue.opacity(0.1) : Color(UIColor.secondarySystemGroupedBackground)
         )
         .cornerRadius(12)
-        .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
         .onTapGesture {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            HapticFeedback.triggerHaptic()
             selectedContactID = ContactID(id: contact.id)
         }
         .sheet(item: $selectedContactID) { id in

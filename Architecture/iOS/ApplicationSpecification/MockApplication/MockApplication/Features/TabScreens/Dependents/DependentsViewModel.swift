@@ -53,8 +53,8 @@ class DependentsViewModel: ObservableObject {
     enum SortMode: String, CaseIterable, Identifiable {
         // Order matters for UI presentation
         case countdown = "Time Left"
-        case recentlyAdded = "Recently Added"
-        case alphabetical = "Alphabetical"
+        case alphabetical = "Name"
+        case recentlyAdded = "Date Added"
         var id: String { self.rawValue }
     }
 
@@ -65,20 +65,75 @@ class DependentsViewModel: ObservableObject {
 
         let dependents = userViewModel.dependents
 
+        // First, check for Sam Parker and update isNonResponsive if needed
+        for (index, dependent) in dependents.enumerated() where dependent.name == "Sam Parker" {
+            // Check if Sam Parker's check-in has expired
+            if let lastCheckIn = dependent.lastCheckIn, let interval = dependent.checkInInterval {
+                let isExpired = lastCheckIn.addingTimeInterval(interval) < Date()
+                if isExpired && !dependent.isNonResponsive {
+                    // Update Sam Parker to be non-responsive
+                    userViewModel.updateContact(id: dependent.id) { contact in
+                        contact.isNonResponsive = true
+                    }
+                }
+            }
+        }
+
+        // Get updated dependents after potential changes
+        let updatedDependents = userViewModel.dependents
+
         // First, separate dependents into categories
-        let manualAlertDependents = dependents.filter { $0.manualAlertActive }
-        let nonResponsiveDependents = dependents.filter { !$0.manualAlertActive && $0.isNonResponsive }
-        let pingedDependents = dependents.filter { !$0.manualAlertActive && !$0.isNonResponsive && $0.hasOutgoingPing }
-        let responsiveDependents = dependents.filter { !$0.manualAlertActive && !$0.isNonResponsive && !$0.hasOutgoingPing }
+        let manualAlertDependents = updatedDependents.filter { $0.manualAlertActive }
 
-        // Sort each category based on the selected sort mode
-        let sortedManualAlert = sortDependents(manualAlertDependents)
-        let sortedNonResponsive = sortDependents(nonResponsiveDependents)
-        let sortedPinged = sortDependents(pingedDependents)
-        let sortedResponsive = sortDependents(responsiveDependents)
+        // Split manual alert dependents into pinged and non-pinged
+        let manualAlertPinged = manualAlertDependents.filter { $0.hasOutgoingPing }
+        let manualAlertNonPinged = manualAlertDependents.filter { !$0.hasOutgoingPing }
 
-        // Combine all sorted groups with priority: manual alert > non-responsive > pinged > responsive
-        return sortedManualAlert + sortedNonResponsive + sortedPinged + sortedResponsive
+        let nonResponsiveDependents = updatedDependents.filter { !$0.manualAlertActive && $0.isNonResponsive }
+
+        // Split non-responsive dependents into pinged and non-pinged
+        let nonResponsivePinged = nonResponsiveDependents.filter { $0.hasOutgoingPing }
+        let nonResponsiveNonPinged = nonResponsiveDependents.filter { !$0.hasOutgoingPing }
+
+        // Regular dependents (not in alert or non-responsive)
+        let regularDependents = updatedDependents.filter { !$0.manualAlertActive && !$0.isNonResponsive }
+
+        // Split regular dependents into pinged and non-pinged
+        let regularPinged = regularDependents.filter { $0.hasOutgoingPing }
+        let regularNonPinged = regularDependents.filter { !$0.hasOutgoingPing }
+
+        // For manual alert category, combine pinged and non-pinged, then sort
+        let manualAlertCombined = manualAlertPinged + manualAlertNonPinged
+        let sortedManualAlert = sortDependentsWithPingedFirst(manualAlertCombined)
+
+        // For non-responsive category, combine pinged and non-pinged, then sort
+        let nonResponsiveCombined = nonResponsivePinged + nonResponsiveNonPinged
+        let sortedNonResponsive = sortDependentsWithPingedFirst(nonResponsiveCombined)
+
+        // For regular category, combine pinged and non-pinged, then sort
+        let regularCombined = regularPinged + regularNonPinged
+        let sortedRegular = sortDependentsWithPingedFirst(regularCombined)
+
+        // Combine all sorted groups with priority:
+        // 1. manual alert (with pinged at top)
+        // 2. non-responsive (with pinged at top)
+        // 3. regular (with pinged at top)
+        return sortedManualAlert + sortedNonResponsive + sortedRegular
+    }
+
+    /// Sort dependents with pinged contacts at the top, then by the selected sort mode
+    /// - Parameter dependents: The dependents to sort
+    /// - Returns: An array of sorted dependents with pinged contacts at the top
+    private func sortDependentsWithPingedFirst(_ dependents: [Contact]) -> [Contact] {
+        // First separate pinged and non-pinged
+        let (pinged, nonPinged) = dependents.partitioned { $0.hasOutgoingPing }
+
+        // Sort each group by the selected sort mode
+        let sortedPinged = sortDependents(pinged)
+        let sortedNonPinged = sortDependents(nonPinged)
+
+        // Return pinged first, then non-pinged
+        return sortedPinged + sortedNonPinged
     }
 
     /// Sort dependents based on the selected sort mode

@@ -20,6 +20,12 @@ class QRScannerViewModel: ObservableObject {
     /// Whether the user's QR code is showing
     @Published var isShowingMyCode: Bool = false
 
+    /// Whether to show the manual QR code entry sheet
+    @Published var isShowingManualEntry: Bool = false
+
+    /// The manually entered QR code
+    @Published var manualQRCode: String = ""
+
     /// Whether the camera is ready
     @Published var isCameraReady: Bool = false
 
@@ -31,6 +37,9 @@ class QRScannerViewModel: ObservableObject {
 
     /// Whether to show the no QR code alert
     @Published var showNoQRCodeAlert: Bool = false
+
+    /// Whether to show the invalid UUID alert
+    @Published var showInvalidUUIDAlert: Bool = false
 
     /// Gallery assets for the carousel
     @Published var galleryAssets: [UIImage] = []
@@ -117,16 +126,32 @@ class QRScannerViewModel: ObservableObject {
     /// Start scanning for QR codes
     func startScanning() {
         // In a real app, this would start the QR code scanner
+        // For the mock app, we'll simulate finding a QR code after a random delay
+        simulateQRCodeScanning()
     }
 
     /// Stop scanning for QR codes
     func stopScanning() {
         // In a real app, this would stop the QR code scanner
+        // For the mock app, we don't need to do anything
     }
 
     /// Set up the QR code handler
     func setupQRCodeHandler() {
         // In a real app, this would set up the QR code handler
+        // For the mock app, we don't need to do anything
+    }
+
+    /// Simulate QR code scanning
+    private func simulateQRCodeScanning() {
+        // Simulate finding a QR code after a random delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 3...8)) { [weak self] in
+            guard let self = self, self.showScanner else { return }
+
+            // Generate a mock QR code
+            let mockQRCode = "mock-qr-code-\(Int.random(in: 1000...9999))"
+            self.handleScannedQRCode(mockQRCode)
+        }
     }
 
     /// Handle a scanned QR code
@@ -243,21 +268,33 @@ class QRScannerViewModel: ObservableObject {
     /// Load and process a full image
     /// - Parameter asset: The asset to load
     func loadAndProcessFullImage(_ asset: UIImage) {
-        isProcessingQRCode = true
-
-        // Simulate a delay for processing
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self = self else { return }
-
-            // 50% chance of finding a QR code for demo purposes
-            if Double.random(in: 0...1) < 0.5 {
-                let mockQRCode = "mock-qr-code-\(Int.random(in: 1000...9999))"
-                self.handleScannedQRCode(mockQRCode)
-            } else {
-                self.showNoQRCodeAlert = true
+        // Process the image to find a QR code without showing loading state
+        if let qrCode = scanQRCode(from: asset) {
+            // QR code found
+            self.handleScannedQRCode(qrCode)
+        } else {
+            // No QR code found
+            DispatchQueue.main.async { [weak self] in
+                self?.showNoQRCodeAlert = true
             }
+        }
+    }
 
-            self.isProcessingQRCode = false
+    /// Scan a QR code from an image
+    /// - Parameter image: The image to scan
+    /// - Returns: The QR code string if found, nil otherwise
+    func scanQRCode(from image: UIImage) -> String? {
+        // For the mock app, we'll simulate finding a QR code
+        // In a real app, we would use CIDetector or Vision framework
+
+        // Simulate a 90% chance of finding a QR code
+        let randomChance = Double.random(in: 0...1)
+        if randomChance < 0.9 {
+            // QR code found - generate a UUID
+            return UUID().uuidString
+        } else {
+            // No QR code found
+            return nil
         }
     }
 
@@ -271,8 +308,16 @@ class QRScannerViewModel: ObservableObject {
     }
 
     /// Generate a mock QR code for testing
-    /// - Returns: A random mock QR code string
+    /// - Returns: A random mock QR code string in UUID format
     static func mockScanQRCode() -> String {
-        return "mock-qr-code-\(Int.random(in: 1000...9999))"
+        return UUID().uuidString
+    }
+
+    /// Validate if the QR code format is valid
+    /// - Parameter qrCode: The QR code to validate
+    /// - Returns: Whether the QR code format is valid
+    func isValidQRCodeFormat(_ qrCode: String) -> Bool {
+        // Validate that the QR code is a valid UUID
+        return UUID(uuidString: qrCode) != nil
     }
 }

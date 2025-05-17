@@ -1,12 +1,185 @@
 import SwiftUI
 import Foundation
+import PhotosUI
 
+// MARK: - Emergency Note Sheet View
+struct EmergencyNoteSheetView: View {
+    @Binding var isPresented: Bool
+    @Binding var description: String
+    let originalDescription: String
+    @FocusState private var textEditorFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextEditor(text: $description)
+                        .font(.body)
+                        .foregroundColor(.primary)
+                        .frame(minHeight: 240) // Doubled the height
+                        .padding(.vertical, 4)
+                        .padding(.horizontal)
+                        .scrollContentBackground(.hidden)
+                        .background(Color(UIColor.secondarySystemGroupedBackground))
+                        .cornerRadius(12)
+                        .focused($textEditorFocused)
+                    Text("This note is visible to your contacts when they view your profile.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 4)
+                }
+                .padding(.horizontal)
+                Spacer(minLength: 0)
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Emergency Note")
+            .navigationBarItems(
+                leading: Button("Cancel") {
+                    HapticFeedback.triggerHaptic()
+                    isPresented = false
+                },
+                trailing: Button("Save") {
+                    HapticFeedback.notificationFeedback(type: .success)
+                    isPresented = false
+                }
+                .disabled(description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || description == originalDescription)
+            )
+            .background(Color(UIColor.systemGroupedBackground))
+            .onAppear {
+                // Focus the text editor when the view appears
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    textEditorFocused = true
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+}
+
+// MARK: - Name Edit Sheet View
+struct NameEditSheetView: View {
+    @Binding var isPresented: Bool
+    @Binding var name: String
+    let originalName: String
+    @FocusState private var nameFieldFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("Name", text: $name)
+                        .font(.body)
+                        .padding(.vertical, 12)
+                        .padding(.horizontal)
+                        .background(Color(UIColor.secondarySystemGroupedBackground))
+                        .cornerRadius(12)
+                        .foregroundColor(.primary)
+                        .focused($nameFieldFocused)
+                    Text("People will see this name if you interact with them and they don't have you saved as a contact.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 4)
+                }
+                .padding(.horizontal)
+                .padding(.top, 24)
+                Spacer(minLength: 0)
+            }
+            .background(Color(UIColor.systemGroupedBackground))
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Name")
+            .navigationBarItems(
+                leading: Button("Cancel") {
+                    HapticFeedback.triggerHaptic()
+                    isPresented = false
+                },
+                trailing: Button("Save") {
+                    HapticFeedback.notificationFeedback(type: .success)
+                    isPresented = false
+                }
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name == originalName)
+            )
+            .onAppear {
+                // Focus the text field when the view appears
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    nameFieldFocused = true
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Avatar Edit Sheet View
+struct AvatarEditSheetView: View {
+    @Binding var isPresented: Bool
+    @Binding var showImagePicker: Bool
+    @Binding var showDeleteConfirmation: Bool
+    @Binding var imagePickerSourceType: UIImagePickerController.SourceType
+    let isUsingDefaultAvatar: Bool
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Avatar")
+                .font(.headline.bold())
+                .foregroundColor(.primary)
+            VStack(spacing: 0) {
+                Button(action: {
+                    HapticFeedback.triggerHaptic()
+                    isPresented = false
+                    imagePickerSourceType = .photoLibrary
+                    showImagePicker = true
+                }) {
+                    HStack {
+                        Text("Choose photo")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Image(systemName: "photo")
+                            .foregroundColor(.primary)
+                    }
+                    .padding()
+                }
+            }
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .cornerRadius(12)
+            .padding(.horizontal)
+            Button(action: {
+                HapticFeedback.triggerHaptic()
+                print("Delete avatar button tapped, setting showDeleteAvatarConfirmation to true")
+                // First dismiss the sheet, then show the alert
+                isPresented = false
+                // Use a slight delay to ensure the sheet is dismissed before showing the alert
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    showDeleteConfirmation = true
+                    print("showDeleteAvatarConfirmation is now: \(showDeleteConfirmation)")
+                }
+            }) {
+                HStack {
+                    Text("Delete avatar photo")
+                        .foregroundColor(.red)
+                    Spacer()
+                    Image(systemName: "trash")
+                        .foregroundColor(.red)
+                }
+                .padding()
+                .background(Color(UIColor.secondarySystemGroupedBackground))
+                .cornerRadius(12)
+            }
+            .padding(.horizontal)
+            .disabled(isUsingDefaultAvatar)
+            .opacity(isUsingDefaultAvatar ? 0.5 : 1.0)
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 24)
+        .background(Color(UIColor.systemGroupedBackground))
+        .presentationDetents([.medium])
+    }
+}
+
+// MARK: - Main Profile View
 struct ProfileView: View {
     @EnvironmentObject private var userViewModel: UserViewModel
     @Environment(\.presentationMode) private var presentationMode
     @EnvironmentObject private var appState: AppState
-    @State private var showEditPhoneSheet = false
-    @State private var newPhone = ""
+    @State private var showPhoneNumberChangeView = false
     @State private var showSignOutConfirmation = false
     @State private var showCheckInConfirmation = false
     @State private var showEditDescriptionSheet = false
@@ -14,24 +187,26 @@ struct ProfileView: View {
     @State private var showEditNameSheet = false
     @State private var newName = ""
     @State private var showEditAvatarSheet = false
+    @State private var showImagePicker = false
+    @State private var showCamera = false
+    @State private var showDeleteAvatarConfirmation = false
+    @State private var imagePickerSourceType: UIImagePickerController.SourceType = .photoLibrary
+    @FocusState private var nameFieldFocused: Bool
 
     var body: some View {
         ScrollView {
             VStack {
                 // Profile Header
                 VStack(spacing: 16) {
-                    Circle()
-                        .fill(Color(UIColor.systemBackground))
-                        .frame(width: 80, height: 80)
-                        .overlay(
-                            Text(String(userViewModel.name.prefix(1)))
-                                .foregroundColor(.blue)
-                                .font(.title)
-                        )
-                        .overlay(
-                            Circle()
-                                .stroke(Color.blue, lineWidth: 2)
-                        )
+                    CommonAvatarView(
+                        name: userViewModel.name,
+                        image: userViewModel.avatarImage,
+                        size: 80,
+                        backgroundColor: Color.blue.opacity(0.1),
+                        textColor: .blue,
+                        strokeWidth: 2,
+                        strokeColor: .blue
+                    )
                     Text(userViewModel.name)
                         .font(.headline)
                     Text(userViewModel.phone.isEmpty ? "(954) 234-5678" : userViewModel.phone)
@@ -42,6 +217,7 @@ struct ProfileView: View {
 
                 // Description Setting Card
                 Button(action: {
+                    HapticFeedback.triggerHaptic()
                     newDescription = userViewModel.profileDescription
                     showEditDescriptionSheet = true
                 }) {
@@ -54,7 +230,7 @@ struct ProfileView: View {
                     }
                     .padding(.vertical, 12)
                     .padding(.horizontal)
-                    .background(Color(UIColor.systemGray5))
+                    .background(Color(UIColor.secondarySystemGroupedBackground))
                     .cornerRadius(12)
                 }
                 .padding(.horizontal)
@@ -64,6 +240,7 @@ struct ProfileView: View {
                 // Grouped Update Cards
                 VStack(spacing: 0) {
                     Button(action: {
+                        HapticFeedback.triggerHaptic()
                         showEditAvatarSheet = true
                     }) {
                         HStack {
@@ -79,6 +256,7 @@ struct ProfileView: View {
                     }
                     Divider().padding(.leading)
                     Button(action: {
+                        HapticFeedback.triggerHaptic()
                         newName = userViewModel.name
                         showEditNameSheet = true
                     }) {
@@ -94,14 +272,15 @@ struct ProfileView: View {
                         .padding(.horizontal)
                     }
                 }
-                .background(Color(UIColor.systemGray5))
+                .background(Color(UIColor.secondarySystemGroupedBackground))
                 .cornerRadius(12)
                 .padding(.horizontal)
                 .padding(.bottom, 8)
 
                 // Phone Number Card
                 Button(action: {
-                    showEditPhoneSheet = true
+                    HapticFeedback.triggerHaptic()
+                    showPhoneNumberChangeView = true
                 }) {
                     HStack {
                         Text("Change Phone Number")
@@ -113,7 +292,7 @@ struct ProfileView: View {
                     }
                     .padding(.vertical, 12)
                     .padding(.horizontal)
-                    .background(Color(UIColor.systemGray5))
+                    .background(Color(UIColor.secondarySystemGroupedBackground))
                     .cornerRadius(12)
                 }
                 .padding(.horizontal)
@@ -123,7 +302,10 @@ struct ProfileView: View {
 
                 // Sign Out Setting Card
                 Button(action: {
+                    HapticFeedback.triggerHaptic()
+                    print("Sign out button tapped, setting showSignOutConfirmation to true")
                     showSignOutConfirmation = true
+                    print("showSignOutConfirmation is now: \(showSignOutConfirmation)")
                 }) {
                     Text("Sign Out")
                         .font(.body)
@@ -131,192 +313,107 @@ struct ProfileView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .padding(.horizontal)
-                        .background(Color(UIColor.systemGray5))
+                        .background(Color(UIColor.secondarySystemGroupedBackground))
                         .cornerRadius(12)
                 }
                 .padding(.horizontal)
 
                 Spacer()
             }
-            .padding(.bottom, 5)
         }
-        .background(Color(.systemBackground))
-        .sheet(isPresented: $showEditPhoneSheet) {
-            NavigationStack {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("Phone Number", text: $newPhone)
-                            .keyboardType(.phonePad)
-                            .font(.body)
-                            .padding(.vertical, 12)
-                            .padding(.horizontal)
-                            .background(Color(UIColor.systemGray5))
-                            .cornerRadius(12)
-                            .foregroundColor(.primary)
-                        Text("This is your phone number for account recovery and contact purposes.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 4)
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 24)
-                    Spacer(minLength: 0)
-                }
-                .navigationBarTitleDisplayMode(.inline)
-                .navigationTitle("Phone Number")
-                .navigationBarItems(
-                    leading: Button("Cancel") {
-                        showEditPhoneSheet = false
-                    },
-                    trailing: Button("Save") {
-                        userViewModel.phone = newPhone
-                        showEditPhoneSheet = false
-                    }
-                    .disabled(newPhone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || newPhone == userViewModel.phone)
-                )
-            }
-            .presentationDetents([.medium])
+        .background(Color(UIColor.systemGroupedBackground))
+        .fullScreenCover(isPresented: $showPhoneNumberChangeView) {
+            PhoneNumberChangeView()
+                .environmentObject(userViewModel)
         }
         .alert(isPresented: $showCheckInConfirmation) {
             Alert(
                 title: Text("Confirm Check-in"),
                 message: Text("Are you sure you want to check in now? This will reset your timer."),
                 primaryButton: .default(Text("Check In")) {
-                    userViewModel.updateLastCheckedIn()
+                    userViewModel.checkIn()
                 },
                 secondaryButton: .cancel()
             )
         }
-        .alert(isPresented: $showSignOutConfirmation) {
-            Alert(
-                title: Text("Sign Out"),
-                message: Text("Are you sure you want to sign out?"),
-                primaryButton: .destructive(Text("Sign Out")) {
+        .alert("Sign Out", isPresented: $showSignOutConfirmation) {
+            Button("Cancel", role: .cancel) {
+                print("Sign out cancelled")
+            }
+            Button("Sign Out", role: .destructive) {
+                print("Sign out confirmed")
+                // Reset user data first
+                userViewModel.resetUserData()
+
+                // Print debug information
+                print("Before sign out: isAuthenticated = \(appState.isAuthenticated)")
+
+                // Then sign out the user and navigate back to the sign-in view
+                DispatchQueue.main.async {
                     appState.signOut()
-                },
-                secondaryButton: .cancel()
-            )
+                    print("After sign out: isAuthenticated = \(appState.isAuthenticated)")
+                }
+            }
+        } message: {
+            Text("Are you sure you want to sign out?")
         }
         .sheet(isPresented: $showEditDescriptionSheet) {
-            NavigationStack {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextEditor(text: $newDescription)
-                            .font(.body)
-                            .foregroundColor(.primary)
-                            .frame(minHeight: 120)
-                            .padding(.vertical, 12)
-                            .padding(.horizontal)
-                            .scrollContentBackground(.hidden)
-                            .background(Color(UIColor.systemGray5))
-                            .cornerRadius(12)
-                        Text("This note is visible to your contacts when they view your profile.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 4)
-                    }
-                    .padding(.horizontal)
-                    Spacer(minLength: 0)
+            EmergencyNoteSheetView(
+                isPresented: $showEditDescriptionSheet,
+                description: $newDescription,
+                originalDescription: userViewModel.profileDescription
+            )
+            .onDisappear {
+                if newDescription != userViewModel.profileDescription &&
+                   !newDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    userViewModel.profileDescription = newDescription
                 }
-                .navigationBarTitleDisplayMode(.inline)
-                .navigationTitle("Emergency Note")
-                .navigationBarItems(
-                    leading: Button("Cancel") {
-                        showEditDescriptionSheet = false
-                    },
-                    trailing: Button("Save") {
-                        userViewModel.profileDescription = newDescription
-                        showEditDescriptionSheet = false
-                    }
-                    .disabled(newDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || newDescription == userViewModel.profileDescription)
-                )
             }
-            .presentationDetents([.medium])
         }
         .sheet(isPresented: $showEditNameSheet) {
-            NavigationStack {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("Name", text: $newName)
-                            .font(.body)
-                            .padding(.vertical, 12)
-                            .padding(.horizontal)
-                            .background(Color(UIColor.systemGray5))
-                            .cornerRadius(12)
-                            .foregroundColor(.primary)
-                        Text("People will see this name if you interact with them and they don't have you saved as a contact.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 4)
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 24)
-                    Spacer(minLength: 0)
+            NameEditSheetView(
+                isPresented: $showEditNameSheet,
+                name: $newName,
+                originalName: userViewModel.name
+            )
+            .onDisappear {
+                if newName != userViewModel.name &&
+                   !newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    userViewModel.name = newName
                 }
-                .navigationBarTitleDisplayMode(.inline)
-                .navigationTitle("Name")
-                .navigationBarItems(
-                    leading: Button("Cancel") {
-                        showEditNameSheet = false
-                    },
-                    trailing: Button("Save") {
-                        userViewModel.name = newName
-                        showEditNameSheet = false
-                    }
-                    .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || newName == userViewModel.name)
-                )
             }
-            .presentationDetents([.medium])
         }
         .sheet(isPresented: $showEditAvatarSheet) {
-            VStack(spacing: 20) {
-                Text("Avatar")
-                    .font(.headline.bold())
-                    .foregroundColor(.primary)
-                VStack(spacing: 0) {
-                    Button(action: { /* TODO: Take photo */ }) {
-                        HStack {
-                            Text("Take photo")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Image(systemName: "camera")
-                                .foregroundColor(.primary)
-                        }
-                        .padding()
-                    }
-                    Divider().padding(.leading)
-                    Button(action: { /* TODO: Upload photo */ }) {
-                        HStack {
-                            Text("Choose photo")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Image(systemName: "photo")
-                                .foregroundColor(.primary)
-                        }
-                        .padding()
-                    }
+            AvatarEditSheetView(
+                isPresented: $showEditAvatarSheet,
+                showImagePicker: $showImagePicker,
+                showDeleteConfirmation: $showDeleteAvatarConfirmation,
+                imagePickerSourceType: $imagePickerSourceType,
+                isUsingDefaultAvatar: userViewModel.isUsingDefaultAvatar
+            )
+        }
+        .sheet(isPresented: $showImagePicker) {
+            ImagePicker(sourceType: imagePickerSourceType, selectedImage: { image in
+                if let image = image {
+                    userViewModel.setAvatarImage(image)
                 }
-                .background(Color(UIColor.systemGray5))
-                .cornerRadius(18)
-                .padding(.horizontal)
-                Button(action: { /* TODO: Delete photo */ }) {
-                    HStack {
-                        Text("Delete photo")
-                            .foregroundColor(.red)
-                        Spacer()
-                        Image(systemName: "trash")
-                            .foregroundColor(.red)
-                    }
-                    .padding()
-                    .background(Color(UIColor.systemGray5))
-                    .cornerRadius(18)
+            })
+        }
+        .alert(isPresented: $showDeleteAvatarConfirmation) {
+            print("Delete avatar confirmation alert is being presented")
+            return Alert(
+                title: Text("Delete Avatar Photo"),
+                message: Text("Are you sure you want to delete your avatar photo? This action cannot be undone."),
+                primaryButton: .destructive(Text("Delete")) {
+                    print("Delete avatar confirmed")
+                    HapticFeedback.triggerHaptic()
+                    userViewModel.deleteAvatarImage()
+                    // Sheet is already dismissed, no need to dismiss it again
+                },
+                secondaryButton: .cancel() {
+                    print("Delete avatar cancelled")
                 }
-                .padding(.horizontal)
-                Spacer(minLength: 0)
-            }
-            .padding(.top, 24)
-            .background(Color(.systemBackground))
-            .presentationDetents([.medium])
+            )
         }
     }
 }

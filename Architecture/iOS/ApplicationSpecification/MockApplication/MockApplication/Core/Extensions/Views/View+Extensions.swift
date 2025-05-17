@@ -14,7 +14,7 @@ extension View {
             self
         }
     }
-    
+
     /// Apply a transformation only if a value is not nil
     /// - Parameters:
     ///   - value: The optional value to check
@@ -26,6 +26,37 @@ extension View {
         } else {
             self
         }
+    }
+
+    /// Add haptic feedback to a button or other interactive element
+    /// - Parameters:
+    ///   - style: The haptic feedback style to use (default: .medium)
+    /// - Returns: A view with haptic feedback added
+    func hapticFeedback(style: UIImpactFeedbackGenerator.FeedbackStyle = .medium) -> some View {
+        self.simultaneousGesture(TapGesture().onEnded { _ in
+            let generator = UIImpactFeedbackGenerator(style: style)
+            generator.impactOccurred()
+        })
+    }
+
+    /// Add selection haptic feedback to a button or other interactive element
+    /// - Returns: A view with selection haptic feedback added
+    func selectionHapticFeedback() -> some View {
+        self.simultaneousGesture(TapGesture().onEnded { _ in
+            let generator = UISelectionFeedbackGenerator()
+            generator.selectionChanged()
+        })
+    }
+
+    /// Add notification haptic feedback to a button or other interactive element
+    /// - Parameters:
+    ///   - type: The notification feedback type to use (default: .success)
+    /// - Returns: A view with notification haptic feedback added
+    func notificationHapticFeedback(type: UINotificationFeedbackGenerator.FeedbackType = .success) -> some View {
+        self.simultaneousGesture(TapGesture().onEnded { _ in
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(type)
+        })
     }
 }
 

@@ -102,7 +102,7 @@ struct Contact: Identifiable, Equatable, Sendable {
     /// Generate mock contacts
     static func mockContacts() -> [Contact] {
         [
-            // Regular responder with recent check-in
+            // Regular responder with recent check-in and incoming ping
             Contact(
                 id: "1",
                 name: "John Doe",
@@ -112,8 +112,8 @@ struct Contact: Identifiable, Equatable, Sendable {
                 note: "Lives alone, has a cat named Whiskers. Emergency contact: Sister Mary (555-888-9999). Allergic to penicillin.",
                 manualAlertActive: false,
                 isNonResponsive: false,
-                hasIncomingPing: false,
-                incomingPingTimestamp: nil,
+                hasIncomingPing: true,
+                incomingPingTimestamp: Date().addingTimeInterval(-15 * 60), // 15 minutes ago
                 isResponder: true,
                 isDependent: false,
                 hasOutgoingPing: false,
@@ -122,7 +122,7 @@ struct Contact: Identifiable, Equatable, Sendable {
                 manualAlertTimestamp: nil
             ),
 
-            // Dependent with manual alert active
+            // Dependent with manual alert active and incoming ping
             Contact(
                 id: "2",
                 name: "Jane Smith",
@@ -132,8 +132,8 @@ struct Contact: Identifiable, Equatable, Sendable {
                 note: "Has diabetes, check medicine cabinet if unresponsive. Emergency contacts: Husband Tom (555-222-3333), Dr. Wilson (555-444-5555).",
                 manualAlertActive: true,
                 isNonResponsive: false,
-                hasIncomingPing: false,
-                incomingPingTimestamp: nil,
+                hasIncomingPing: true,
+                incomingPingTimestamp: Date().addingTimeInterval(-25 * 60), // 25 minutes ago
                 isResponder: false,
                 isDependent: true,
                 hasOutgoingPing: false,
@@ -142,7 +142,7 @@ struct Contact: Identifiable, Equatable, Sendable {
                 manualAlertTimestamp: Date().addingTimeInterval(-1800) // 30 minutes ago
             ),
 
-            // Both responder and dependent, non-responsive
+            // Both responder and dependent, not non-responsive (special case)
             Contact(
                 id: "3",
                 name: "Bob Johnson",
@@ -151,7 +151,7 @@ struct Contact: Identifiable, Equatable, Sendable {
                 lastCheckIn: Date().addingTimeInterval(-10800), // 3 hours ago
                 note: "Lives with roommate, check with them first. Has heart condition, medication in bathroom cabinet.",
                 manualAlertActive: false,
-                isNonResponsive: true,
+                isNonResponsive: false, // Correctly not non-responsive since 3 hours < 8 hour interval
                 hasIncomingPing: false,
                 incomingPingTimestamp: nil,
                 isResponder: true,
@@ -182,16 +182,16 @@ struct Contact: Identifiable, Equatable, Sendable {
                 manualAlertTimestamp: nil
             ),
 
-            // Dependent with outgoing ping
+            // Dependent with outgoing ping and non-responsive status
             Contact(
                 id: "5",
                 name: "Michael Rodriguez",
                 phone: "555-333-2222",
                 qrCodeId: "qr24680",
-                lastCheckIn: Date().addingTimeInterval(-23 * 60 * 60), // 23 hours ago (almost expired)
+                lastCheckIn: Date().addingTimeInterval(-25 * 60 * 60), // 25 hours ago (expired)
                 note: "Lives in apartment 4B. Building manager: Sarah (555-111-0000). Has service dog named Rex.",
                 manualAlertActive: false,
-                isNonResponsive: false,
+                isNonResponsive: true, // Correctly non-responsive since 25 hours > 24 hour interval
                 hasIncomingPing: false,
                 incomingPingTimestamp: nil,
                 isResponder: false,
@@ -284,25 +284,7 @@ struct Contact: Identifiable, Equatable, Sendable {
 
             // NEW DEPENDENTS WITH DIVERSE SCENARIOS
 
-            // Dependent with very short check-in interval (3 hours)
-            Contact(
-                id: "10",
-                name: "Riley Cooper",
-                phone: "555-666-1111",
-                qrCodeId: "qr-short-interval",
-                lastCheckIn: Date().addingTimeInterval(-2 * 60 * 60), // 2 hours ago
-                note: "Security guard, works night shifts. Has pacemaker. Emergency contact: Supervisor (555-999-7777).",
-                manualAlertActive: false,
-                isNonResponsive: false,
-                hasIncomingPing: false,
-                incomingPingTimestamp: nil,
-                isResponder: false,
-                isDependent: true,
-                hasOutgoingPing: false,
-                outgoingPingTimestamp: nil,
-                checkInInterval: 3 * 60 * 60, // 3 hours (very short)
-                manualAlertTimestamp: nil
-            ),
+
 
             // Dependent with very long check-in interval (7 days)
             Contact(
@@ -344,16 +326,16 @@ struct Contact: Identifiable, Equatable, Sendable {
                 manualAlertTimestamp: Date().addingTimeInterval(-2 * 60 * 60) // 2 hours ago
             ),
 
-            // Dependent who is also a responder with multiple pings
+            // Dependent who is also a responder with multiple pings and is non-responsive
             Contact(
                 id: "13",
                 name: "Casey Kim",
                 phone: "555-111-9999",
                 qrCodeId: "qr-multi-role",
-                lastCheckIn: Date().addingTimeInterval(-10 * 60 * 60), // 10 hours ago
+                lastCheckIn: Date().addingTimeInterval(-20 * 60 * 60), // 20 hours ago (exceeds check-in interval)
                 note: "Mountain climber, often in remote areas. Emergency contacts: Partner Alex (555-777-2222), Guide Service (555-333-8888).",
                 manualAlertActive: false,
-                isNonResponsive: false,
+                isNonResponsive: true, // Correctly non-responsive since 20 hours > 18 hour interval
                 hasIncomingPing: true,
                 incomingPingTimestamp: Date().addingTimeInterval(-45 * 60), // 45 minutes ago
                 isResponder: true,
@@ -364,25 +346,7 @@ struct Contact: Identifiable, Equatable, Sendable {
                 manualAlertTimestamp: nil
             ),
 
-            // Dependent with almost expired check-in
-            Contact(
-                id: "14",
-                name: "Jamie Wilson",
-                phone: "555-333-9999",
-                qrCodeId: "qr-almost-expired",
-                lastCheckIn: Date().addingTimeInterval(-11 * 60 * 60), // 11 hours ago
-                note: "Nurse, works rotating shifts. Has service dog for anxiety. Emergency contact: Roommate Pat (555-222-4444).",
-                manualAlertActive: false,
-                isNonResponsive: false,
-                hasIncomingPing: false,
-                incomingPingTimestamp: nil,
-                isResponder: false,
-                isDependent: true,
-                hasOutgoingPing: false,
-                outgoingPingTimestamp: nil,
-                checkInInterval: 12 * 60 * 60, // 12 hours (almost expired)
-                manualAlertTimestamp: nil
-            ),
+
 
             // Dependent with very recent check-in
             Contact(
@@ -402,6 +366,188 @@ struct Contact: Identifiable, Equatable, Sendable {
                 outgoingPingTimestamp: nil,
                 checkInInterval: 8 * 60 * 60, // 8 hours
                 manualAlertTimestamp: nil
+            ),
+
+            // NEW COMPREHENSIVE MOCK CONTACTS
+
+            // Simple responder (no statuses)
+            Contact(
+                id: "16",
+                name: "Chris Evans",
+                phone: "555-100-1000",
+                qrCodeId: "qr-simple-responder",
+                lastCheckIn: Date().addingTimeInterval(-1 * 60 * 60), // 1 hour ago
+                note: "Simple responder with no special status.",
+                manualAlertActive: false,
+                isNonResponsive: false,
+                hasIncomingPing: false,
+                incomingPingTimestamp: nil,
+                isResponder: true,
+                isDependent: false,
+                hasOutgoingPing: false,
+                outgoingPingTimestamp: nil,
+                checkInInterval: 24 * 60 * 60, // 24 hours
+                manualAlertTimestamp: nil
+            ),
+
+            // Simple dependent (no statuses)
+            Contact(
+                id: "17",
+                name: "Diana Prince",
+                phone: "555-200-2000",
+                qrCodeId: "qr-simple-dependent",
+                lastCheckIn: Date().addingTimeInterval(-2 * 60 * 60), // 2 hours ago
+                note: "Simple dependent with no special status.",
+                manualAlertActive: false,
+                isNonResponsive: false,
+                hasIncomingPing: false,
+                incomingPingTimestamp: nil,
+                isResponder: false,
+                isDependent: true,
+                hasOutgoingPing: false,
+                outgoingPingTimestamp: nil,
+                checkInInterval: 16 * 60 * 60, // 16 hours
+                manualAlertTimestamp: nil
+            ),
+
+            // Both responder and dependent (no statuses)
+            Contact(
+                id: "18",
+                name: "Bruce Wayne",
+                phone: "555-300-3000",
+                qrCodeId: "qr-both-roles",
+                lastCheckIn: Date().addingTimeInterval(-3 * 60 * 60), // 3 hours ago
+                note: "Both responder and dependent with no special status.",
+                manualAlertActive: false,
+                isNonResponsive: false,
+                hasIncomingPing: false,
+                incomingPingTimestamp: nil,
+                isResponder: true,
+                isDependent: true,
+                hasOutgoingPing: false,
+                outgoingPingTimestamp: nil,
+                checkInInterval: 32 * 60 * 60, // 32 hours
+                manualAlertTimestamp: nil
+            ),
+
+            // Responder with incoming ping only
+            Contact(
+                id: "19",
+                name: "Natasha Romanoff",
+                phone: "555-400-4000",
+                qrCodeId: "qr-responder-incoming",
+                lastCheckIn: Date().addingTimeInterval(-4 * 60 * 60), // 4 hours ago
+                note: "Responder with incoming ping only.",
+                manualAlertActive: false,
+                isNonResponsive: false,
+                hasIncomingPing: true,
+                incomingPingTimestamp: Date().addingTimeInterval(-20 * 60), // 20 minutes ago
+                isResponder: true,
+                isDependent: false,
+                hasOutgoingPing: false,
+                outgoingPingTimestamp: nil,
+                checkInInterval: 24 * 60 * 60, // 24 hours
+                manualAlertTimestamp: nil
+            ),
+
+            // Dependent with outgoing ping only
+            Contact(
+                id: "20",
+                name: "Tony Stark",
+                phone: "555-500-5000",
+                qrCodeId: "qr-dependent-outgoing",
+                lastCheckIn: Date().addingTimeInterval(-5 * 60 * 60), // 5 hours ago
+                note: "Dependent with outgoing ping only.",
+                manualAlertActive: false,
+                isNonResponsive: false,
+                hasIncomingPing: false,
+                incomingPingTimestamp: nil,
+                isResponder: false,
+                isDependent: true,
+                hasOutgoingPing: true,
+                outgoingPingTimestamp: Date().addingTimeInterval(-25 * 60), // 25 minutes ago
+                checkInInterval: 8 * 60 * 60, // 8 hours
+                manualAlertTimestamp: nil
+            ),
+
+            // Both roles with both ping types
+            Contact(
+                id: "21",
+                name: "Steve Rogers",
+                phone: "555-600-6000",
+                qrCodeId: "qr-both-roles-both-pings",
+                lastCheckIn: Date().addingTimeInterval(-6 * 60 * 60), // 6 hours ago
+                note: "Both responder and dependent with both incoming and outgoing pings.",
+                manualAlertActive: false,
+                isNonResponsive: false,
+                hasIncomingPing: true,
+                incomingPingTimestamp: Date().addingTimeInterval(-30 * 60), // 30 minutes ago
+                isResponder: true,
+                isDependent: true,
+                hasOutgoingPing: true,
+                outgoingPingTimestamp: Date().addingTimeInterval(-35 * 60), // 35 minutes ago
+                checkInInterval: 16 * 60 * 60, // 16 hours
+                manualAlertTimestamp: nil
+            ),
+
+            // Responder with manual alert only
+            Contact(
+                id: "22",
+                name: "Wanda Maximoff",
+                phone: "555-700-7000",
+                qrCodeId: "qr-responder-alert",
+                lastCheckIn: Date().addingTimeInterval(-7 * 60 * 60), // 7 hours ago
+                note: "Responder with manual alert only.",
+                manualAlertActive: true,
+                isNonResponsive: false,
+                hasIncomingPing: false,
+                incomingPingTimestamp: nil,
+                isResponder: true,
+                isDependent: false,
+                hasOutgoingPing: false,
+                outgoingPingTimestamp: nil,
+                checkInInterval: 32 * 60 * 60, // 32 hours
+                manualAlertTimestamp: Date().addingTimeInterval(-40 * 60) // 40 minutes ago
+            ),
+
+            // Dependent with non-responsive status only (correctly set because check-in interval has expired)
+            Contact(
+                id: "23",
+                name: "Peter Parker",
+                phone: "555-800-8000",
+                qrCodeId: "qr-dependent-nonresponsive",
+                lastCheckIn: Date().addingTimeInterval(-10 * 60 * 60), // 10 hours ago
+                note: "Dependent with non-responsive status only.",
+                manualAlertActive: false,
+                isNonResponsive: true, // Correctly non-responsive since 10 hours > 8 hour interval
+                hasIncomingPing: false,
+                incomingPingTimestamp: nil,
+                isResponder: false,
+                isDependent: true,
+                hasOutgoingPing: false,
+                outgoingPingTimestamp: nil,
+                checkInInterval: 8 * 60 * 60, // 8 hours
+                manualAlertTimestamp: nil
+            ),
+
+            // Comprehensive contact with everything
+            Contact(
+                id: "24",
+                name: "Carol Danvers",
+                phone: "555-900-9000",
+                qrCodeId: "qr-comprehensive",
+                lastCheckIn: Date().addingTimeInterval(-9 * 60 * 60), // 9 hours ago
+                note: "Comprehensive contact with all statuses: both roles, manual alert, non-responsive, incoming and outgoing pings.",
+                manualAlertActive: true,
+                isNonResponsive: true,
+                hasIncomingPing: true,
+                incomingPingTimestamp: Date().addingTimeInterval(-45 * 60), // 45 minutes ago
+                isResponder: true,
+                isDependent: true,
+                hasOutgoingPing: true,
+                outgoingPingTimestamp: Date().addingTimeInterval(-50 * 60), // 50 minutes ago
+                checkInInterval: 8 * 60 * 60, // 8 hours
+                manualAlertTimestamp: Date().addingTimeInterval(-55 * 60) // 55 minutes ago
             )
         ]
     }

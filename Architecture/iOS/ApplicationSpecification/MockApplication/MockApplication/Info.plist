@@ -40,5 +40,11 @@
 	<string>LifeSignal needs camera access to scan QR codes for adding contacts and check-ins. This helps you connect with your emergency contacts quickly.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>LifeSignal needs photo library access to scan QR codes from your saved images. This allows you to add contacts from previously saved QR codes.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+	<key>NSUserNotificationUsageDescription</key>
+	<string>LifeSignal needs to send you notifications about check-in reminders, alerts from your dependents, and other important updates.</string>
 </dict>
 </plist>

@@ -15,14 +15,21 @@ struct MockApplicationApp: App {
     @StateObject private var appState = AppState()
 
     init() {
-        // Request notification permissions when the app starts
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if granted {
-                print("Notification permission granted")
-            } else if let error = error {
-                print("Notification permission error: \(error)")
-            }
-        }
+        // Show sign-in screen and onboarding by default
+        appState.isAuthenticated = true
+        appState.needsOnboarding = false
+
+        // Initialize user data
+        userViewModel.name = "Sarah Johnson"
+        userViewModel.generateNewQRCode() // Generate a QR code ID
+        userViewModel.checkInInterval = 8 * 3600 // 8 hours
+        userViewModel.lastCheckIn = Date() // Set last check-in to now
+
+        // Set up notification delegate
+        UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
+
+        // Note: We're not requesting notification permissions here anymore
+        // Permissions will be requested when needed through NotificationManager
     }
 
     var body: some Scene {

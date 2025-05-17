@@ -1,5 +1,6 @@
 import SwiftUI
 
+
 struct IntervalPickerView: View {
     @Environment(\.presentationMode) var presentationMode
     let interval: TimeInterval
@@ -34,7 +35,7 @@ struct IntervalPickerView: View {
     }
 
     private var dayValues: [Int] { Array(1...7) }
-    private var hourValues: [Int] { Array(stride(from: 8, through: 60, by: 8)) }
+    private var hourValues: [Int] { [8, 16, 32] }
     private var isDayUnit: Bool { unit == "days" }
 
     var body: some View {
@@ -47,6 +48,7 @@ struct IntervalPickerView: View {
                     }
                     .pickerStyle(SegmentedPickerStyle())
                     .onChange(of: unit) { oldUnit, newUnit in
+                        HapticFeedback.selectionFeedback()
                         if newUnit == "days" {
                             value = 1
                         } else {
@@ -68,11 +70,15 @@ struct IntervalPickerView: View {
                     .pickerStyle(WheelPickerStyle())
                     .frame(height: 150)
                     .clipped()
+                    .onChange(of: value) { _, _ in
+                        HapticFeedback.selectionFeedback()
+                    }
                 }
             }
             .navigationTitle("Interval")
             .navigationBarItems(
                 trailing: Button("Save") {
+                    HapticFeedback.notificationFeedback(type: .success)
                     onSave(computedIntervalInSeconds)
                     presentationMode.wrappedValue.dismiss()
                 }

@@ -13,6 +13,12 @@ class CheckInViewModel: ObservableObject {
     /// The time until the next check-in
     @Published var timeUntilNextCheckIn: String = ""
 
+    /// The time until the next check-in without seconds
+    @Published var timeUntilNextCheckInWithoutSeconds: String = ""
+
+    /// Time components for the new design
+    @Published var timeComponents: [(label: String, value: String)] = []
+
     /// The check-in interval in hours
     @Published var checkInInterval: Int = 24
 
@@ -68,19 +74,47 @@ class CheckInViewModel: ObservableObject {
     }
 
     /// Update the time until next check-in
-    private func updateTimeUntilNextCheckIn() {
+    func updateTimeUntilNextCheckIn() {
         // Calculate the time until next check-in
         let timeInterval = checkInExpiration.timeIntervalSince(Date())
 
         if timeInterval <= 0 {
             timeUntilNextCheckIn = "Overdue"
+            timeUntilNextCheckInWithoutSeconds = "Overdue"
+            timeComponents = [(label: "Overdue", value: "!")]
         } else {
-            // Format the time interval
-            let formatter = DateComponentsFormatter()
-            formatter.allowedUnits = [.day, .hour, .minute, .second]
-            formatter.unitsStyle = .abbreviated
+            // Format the time interval with seconds
+            let formatterWithSeconds = DateComponentsFormatter()
+            formatterWithSeconds.allowedUnits = [.day, .hour, .minute, .second]
+            formatterWithSeconds.unitsStyle = .abbreviated
 
-            timeUntilNextCheckIn = formatter.string(from: timeInterval) ?? "Unknown"
+            // Format the time interval without seconds
+            let formatterWithoutSeconds = DateComponentsFormatter()
+            formatterWithoutSeconds.allowedUnits = [.day, .hour, .minute]
+            formatterWithoutSeconds.unitsStyle = .abbreviated
+
+            timeUntilNextCheckIn = formatterWithSeconds.string(from: timeInterval) ?? "Unknown"
+            timeUntilNextCheckInWithoutSeconds = formatterWithoutSeconds.string(from: timeInterval) ?? "Unknown"
+
+            // Update time components for the new design
+            let calendar = Calendar.current
+            let components = calendar.dateComponents([.day, .hour, .minute], from: Date(), to: checkInExpiration)
+
+            var componentArray: [(label: String, value: String)] = []
+
+            if let days = components.day, days > 0 {
+                componentArray.append((label: "DAYS", value: String(days)))
+            }
+
+            if let hours = components.hour {
+                componentArray.append((label: "HOURS", value: String(hours)))
+            }
+
+            if let minutes = components.minute {
+                componentArray.append((label: "MINS", value: String(minutes)))
+            }
+
+            timeComponents = componentArray
         }
     }
 
@@ -88,6 +122,16 @@ class CheckInViewModel: ObservableObject {
     func calculateProgress() -> CGFloat {
         let totalInterval = Double(checkInInterval * 3600) // Convert hours to seconds
         let elapsed = Date().timeIntervalSince(lastCheckedIn)
+        let remaining = max(0, totalInterval - elapsed)
+        return CGFloat(remaining / totalInterval)
+    }
+
+    /// Calculate progress based on user's actual interval and last check-in time
+    func calculateUserProgress() -> CGFloat {
+        // Use the actual expiration time from the user view model
+        let now = Date()
+        let totalInterval = checkInExpiration.timeIntervalSince(lastCheckedIn)
+        let elapsed = now.timeIntervalSince(lastCheckedIn)
         let remaining = max(0, totalInterval - elapsed)
         return CGFloat(remaining / totalInterval)
     }
@@ -121,18 +165,27 @@ class CheckInViewModel: ObservableObject {
         UserDefaults.standard.set(now, forKey: "lastCheckedIn")
         UserDefaults.standard.set(checkInExpiration, forKey: "checkInExpiration")
 
+        // Immediately update the time display
+        updateTimeUntilNextCheckIn()
+
+        // Force UI update
+        objectWillChange.send()
+
         // Show silent local notification
         showCheckInNotification()
     }
 
     /// Show a silent local notification for check-in
     private func showCheckInNotification() {
-        let content = UNMutableNotificationContent()
-        content.title = "Check-in Completed"
-        content.body = "You have successfully checked in."
-        content.sound = .none
+        NotificationManager.shared.showCheckInNotification()
+    }
 
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
+    /// Force update the timer immediately
+    func updateTimer() {
+        // Update the time until next check-in
+        updateTimeUntilNextCheckIn()
+
+        // Force UI update
+        objectWillChange.send()
     }
 }

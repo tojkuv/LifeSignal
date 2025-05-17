@@ -4,7 +4,7 @@ import SwiftUI
 struct AppView: View {
     @EnvironmentObject private var userViewModel: UserViewModel
     @EnvironmentObject private var appState: AppState
-    
+
     var body: some View {
         Group {
             if !appState.isAuthenticated {
@@ -20,11 +20,15 @@ struct AppView: View {
                 )
             } else {
                 // Main app with tabs
-                ContentView()
+                MainTabView()
             }
         }
         .onAppear {
             // App appeared
+            print("AppView appeared: isAuthenticated = \(appState.isAuthenticated)")
+        }
+        .onChange(of: appState.isAuthenticated) { oldValue, newValue in
+            print("Authentication state changed: \(oldValue) -> \(newValue)")
         }
         .onChange(of: UIApplication.shared.applicationState) { oldState, newState in
             // App state changed
