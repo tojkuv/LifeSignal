@@ -23,6 +23,24 @@ struct AuthenticationView: View {
     var body: some View {
         NavigationStack {
             VStack {
+                // Debug button at the top of the screen
+                #if DEBUG
+                Button(action: {
+                    // Skip authentication and go directly to home screen
+                    HapticFeedback.triggerHaptic()
+                    isAuthenticated = true
+                    needsOnboarding = false
+                }) {
+                    Text("Debug: Skip to Home")
+                        .font(.caption)
+                        .padding(8)
+                        .background(Color.blue.opacity(0.2))
+                        .cornerRadius(8)
+                }
+                .padding(.top, 8)
+                .hapticFeedback()
+                #endif
+
                 if viewModel.showPhoneEntry {
                     phoneEntryView
                 } else {

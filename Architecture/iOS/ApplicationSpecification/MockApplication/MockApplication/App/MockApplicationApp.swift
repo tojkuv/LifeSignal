@@ -16,8 +16,8 @@ struct MockApplicationApp: App {
 
     init() {
         // Show sign-in screen and onboarding by default
-        appState.isAuthenticated = true
-        appState.needsOnboarding = false
+        appState.isAuthenticated = false
+        appState.needsOnboarding = true
 
         // Initialize user data
         userViewModel.name = "Sarah Johnson"

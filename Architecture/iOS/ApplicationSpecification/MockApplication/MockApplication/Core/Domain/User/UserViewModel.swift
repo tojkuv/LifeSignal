@@ -565,8 +565,12 @@ class UserViewModel: ObservableObject {
     func triggerAlert() {
         isAlertActive = true
 
-        // Show a notification for alert activation
-        NotificationManager.shared.showAlertActivationNotification()
+        // Show a silent notification for alert activation that is tracked in the notification center
+        NotificationManager.shared.showSilentLocalNotification(
+            title: "Alert Activated",
+            body: "You have activated an alert. Your responders have been notified.",
+            type: .manualAlert
+        )
     }
 
     /// Toggle the send alert active state
@@ -577,13 +581,21 @@ class UserViewModel: ObservableObject {
         // Save to UserDefaults
         UserDefaults.standard.set(sendAlertActive, forKey: "sendAlertActive")
 
-        // Show appropriate notification based on the state change
+        // Show appropriate silent notification based on the state change that is tracked in the notification center
         if active {
             // Alert was activated
-            NotificationManager.shared.showAlertActivationNotification()
+            NotificationManager.shared.showSilentLocalNotification(
+                title: "Alert Activated",
+                body: "You have activated an alert. Your responders have been notified.",
+                type: .manualAlert
+            )
         } else {
             // Alert was deactivated
-            NotificationManager.shared.showAlertDeactivationNotification()
+            NotificationManager.shared.showSilentLocalNotification(
+                title: "Alert Deactivated",
+                body: "You have deactivated your alert.",
+                type: .manualAlert
+            )
         }
     }
 

@@ -40,7 +40,7 @@ class HomeViewModel: ObservableObject {
     @Published var pendingScannedCode: String? = nil
 
     /// The share image
-    @Published var shareImage: HomeShareImage? = nil
+    @Published var shareImage: UIImage? = nil
 
     /// Whether the contact added alert is showing
     @Published var showContactAddedAlert: Bool = false
@@ -64,41 +64,43 @@ class HomeViewModel: ObservableObject {
         self.userViewModel = userViewModel
     }
 
-    /// Generate a QR code image
-    /// - Parameter completion: The completion handler
-    func generateQRCodeImage(completion: @escaping () -> Void = {}) {
+    /// Prepare for sharing QR code
+    /// - Parameter completion: The completion handler called when ready to show share sheet
+    func prepareForSharing(completion: @escaping () -> Void = {}) {
         guard let userViewModel = userViewModel else { return }
         if isGeneratingImage { return }
 
-        isImageReady = false
         isGeneratingImage = true
-        let qrContent = userViewModel.qrCodeId
-        let content = AnyView(
-            QRCodeShareView(
+
+        // Since QRCodeShareSheetViewModel is @MainActor, we need to run this on the main actor
+        Task { @MainActor in
+            // Create a QRCodeShareSheetViewModel with the user's information
+            let shareSheetViewModel = QRCodeShareSheetViewModel(
                 name: userViewModel.name,
+                qrCodeId: userViewModel.qrCodeId,
                 subtitle: "LifeSignal contact",
-                qrCodeId: qrContent,
                 footer: "Use LifeSignal's QR code scanner to add this contact"
             )
-        )
 
-        QRCodeViewModel.generateQRCodeImage(content: content) { [weak self] image in
-            self?.qrCodeImage = image
-            self?.isImageReady = true
-            self?.isGeneratingImage = false
-            completion()
+            // Generate the shareable image using the view model
+            shareSheetViewModel.generateShareableImage { [weak self] image in
+                // We're already on the main thread due to @MainActor
+                self?.shareImage = image
+                self?.isGeneratingImage = false
+                completion()
+            }
         }
     }
 
     /// Share the QR code
     func shareQRCode() {
-        if isImageReady, let image = qrCodeImage {
-            shareImage = .qrCode(image)
+        if let _ = shareImage {
+            // Image already generated, just show the share sheet
+            showShareSheet = true
         } else if !isGeneratingImage {
-            generateQRCodeImage { [weak self] in
-                if let image = self?.qrCodeImage {
-                    self?.shareImage = .qrCode(image)
-                }
+            // Need to generate the image first
+            prepareForSharing { [weak self] in
+                self?.showShareSheet = true
             }
         }
     }
@@ -123,4 +125,6 @@ class HomeViewModel: ObservableObject {
             return "\(hours) hour\(hours == 1 ? "" : "s")"
         }
     }
+
+
 }

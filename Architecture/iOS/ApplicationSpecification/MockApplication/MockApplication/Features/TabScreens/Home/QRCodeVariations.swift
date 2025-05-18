@@ -148,21 +148,16 @@ struct QRCodeVariationView: View {
         isImageReady = false
         isGeneratingImage = true
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            // Generate QR code image
-            if let qrImage = generateQRCode(from: self.qrCodeId) {
-                DispatchQueue.main.async {
-                    self.qrCodeImage = qrImage
-                    self.isImageReady = true
-                    self.isGeneratingImage = false
-                }
-            } else {
-                DispatchQueue.main.async {
-                    self.isGeneratingImage = false
-                    // Handle error
-                }
-            }
+        // Use the QRCodeViewModel to generate the QR code
+        let qrViewModel = QRCodeViewModel(qrCodeId: qrCodeId, size: 300, branded: true)
+        qrViewModel.generateQRCodeImage()
+
+        if let qrImage = qrViewModel.qrCodeImage {
+            self.qrCodeImage = qrImage
+            self.isImageReady = true
         }
+
+        self.isGeneratingImage = false
     }
 }
 

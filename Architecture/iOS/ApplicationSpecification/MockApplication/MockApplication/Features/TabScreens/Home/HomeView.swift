@@ -22,32 +22,36 @@ struct HomeView: View {
     @State private var showCameraDeniedAlert = false
     @State private var newContact: Contact? = nil
     @State private var pendingScannedCode: String? = nil
-    @State private var shareImage: HomeShareImage? = nil
+    @State private var shareImage: UIImage? = nil
     @State private var showContactAddedAlert = false
     @State private var selectedQRDesign: QRCodeDesign = .standard
     @State private var showResetQRConfirmation = false
     @State private var showIntervalChangeConfirmation = false
     @State private var pendingIntervalChange: TimeInterval? = nil
 
-    func generateQRCodeImage(completion: @escaping () -> Void = {}) {
+    func prepareForSharing(completion: @escaping () -> Void = {}) {
         if isGeneratingImage { return }
 
-        isImageReady = false
         isGeneratingImage = true
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            // Generate QR code image
-            if let qrImage = generateQRCode(from: userViewModel.qrCodeId) {
-                DispatchQueue.main.async {
-                    self.qrCodeImage = qrImage
-                    self.isImageReady = true
+        // Since QRCodeShareSheetViewModel is @MainActor, we need to use Task
+        Task {
+            // Create a QRCodeShareSheetViewModel with the user's information on the main actor
+            await MainActor.run {
+                let shareSheetViewModel = QRCodeShareSheetViewModel(
+                    name: userViewModel.name,
+                    qrCodeId: userViewModel.qrCodeId,
+                    subtitle: "LifeSignal contact",
+                    footer: "Use LifeSignal's QR code scanner to add this contact"
+                )
+
+                // Generate the shareable image using the view model
+                shareSheetViewModel.generateShareableImage { image in
+                    // We're already on the main thread due to @MainActor
+                    // No need for [weak self] in a struct
+                    self.shareImage = image
                     self.isGeneratingImage = false
                     completion()
-                }
-            } else {
-                DispatchQueue.main.async {
-                    self.isGeneratingImage = false
-                    // Handle error
                 }
             }
         }
@@ -68,7 +72,8 @@ struct HomeView: View {
         .navigationTitle("Home")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            generateQRCodeImage()
+            // Prepare the QR code image when the view appears
+            prepareForSharing()
         }
         .sheet(isPresented: $showQRScanner) {
             QRScannerView(onScanned: { code in
@@ -231,7 +236,7 @@ struct HomeView: View {
             if let shareImage = shareImage {
                 // Add a descriptive text along with the image
                 let text = "My LifeSignal QR Code"
-                ShareSheet(items: [text, shareImage.image])
+                ShareSheet(items: [text, shareImage])
             }
         }
     }
@@ -394,8 +399,7 @@ struct HomeView: View {
                 onRefresh: {
                     // Generate a new QR code ID
                     userViewModel.generateNewQRCode()
-                    // Force refresh the QR code image
-                    generateQRCodeImage()
+                    // QRCodeVariationView will automatically refresh when qrCodeId changes
                     // Show a silent local notification
                     NotificationManager.shared.showQRCodeResetNotification()
                 }
@@ -428,22 +432,9 @@ struct HomeView: View {
                     // This ensures the image is ready when the sheet appears
                     HapticFeedback.triggerHaptic()
 
-                    // Create a QRCodeShareView with the user's QR code ID
-                    let content = AnyView(
-                        QRCodeShareView(
-                            name: userViewModel.name,
-                            subtitle: "LifeSignal contact",
-                            qrCodeId: userViewModel.qrCodeId,
-                            footer: "Use LifeSignal's QR code scanner to add this contact"
-                        )
-                    )
-
-                    // Generate an image from the QRCodeShareView
-                    QRCodeViewModel.generateQRCodeImage(content: content) { image in
-                        if let image = image {
-                            self.shareImage = .qrCode(image)
-                            self.showShareSheet = true
-                        }
+                    // Prepare for sharing and show the share sheet when ready
+                    prepareForSharing {
+                        self.showShareSheet = true
                     }
                 }) {
                     VStack(spacing: 8) { // Standardized spacing
@@ -502,4 +493,3 @@ struct HomeView: View {
     }
 }
 
-// Using the enum HomeShareImage from the separate file

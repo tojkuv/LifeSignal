@@ -30,6 +30,8 @@ struct QRCodeView: View {
                     .resizable()
                     .interpolation(.none)
                     .scaledToFit()
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
                 // Placeholder when no QR code is available
                 Rectangle()
@@ -39,6 +41,7 @@ struct QRCodeView: View {
                         Text("Loading...")
                             .foregroundColor(.secondary)
                     )
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }
         .onAppear {

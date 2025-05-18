@@ -7,7 +7,7 @@ class QRCodeViewModel: ObservableObject {
     // MARK: - Published Properties
 
     /// The string to encode in the QR code
-    @Published var qrCodeId: String = ""
+    @Published var qrCodeId: String = "F3B6C150-9E23-4BFA-A13E-8A8B842BB4C5"
 
     /// The size of the QR code
     @Published var size: CGFloat = 200
@@ -151,32 +151,25 @@ class QRCodeViewModel: ObservableObject {
             return nil
         }
 
-        // In a real app, we would add branding to the QR code
-        // For the mock app, we'll just return the basic QR code with a blue tint
-
-        // Create a blue-tinted QR code
+        // Create a QR code with proper branding
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
         let brandedQRCode = renderer.image { context in
-            // Draw a blue background
+            // Draw a white background
             UIColor.white.setFill()
             context.fill(CGRect(x: 0, y: 0, width: size, height: size))
 
             // Draw the QR code
             qrCode.draw(in: CGRect(x: 0, y: 0, width: size, height: size))
 
-            // Add a blue overlay with transparency
-            context.cgContext.setFillColor(UIColor.blue.withAlphaComponent(0.1).cgColor)
-            context.fill(CGRect(x: 0, y: 0, width: size, height: size))
-
-            // Add a logo in the center (simulated with a blue circle)
-            let logoSize = size * 0.2
+            // Add a small blue dot in the center
+            let logoSize = size * 0.1
             let logoRect = CGRect(
                 x: (size - logoSize) / 2,
                 y: (size - logoSize) / 2,
                 width: logoSize,
                 height: logoSize
             )
-            context.cgContext.setFillColor(UIColor.blue.cgColor)
+            context.cgContext.setFillColor(UIColor.systemBlue.cgColor)
             context.cgContext.fillEllipse(in: logoRect)
         }
 
@@ -200,8 +193,11 @@ class QRCodeViewModel: ObservableObject {
         // Create a UIHostingController to render the SwiftUI view
         let hostingController = UIHostingController(rootView: content)
 
-        // Set the size of the hosting controller's view
-        hostingController.view.frame = CGRect(x: 0, y: 0, width: 1024, height: 1024)
+        // Set the size of the hosting controller's view - use a portrait aspect ratio (9:19.5)
+        // This matches the iPhone screen aspect ratio for better sharing
+        let width: CGFloat = 1242 // High resolution for sharing
+        let height: CGFloat = 2688 // Maintain aspect ratio
+        hostingController.view.frame = CGRect(x: 0, y: 0, width: width, height: height)
 
         // Ensure the view has been laid out
         hostingController.view.setNeedsLayout()

@@ -7,10 +7,13 @@ class QRCodeCardViewModel: ObservableObject {
     // MARK: - Published Properties
     
     /// The name to display
-    @Published var name: String = ""
+    @Published var name: String
+
+    /// The subtitle to display
+    @Published var subtitle: String
     
     /// The footer text to display
-    @Published var footer: String = ""
+    @Published var footer: String
     
     /// The QR code generator view model
     @Published var qrCodeViewModel: QRCodeViewModel
@@ -23,11 +26,13 @@ class QRCodeCardViewModel: ObservableObject {
     ///   - qrCodeId: The QR code ID
     ///   - footer: The footer text to display
     init(
-        name: String = "",
-        qrCodeId: String = "",
-        footer: String = ""
+        name: String = "First Last",
+        subtitle: String = "LifeSignal contact",
+        qrCodeId: String = "F3B6C150-9E23-4BFA-A13E-8A8B842BB4C5",
+        footer: String = "Use LifeSignal's QR code scanner to add this contact"
     ) {
         self.name = name
+        self.subtitle = subtitle
         self.footer = footer
         self.qrCodeViewModel = QRCodeViewModel(
             qrCodeId: qrCodeId,
