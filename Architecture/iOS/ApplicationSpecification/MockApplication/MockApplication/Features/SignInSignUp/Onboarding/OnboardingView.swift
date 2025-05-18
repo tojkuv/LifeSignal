@@ -2,15 +2,21 @@ import SwiftUI
 import Foundation
 
 struct OnboardingView: View {
-    @EnvironmentObject private var userViewModel: UserViewModel
-    @Binding var isOnboarding: Bool
+    // Initialize with an external binding that will be synced with the view model
+    init(isOnboarding: Binding<Bool>) {
+        // Create the view model
+        _viewModel = StateObject(wrappedValue: OnboardingViewModel())
+        // Store the binding for later use
+        self._externalIsOnboarding = isOnboarding
+    }
 
-    @StateObject private var viewModel = OnboardingViewModel()
+    // External binding from parent view
+    @Binding private var externalIsOnboarding: Bool
 
-    // State for showing instructions after onboarding
-    @State private var showInstructions = false
+    // View model that contains all state and logic
+    @StateObject private var viewModel: OnboardingViewModel
 
-    // Focus state for text fields
+    // Focus state for text fields - these will be bound to the view model
     @FocusState private var firstNameFieldFocused: Bool
     @FocusState private var lastNameFieldFocused: Bool
     @FocusState private var noteFieldFocused: Bool
@@ -19,15 +25,7 @@ struct OnboardingView: View {
         NavigationStack {
             VStack {
                 // Progress indicator - fixed position
-                HStack(spacing: 8) {
-                    ForEach(0..<2) { step in
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(step == viewModel.currentStep ? Color.blue : Color.gray.opacity(0.3))
-                            .frame(width: 30, height: 6)
-                    }
-                }
-                .padding(.top, 16)
-                .padding(.bottom, 16)
+                progressIndicator
 
                 // Content based on current step
                 if viewModel.currentStep == 0 {
@@ -38,20 +36,6 @@ struct OnboardingView: View {
             }
             .padding()
             .navigationTitle("Welcome to LifeSignal")
-            .toolbar {
-                // Remove the skip button to prevent skipping the name step
-                // ToolbarItem(placement: .navigationBarTrailing) {
-                //     if viewModel.currentStep == 0 {
-                //         Button("Skip") {
-                //             // Set default values and complete onboarding
-                //             viewModel.name = "User"
-                //             viewModel.emergencyNote = ""
-                //             completeOnboarding()
-                //         }
-                //         .foregroundColor(.blue)
-                //     }
-                // }
-            }
             .navigationBarTitleDisplayMode(.inline)
             .background(Color(UIColor.systemGroupedBackground))
             .alert("Error", isPresented: $viewModel.showError) {
@@ -61,88 +45,121 @@ struct OnboardingView: View {
             }
             .disabled(viewModel.isLoading)
             .onAppear {
-                // Auto-focus the first name field when the view appears
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    firstNameFieldFocused = true
-                }
+                // Initialize the view model with the external binding value
+                viewModel.isOnboarding = externalIsOnboarding
             }
-            .sheet(isPresented: $showInstructions, onDismiss: {
+            .onChange(of: viewModel.isOnboarding) { newValue in
+                // Keep external binding in sync with the view model
+                externalIsOnboarding = newValue
+            }
+            .onChange(of: externalIsOnboarding) { newValue in
+                // Keep view model in sync with external binding
+                viewModel.isOnboarding = newValue
+            }
+            .onChange(of: viewModel.firstNameFieldFocused) { newValue in
+                // Keep focus state in sync with view model
+                firstNameFieldFocused = newValue
+            }
+            .onChange(of: viewModel.lastNameFieldFocused) { newValue in
+                // Keep focus state in sync with view model
+                lastNameFieldFocused = newValue
+            }
+            .onChange(of: viewModel.noteFieldFocused) { newValue in
+                // Keep focus state in sync with view model
+                noteFieldFocused = newValue
+            }
+            .onChange(of: firstNameFieldFocused) { newValue in
+                // Update view model when focus changes in view
+                viewModel.firstNameFieldFocused = newValue
+            }
+            .onChange(of: lastNameFieldFocused) { newValue in
+                // Update view model when focus changes in view
+                viewModel.lastNameFieldFocused = newValue
+            }
+            .onChange(of: noteFieldFocused) { newValue in
+                // Update view model when focus changes in view
+                viewModel.noteFieldFocused = newValue
+            }
+            .sheet(isPresented: $viewModel.showInstructions, onDismiss: {
                 // Handle proper dismissal of the sheet
-                // This ensures that if the sheet is dismissed by swiping down,
-                // we still complete the onboarding process
-                print("Sheet dismissed")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    print("Setting isOnboarding to false from sheet dismissal")
-                    isOnboarding = false
-                    print("Successfully set isOnboarding to false from sheet dismissal")
-                }
+                viewModel.handleInstructionsDismissal()
             }) {
-                // Use the existing InstructionsView from the Home tab
-                VStack(alignment: .leading, spacing: 20) {
-                    Text("How to use LifeSignal")
-                        .font(.title)
-                        .fontWeight(.bold)
-                        .padding(.bottom, 10)
-
-                    VStack(alignment: .leading, spacing: 15) {
-                        instructionItem(
-                            number: "1",
-                            title: "Set your interval",
-                            description: "Choose how often you need to check in. This is the maximum time before your contacts are alerted if you don't check in."
-                        )
-
-                        instructionItem(
-                            number: "2",
-                            title: "Add responders",
-                            description: "Share your QR code with trusted contacts who will respond if you need help. They'll be notified if you miss a check-in."
-                        )
-
-                        instructionItem(
-                            number: "3",
-                            title: "Check in regularly",
-                            description: "Tap the check-in button before your timer expires. This resets your countdown and lets your contacts know you're safe."
-                        )
-
-                        instructionItem(
-                            number: "4",
-                            title: "Emergency alert",
-                            description: "If you need immediate help, activate the alert to notify all your responders instantly."
-                        )
-                    }
-
-                    Spacer()
-
-                    Button(action: {
-                        HapticFeedback.triggerHaptic()
-                        // First dismiss the sheet, then mark onboarding as complete
-                        showInstructions = false
-                        // Use a slight delay to ensure the sheet is dismissed before changing isOnboarding
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            // Mark onboarding as complete after showing instructions
-                            print("Setting isOnboarding to false from Got it button")
-                            isOnboarding = false
-                            print("Successfully set isOnboarding to false")
-                        }
-                    }) {
-                        Text("Got it")
-                            .fontWeight(.semibold)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.blue)
-                            .foregroundColor(.white)
-                            .cornerRadius(10)
-                    }
-                    .padding(.top)
-                    .hapticFeedback()
-                }
-                .padding()
-                .background(Color(UIColor.systemGroupedBackground))
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
+                instructionsView
             }
         }
     }
 
+    /// Progress indicator for the onboarding steps
+    private var progressIndicator: some View {
+        HStack(spacing: 8) {
+            ForEach(0..<2) { step in
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(step == viewModel.currentStep ? Color.blue : Color.gray.opacity(0.3))
+                    .frame(width: 30, height: 6)
+            }
+        }
+        .padding(.top, 16)
+        .padding(.bottom, 16)
+    }
+
+    /// Instructions view shown after completing onboarding
+    private var instructionsView: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("How to use LifeSignal")
+                .font(.title)
+                .fontWeight(.bold)
+                .padding(.bottom, 10)
+
+            VStack(alignment: .leading, spacing: 15) {
+                instructionItem(
+                    number: "1",
+                    title: "Set your interval",
+                    description: "Choose how often you need to check in. This is the maximum time before your contacts are alerted if you don't check in."
+                )
+
+                instructionItem(
+                    number: "2",
+                    title: "Add responders",
+                    description: "Share your QR code with trusted contacts who will respond if you need help. They'll be notified if you miss a check-in."
+                )
+
+                instructionItem(
+                    number: "3",
+                    title: "Check in regularly",
+                    description: "Tap the check-in button before your timer expires. This resets your countdown and lets your contacts know you're safe."
+                )
+
+                instructionItem(
+                    number: "4",
+                    title: "Emergency alert",
+                    description: "If you need immediate help, activate the alert to notify all your responders instantly."
+                )
+            }
+
+            Spacer()
+
+            Button(action: {
+                HapticFeedback.triggerHaptic()
+                viewModel.handleGotItButtonTap()
+            }) {
+                Text("Got it")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+            }
+            .padding(.top)
+            .hapticFeedback()
+        }
+        .padding()
+        .background(Color(UIColor.systemGroupedBackground))
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+    }
+
+    /// Name entry view for the first step of onboarding
     private var nameEntryView: some View {
         VStack(spacing: 24) {
             Text("What's your name?")
@@ -210,10 +227,6 @@ struct OnboardingView: View {
                     HapticFeedback.triggerHaptic()
                     withAnimation {
                         viewModel.nextStep()
-                        // Focus the note field when moving to the next step
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            noteFieldFocused = true
-                        }
                     }
                 }
             }) {
@@ -233,6 +246,7 @@ struct OnboardingView: View {
         }
     }
 
+    /// Emergency note view for the second step of onboarding
     private var emergencyNoteView: some View {
         VStack(spacing: 24) {
             Text("Your emergency note")
@@ -258,10 +272,6 @@ struct OnboardingView: View {
                     HapticFeedback.triggerHaptic()
                     withAnimation {
                         viewModel.previousStep()
-                        // Focus the first name field when going back
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            firstNameFieldFocused = true
-                        }
                     }
                 }) {
                     HStack {
@@ -274,7 +284,27 @@ struct OnboardingView: View {
 
                 Spacer()
 
-                Button(action: completeOnboarding) {
+                Button(action: {
+                    // Add haptic feedback
+                    HapticFeedback.triggerHaptic()
+
+                    // Complete onboarding through the view model
+                    viewModel.completeOnboarding { success in
+                        if !success {
+                            // Error haptic feedback
+                            HapticFeedback.notificationFeedback(type: .error)
+
+                            // Use main thread to update UI
+                            DispatchQueue.main.async {
+                                viewModel.errorMessage = "Failed to create user profile"
+                                viewModel.showError = true
+                            }
+                        } else {
+                            // Success haptic feedback
+                            HapticFeedback.notificationFeedback(type: .success)
+                        }
+                    }
+                }) {
                     Text("Complete")
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
@@ -292,57 +322,7 @@ struct OnboardingView: View {
         }
     }
 
-    private func completeOnboarding() {
-        // Add haptic feedback
-        HapticFeedback.triggerHaptic()
-
-        // Update the user's profile
-        viewModel.completeOnboarding { success in
-            if success {
-                // Update UserViewModel with the new data
-                userViewModel.name = viewModel.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                userViewModel.profileDescription = viewModel.emergencyNote.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                // Set default check-in interval to 1 day (24 hours)
-                userViewModel.checkInInterval = 24 * 60 * 60 // 24 hours in seconds
-
-                // Set default notification preference to 2 hours
-                userViewModel.notify30MinBefore = false
-                userViewModel.notify2HoursBefore = true
-
-                // Update the check-in expiration based on the new interval
-                let now = Date()
-                userViewModel.lastCheckIn = now
-
-                // Save to UserDefaults
-                UserDefaults.standard.set(userViewModel.checkInInterval, forKey: "checkInInterval")
-                UserDefaults.standard.set(userViewModel.notify30MinBefore, forKey: "notify30MinBefore")
-                UserDefaults.standard.set(userViewModel.notify2HoursBefore, forKey: "notify2HoursBefore")
-                UserDefaults.standard.set(now, forKey: "lastCheckIn")
-
-                // Success haptic feedback
-                HapticFeedback.notificationFeedback(type: .success)
-
-                // Show instructions sheet instead of immediately completing onboarding
-                // Use main thread to update UI
-                DispatchQueue.main.async {
-                    showInstructions = true
-                }
-
-                // Note: isOnboarding will be set to false after instructions are dismissed
-            } else {
-                // Error haptic feedback
-                HapticFeedback.notificationFeedback(type: .error)
-
-                // Use main thread to update UI
-                DispatchQueue.main.async {
-                    viewModel.errorMessage = "Failed to create user profile"
-                    viewModel.showError = true
-                }
-            }
-        }
-    }
-
+    /// Creates an instruction item with a numbered circle and description
     private func instructionItem(number: String, title: String, description: String) -> some View {
         HStack(alignment: .top, spacing: 15) {
             Text(number)
@@ -365,6 +345,6 @@ struct OnboardingView: View {
 }
 
 #Preview {
+    // Create a preview with a constant binding
     OnboardingView(isOnboarding: .constant(true))
-        .environmentObject(UserViewModel())
 }

@@ -1,3 +1,7 @@
+import SwiftUI
+import PhotosUI
+import AVFoundation
+
 /// A SwiftUI view that wraps a UIKit camera preview view
 struct CameraPreviewView: UIViewRepresentable {
     /// Whether the torch is on

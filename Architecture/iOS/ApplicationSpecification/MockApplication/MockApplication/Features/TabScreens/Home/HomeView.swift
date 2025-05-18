@@ -299,10 +299,11 @@ struct HomeView: View {
             .padding(12)
             .background(Color.white)
             .cornerRadius(10)
-            .shadow(color: Color.black.opacity(Environment(\.colorScheme).wrappedValue == .light ? 0.15 : 0.05),
-                    radius: Environment(\.colorScheme).wrappedValue == .light ? 4 : 2,
+            .shadow(color: Color.black.opacity(0.15),
+                    radius: 4,
                     x: 0,
-                    y: Environment(\.colorScheme).wrappedValue == .light ? 2 : 1)
+                    y: 2)
+            .environment(\.colorScheme, .light) // Force light mode for QR code
 
             // Info and button
             VStack(alignment: .leading, spacing: 10) {
@@ -326,11 +327,7 @@ struct HomeView: View {
                         .foregroundColor(.primary)
                         .padding(.vertical, 5)
                         .padding(.horizontal, 10)
-                        .background(
-                            Environment(\.colorScheme).wrappedValue == .light ?
-                                Color(UIColor.tertiarySystemGroupedBackground) :
-                                Color(UIColor.secondarySystemGroupedBackground)
-                        )
+                        .background(Color(UIColor.tertiarySystemGroupedBackground))
                         .cornerRadius(10)
                 }
                 .hapticFeedback(style: .light)

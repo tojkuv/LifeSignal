@@ -12,6 +12,38 @@ class OnboardingViewModel: ObservableObject {
     /// The user's last name
     @Published var lastName: String = ""
 
+    /// The user's emergency note
+    @Published var emergencyNote: String = ""
+
+    /// Whether the onboarding process is loading
+    @Published var isLoading: Bool = false
+
+    /// The current step in the onboarding process
+    @Published var currentStep: Int = 0
+
+    /// Error message to display
+    @Published var errorMessage: String = ""
+
+    /// Whether to show an error
+    @Published var showError: Bool = false
+
+    /// Whether to show instructions after onboarding
+    @Published var showInstructions: Bool = false
+
+    /// Whether first name field is focused
+    @Published var firstNameFieldFocused: Bool = false
+
+    /// Whether last name field is focused
+    @Published var lastNameFieldFocused: Bool = false
+
+    /// Whether note field is focused
+    @Published var noteFieldFocused: Bool = false
+
+    /// Binding for isOnboarding to communicate with parent view
+    @Published var isOnboarding: Bool = true
+
+    // MARK: - Computed Properties
+
     /// The user's full name (computed from first and last name)
     var name: String {
         let formattedFirstName = formatName(firstName)
@@ -33,22 +65,26 @@ class OnboardingViewModel: ObservableObject {
         return !formatName(firstName).isEmpty && !formatName(lastName).isEmpty
     }
 
-    /// The user's emergency note
-    @Published var emergencyNote: String = ""
+    // MARK: - Mock User Data
 
-    /// Whether the onboarding process is loading
-    @Published var isLoading: Bool = false
+    /// Default check-in interval (24 hours in seconds)
+    private let defaultCheckInInterval: TimeInterval = 24 * 60 * 60
 
-    /// The current step in the onboarding process
-    @Published var currentStep: Int = 0
+    /// Default notification preference (30 min before)
+    private let defaultNotify30MinBefore: Bool = false
 
-    /// Error message to display
-    @Published var errorMessage: String = ""
-
-    /// Whether to show an error
-    @Published var showError: Bool = false
+    /// Default notification preference (2 hours before)
+    private let defaultNotify2HoursBefore: Bool = true
 
     // MARK: - Methods
+
+    /// Initialize the view model
+    init() {
+        // Auto-focus the first name field when initialized
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.firstNameFieldFocused = true
+        }
+    }
 
     /// Complete the onboarding process
     /// - Parameter completion: Completion handler
@@ -58,18 +94,68 @@ class OnboardingViewModel: ObservableObject {
         // Simulate a network delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             self.isLoading = false
+
+            // Save user data to UserDefaults
+            self.saveUserData()
+
+            // Show instructions sheet
+            self.showInstructions = true
+
             completion(true)
+        }
+    }
+
+    /// Save user data to UserDefaults
+    private func saveUserData() {
+        // Save user name and profile description
+        UserDefaults.standard.set(name.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "userName")
+        UserDefaults.standard.set(emergencyNote.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "userProfileDescription")
+
+        // Save default check-in interval and notification preferences
+        let now = Date()
+        UserDefaults.standard.set(defaultCheckInInterval, forKey: "checkInInterval")
+        UserDefaults.standard.set(defaultNotify30MinBefore, forKey: "notify30MinBefore")
+        UserDefaults.standard.set(defaultNotify2HoursBefore, forKey: "notify2HoursBefore")
+        UserDefaults.standard.set(now, forKey: "lastCheckIn")
+    }
+
+    /// Handle instructions sheet dismissal
+    func handleInstructionsDismissal() {
+        // Use a slight delay to ensure the sheet is dismissed before changing isOnboarding
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.isOnboarding = false
+        }
+    }
+
+    /// Handle "Got it" button tap in instructions
+    func handleGotItButtonTap() {
+        // First dismiss the sheet, then mark onboarding as complete
+        showInstructions = false
+
+        // Use a slight delay to ensure the sheet is dismissed before changing isOnboarding
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.isOnboarding = false
         }
     }
 
     /// Move to the next step
     func nextStep() {
         currentStep += 1
+
+        // Focus the note field when moving to the next step
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.noteFieldFocused = true
+        }
     }
 
     /// Move to the previous step
     func previousStep() {
         currentStep -= 1
+
+        // Focus the first name field when going back
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.firstNameFieldFocused = true
+        }
     }
 
     /// Format a name to have proper capitalization

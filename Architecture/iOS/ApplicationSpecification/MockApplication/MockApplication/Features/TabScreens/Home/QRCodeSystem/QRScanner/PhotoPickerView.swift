@@ -1,3 +1,7 @@
+import SwiftUI
+import PhotosUI
+import AVFoundation
+
 /// A SwiftUI view for picking photos
 struct PhotoPickerView: UIViewControllerRepresentable {
     /// The view model for the QR scanner
