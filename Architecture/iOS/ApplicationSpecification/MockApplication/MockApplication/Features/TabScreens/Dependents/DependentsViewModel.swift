@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
 import Combine
+import UIKit
+import AVFoundation
 
 /// View model for the dependents screen
 class DependentsViewModel: ObservableObject {
@@ -8,9 +10,6 @@ class DependentsViewModel: ObservableObject {
 
     /// Whether the QR scanner is showing
     @Published var showQRScanner: Bool = false
-
-    /// Whether the check-in confirmation is showing
-    @Published var showCheckInConfirmation: Bool = false
 
     /// Whether the camera denied alert is showing
     @Published var showCameraDeniedAlert: Bool = false
@@ -30,23 +29,31 @@ class DependentsViewModel: ObservableObject {
     /// The selected sort mode
     @Published var selectedSortMode: SortMode = .countdown
 
-    // MARK: - Private Properties
+    /// Sort mode for the dependents list in the view
+    @Published var displaySortMode: String = "Time Left"
 
-    /// The user view model
-    private var userViewModel: UserViewModel?
+    /// Mock dependents data
+    @Published var dependents: [Contact] = []
+
+    /// Selected contact for detail sheet
+    @Published var selectedContact: Contact? = nil
+
+    /// Show ping alert
+    @Published var showPingAlert: Bool = false
+
+    /// Is ping confirmation
+    @Published var isPingConfirmation: Bool = false
+
+    /// Current contact for ping operations
+    @Published var currentPingContact: Contact? = nil
 
     // MARK: - Initialization
 
     init() {
-        // Initialize with default values
-    }
-
-    // MARK: - Methods
-
-    /// Set the user view model
-    /// - Parameter userViewModel: The user view model
-    func setUserViewModel(_ userViewModel: UserViewModel) {
-        self.userViewModel = userViewModel
+        // Initialize with mock data
+        self.dependents = Contact.mockContacts().filter { $0.isDependent }
+        self.selectedSortMode = .countdown
+        self.displaySortMode = "Time Left"
     }
 
     /// Sort modes for the dependents list
@@ -58,13 +65,11 @@ class DependentsViewModel: ObservableObject {
         var id: String { self.rawValue }
     }
 
+    // MARK: - Methods
+
     /// Get sorted dependents based on the selected sort mode
     /// - Returns: An array of sorted dependents
     func getSortedDependents() -> [Contact] {
-        guard let userViewModel = userViewModel else { return [] }
-
-        let dependents = userViewModel.dependents
-
         // First, check for Sam Parker and update isNonResponsive if needed
         for (index, dependent) in dependents.enumerated() where dependent.name == "Sam Parker" {
             // Check if Sam Parker's check-in has expired
@@ -72,31 +77,26 @@ class DependentsViewModel: ObservableObject {
                 let isExpired = lastCheckIn.addingTimeInterval(interval) < Date()
                 if isExpired && !dependent.isNonResponsive {
                     // Update Sam Parker to be non-responsive
-                    userViewModel.updateContact(id: dependent.id) { contact in
-                        contact.isNonResponsive = true
-                    }
+                    dependents[index].isNonResponsive = true
                 }
             }
         }
 
-        // Get updated dependents after potential changes
-        let updatedDependents = userViewModel.dependents
-
         // First, separate dependents into categories
-        let manualAlertDependents = updatedDependents.filter { $0.manualAlertActive }
+        let manualAlertDependents = dependents.filter { $0.manualAlertActive }
 
         // Split manual alert dependents into pinged and non-pinged
         let manualAlertPinged = manualAlertDependents.filter { $0.hasOutgoingPing }
         let manualAlertNonPinged = manualAlertDependents.filter { !$0.hasOutgoingPing }
 
-        let nonResponsiveDependents = updatedDependents.filter { !$0.manualAlertActive && $0.isNonResponsive }
+        let nonResponsiveDependents = dependents.filter { !$0.manualAlertActive && $0.isNonResponsive }
 
         // Split non-responsive dependents into pinged and non-pinged
         let nonResponsivePinged = nonResponsiveDependents.filter { $0.hasOutgoingPing }
         let nonResponsiveNonPinged = nonResponsiveDependents.filter { !$0.hasOutgoingPing }
 
         // Regular dependents (not in alert or non-responsive)
-        let regularDependents = updatedDependents.filter { !$0.manualAlertActive && !$0.isNonResponsive }
+        let regularDependents = dependents.filter { !$0.manualAlertActive && !$0.isNonResponsive }
 
         // Split regular dependents into pinged and non-pinged
         let regularPinged = regularDependents.filter { $0.hasOutgoingPing }
@@ -161,5 +161,171 @@ class DependentsViewModel: ObservableObject {
     /// Force refresh the view
     func forceRefresh() {
         refreshID = UUID()
+    }
+
+    /// Update the sort mode
+    /// - Parameter mode: The new sort mode
+    func updateSortMode(_ mode: String) {
+        // Update the display sort mode
+        displaySortMode = mode
+
+        // Convert to view model's sort mode
+        switch mode {
+        case "Time Left":
+            selectedSortMode = .countdown
+        case "Name":
+            selectedSortMode = .alphabetical
+        case "Date Added":
+            selectedSortMode = .recentlyAdded
+        default:
+            selectedSortMode = .countdown
+        }
+
+        // Force refresh
+        forceRefresh()
+    }
+
+    /// Ping a dependent
+    /// - Parameter contact: The dependent to ping
+    func pingDependent(_ contact: Contact) {
+        if let index = dependents.firstIndex(where: { $0.id == contact.id }) {
+            dependents[index].hasOutgoingPing = true
+            dependents[index].outgoingPingTimestamp = Date()
+
+            // Force refresh
+            forceRefresh()
+
+            // Set current ping contact
+            currentPingContact = dependents[index]
+        }
+    }
+
+    /// Clear a ping for a contact
+    /// - Parameter contact: The contact to clear the ping for
+    func clearPing(for contact: Contact) {
+        if let index = dependents.firstIndex(where: { $0.id == contact.id }) {
+            dependents[index].hasOutgoingPing = false
+            dependents[index].outgoingPingTimestamp = nil
+
+            // Force refresh
+            forceRefresh()
+
+            // Set current ping contact
+            currentPingContact = dependents[index]
+        }
+    }
+
+    /// Check if a contact's check-in is expired
+    /// - Parameter contact: The contact to check
+    /// - Returns: Whether the contact's check-in is expired
+    func isCheckInExpired(_ contact: Contact) -> Bool {
+        guard let lastCheckIn = contact.lastCheckIn, let interval = contact.checkInInterval else {
+            return false
+        }
+        return lastCheckIn.addingTimeInterval(interval) < Date()
+    }
+
+    /// Get the status color for a contact
+    /// - Parameter contact: The contact to get the status color for
+    /// - Returns: The status color
+    func statusColor(for contact: Contact) -> Color {
+        if contact.manualAlertActive {
+            return .red
+        } else if contact.isNonResponsive || isCheckInExpired(contact) {
+            return Environment(\.colorScheme).wrappedValue == .light ? Color(UIColor.systemOrange) : .yellow
+        } else {
+            return .secondary
+        }
+    }
+
+    /// Get the status text for a contact
+    /// - Parameter contact: The contact to get the status text for
+    /// - Returns: The status text
+    func statusText(for contact: Contact) -> String {
+        if contact.manualAlertActive {
+            return "Alert Active"
+        } else if contact.isNonResponsive || isCheckInExpired(contact) {
+            return "Not responsive"
+        } else {
+            return contact.formattedTimeRemaining
+        }
+    }
+
+    /// Get the card background for a contact
+    /// - Parameter contact: The contact to get the card background for
+    /// - Returns: The card background color
+    func cardBackground(for contact: Contact) -> Color {
+        if contact.manualAlertActive {
+            return Color.red.opacity(0.1)
+        } else if contact.isNonResponsive || isCheckInExpired(contact) {
+            return Environment(\.colorScheme).wrappedValue == .light ?
+                Color.orange.opacity(0.15) : Color.yellow.opacity(0.15)
+        } else {
+            return Color(UIColor.secondarySystemGroupedBackground)
+        }
+    }
+
+    /// Show the ping alert for a contact
+    /// - Parameter contact: The contact to show the ping alert for
+    func showPingAlertFor(_ contact: Contact) {
+        currentPingContact = contact
+        isPingConfirmation = false
+        showPingAlert = true
+    }
+
+    /// Make the appropriate alert based on the current state
+    /// - Returns: The alert to show
+    func makeAlert() -> Alert {
+        guard let contact = currentPingContact else {
+            return Alert(title: Text("Error"), message: Text("No contact selected"), dismissButton: .default(Text("OK")))
+        }
+
+        if isPingConfirmation {
+            return Alert(
+                title: Text("Ping Sent"),
+                message: Text("The contact was successfully pinged."),
+                dismissButton: .default(Text("OK"))
+            )
+        } else if contact.hasOutgoingPing {
+            return makeClearPingAlert(for: contact)
+        } else {
+            return makeSendPingAlert(for: contact)
+        }
+    }
+
+    /// Make an alert for clearing a ping
+    /// - Parameter contact: The contact to clear the ping for
+    /// - Returns: The alert to show
+    private func makeClearPingAlert(for contact: Contact) -> Alert {
+        Alert(
+            title: Text("Clear Ping"),
+            message: Text("Do you want to clear the pending ping to this contact?"),
+            primaryButton: .default(Text("Clear")) {
+                self.clearPing(for: contact)
+                print("Clearing ping for contact: \(contact.name)")
+            },
+            secondaryButton: .cancel()
+        )
+    }
+
+    /// Make an alert for sending a ping
+    /// - Parameter contact: The contact to send a ping to
+    /// - Returns: The alert to show
+    private func makeSendPingAlert(for contact: Contact) -> Alert {
+        Alert(
+            title: Text("Send Ping"),
+            message: Text("Are you sure you want to ping this contact?"),
+            primaryButton: .default(Text("Ping")) {
+                self.pingDependent(contact)
+                print("Setting ping for contact: \(contact.name)")
+
+                // Show confirmation alert
+                self.isPingConfirmation = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    self.showPingAlert = true
+                }
+            },
+            secondaryButton: .cancel()
+        )
     }
 }
