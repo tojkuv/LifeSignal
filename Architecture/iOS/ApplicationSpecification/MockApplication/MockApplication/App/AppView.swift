@@ -2,7 +2,6 @@ import SwiftUI
 
 /// The main app view that handles authentication state
 struct AppView: View {
-    @EnvironmentObject private var userViewModel: UserViewModel
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
@@ -39,6 +38,5 @@ struct AppView: View {
 
 #Preview {
     AppView()
-        .environmentObject(UserViewModel())
         .environmentObject(AppState())
 }

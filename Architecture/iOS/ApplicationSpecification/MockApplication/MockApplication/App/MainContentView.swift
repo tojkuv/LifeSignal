@@ -9,12 +9,11 @@ import SwiftUI
 
 // This is a placeholder view that's not used in the app
 struct MainContentView: View {
-    @EnvironmentObject private var userViewModel: UserViewModel
     @EnvironmentObject private var appState: AppState
-    @State private var selectedTab = 0
+    @StateObject private var viewModel = MainTabViewModel(initialTab: 0)
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $viewModel.selectedTab) {
             // Home tab
             NavigationStack {
                 Text("Home View")
@@ -35,8 +34,8 @@ struct MainContentView: View {
             .tabItem {
                 Label("Responders", systemImage: "person.2.fill")
             }
-            .if(userViewModel.pendingPingsCount > 0) { view in
-                view.badge(userViewModel.pendingPingsCount)
+            .if(viewModel.pendingPingsCount > 0) { view in
+                view.badge(viewModel.pendingPingsCount)
             }
             .tag(1)
 
@@ -60,8 +59,8 @@ struct MainContentView: View {
             .tabItem {
                 Label("Dependents", systemImage: "person.3.fill")
             }
-            .if(userViewModel.nonResponsiveDependentsCount > 0) { view in
-                view.badge(userViewModel.nonResponsiveDependentsCount)
+            .if(viewModel.nonResponsiveDependentsCount > 0) { view in
+                view.badge(viewModel.nonResponsiveDependentsCount)
             }
             .tag(3)
 
@@ -83,6 +82,5 @@ struct MainContentView: View {
 
 #Preview {
     MainContentView()
-        .environmentObject(UserViewModel())
         .environmentObject(AppState())
 }

@@ -16,7 +16,7 @@ struct ProfileView: View {
 
     var body: some View {
         ScrollView {
-            VStack {
+            VStack(spacing: 16) {
                 // Profile Header
                 VStack(spacing: 16) {
                     CommonAvatarView(
@@ -506,6 +506,12 @@ struct ProfileView: View {
             .onChange(of: viewModel.verificationCodeFieldFocused) { newValue in
                 verificationCodeFieldFocused = newValue
             }
+
+            // Add extra padding at the bottom to ensure content doesn't overlap with tab bar
+            Spacer()
+                .frame(height: 20)
         }
+        .background(Color(UIColor.systemGroupedBackground))
+        .edgesIgnoringSafeArea(.bottom) // Extend background to bottom edge
     }
 }

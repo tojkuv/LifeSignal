@@ -122,6 +122,15 @@ class ContactDetailsSheetViewModel: ObservableObject {
                 return
             }
 
+            // Get the current contact and store previous role values
+            guard let currentContact = contact else {
+                print("Cannot update roles: contact not found")
+                return
+            }
+
+            let wasResponder = currentContact.isResponder
+            let wasDependent = currentContact.isDependent
+
             // Apply the change
             if changed == .responder {
                 isResponder = newValue
@@ -135,17 +144,14 @@ class ContactDetailsSheetViewModel: ObservableObject {
             // Update the contact in our local contacts array
             updateContactRoles()
 
-            // Show a silent notification for the role change
-            if let contact = contact {
-                let roleName = changed == .responder ? "Responder" : "Dependent"
-                let action = newValue ? "added" : "removed"
-
-                NotificationManager.shared.showContactRoleToggleNotification(
-                    contactName: contact.name,
-                    isResponder: isResponder,
-                    isDependent: isDependent
-                )
-            }
+            // Show a silent notification for the role change with previous role values
+            NotificationManager.shared.showContactRoleToggleNotification(
+                contactName: currentContact.name,
+                isResponder: isResponder,
+                isDependent: isDependent,
+                wasResponder: wasResponder,
+                wasDependent: wasDependent
+            )
         }
     }
 

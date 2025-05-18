@@ -29,10 +29,16 @@ struct DependentsView: View {
                         dependentCardView(for: dependent)
                     }
                 }
+
+                // Add extra padding at the bottom to ensure content doesn't overlap with tab bar
+                Spacer()
+                    .frame(height: 20)
             }
             .padding(.horizontal)
+            .padding(.bottom, 70) // Add padding to ensure content doesn't overlap with tab bar
         }
         .background(Color(UIColor.systemGroupedBackground))
+        .edgesIgnoringSafeArea(.bottom) // Extend background to bottom edge
         .onAppear {
             // Force refresh when view appears to ensure sort is applied
             viewModel.forceRefresh()
@@ -86,7 +92,7 @@ struct DependentsView: View {
     /// - Returns: A view for the contact card
     private func dependentCardView(for contact: Contact) -> some View {
         cardContent(for: contact)
-            .padding()
+            .padding() // This padding is inside the card
             .background(viewModel.cardBackground(for: contact))
             .cornerRadius(12)
             .modifier(CardFlashingAnimation(isActive: contact.manualAlertActive))

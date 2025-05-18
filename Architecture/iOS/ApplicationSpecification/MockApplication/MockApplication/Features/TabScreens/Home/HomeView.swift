@@ -15,9 +15,15 @@ struct HomeView: View {
 
                 // Settings Section
                 settingsSection
+
+                // Add extra padding at the bottom to ensure content doesn't overlap with tab bar
+                Spacer()
+                    .frame(height: 20)
             }
+            .padding(.bottom, 50) // Add padding to ensure content doesn't overlap with tab bar
         }
         .background(Color(UIColor.systemGroupedBackground))
+        .edgesIgnoringSafeArea(.bottom) // Extend background to bottom edge
         .navigationTitle("Home")
         .onAppear {
             // Generate QR code when the view appears

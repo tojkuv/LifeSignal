@@ -15,7 +15,7 @@ class RespondersViewModel: ObservableObject {
     @Published var responders: [Contact] = []
 
     /// Selected contact for detail sheet
-    @Published var selectedContactID: ContactID? = nil
+    @Published var selectedContact: Contact? = nil
 
     // MARK: - Initialization
 

@@ -18,10 +18,16 @@ struct CheckInView: View {
 
                 // Check-in button
                 checkInButtonView
+
+                // Add extra padding at the bottom to ensure content doesn't overlap with tab bar
+                Spacer()
+                    .frame(height: 20)
             }
             .padding(.horizontal)
+            .padding(.bottom, 50) // Add padding to ensure content doesn't overlap with tab bar
         }
         .background(Color(UIColor.systemGroupedBackground))
+        .edgesIgnoringSafeArea(.bottom) // Extend background to bottom edge
         .onAppear {
             // Check if alert is already active when view appears
             viewModel.checkAlertStatus()

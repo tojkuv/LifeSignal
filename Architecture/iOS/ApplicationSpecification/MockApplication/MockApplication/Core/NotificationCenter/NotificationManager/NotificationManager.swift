@@ -272,24 +272,61 @@ class NotificationManager {
     /// Show a notification for contact role toggle
     /// - Parameters:
     ///   - contactName: The name of the contact
-    ///   - isResponder: Whether the contact is a responder
-    ///   - isDependent: Whether the contact is a dependent
-    func showContactRoleToggleNotification(contactName: String, isResponder: Bool, isDependent: Bool) {
-        var roleText = ""
+    ///   - isResponder: Whether the contact is now a responder
+    ///   - isDependent: Whether the contact is now a dependent
+    ///   - wasResponder: Whether the contact was previously a responder
+    ///   - wasDependent: Whether the contact was previously a dependent
+    func showContactRoleToggleNotification(
+        contactName: String,
+        isResponder: Bool,
+        isDependent: Bool,
+        wasResponder: Bool = false,
+        wasDependent: Bool = false
+    ) {
+        // Determine which role changed
+        let responderChanged = isResponder != wasResponder
+        let dependentChanged = isDependent != wasDependent
 
-        if isResponder && isDependent {
-            roleText = "responder and dependent"
-        } else if isResponder {
-            roleText = "responder"
-        } else if isDependent {
-            roleText = "dependent"
+        // Create appropriate message based on the specific role change
+        var title = "Contact Role Updated"
+        var body = ""
+
+        if responderChanged && dependentChanged {
+            // Both roles changed
+            if isResponder && isDependent {
+                body = "\(contactName) is now both a responder and a dependent."
+            } else if !isResponder && !isDependent {
+                body = "\(contactName) is no longer a responder or a dependent."
+            } else {
+                // This shouldn't happen in normal usage (toggling both roles in opposite directions)
+                body = "\(contactName)'s roles have been updated."
+            }
+        } else if responderChanged {
+            // Only responder role changed
+            if isResponder {
+                title = "Responder Added"
+                body = "\(contactName) can now respond to your alerts."
+            } else {
+                title = "Responder Removed"
+                body = "\(contactName) will no longer respond to your alerts."
+            }
+        } else if dependentChanged {
+            // Only dependent role changed
+            if isDependent {
+                title = "Dependent Added"
+                body = "You can now check on \(contactName)."
+            } else {
+                title = "Dependent Removed"
+                body = "You will no longer check on \(contactName)."
+            }
         } else {
-            roleText = "contact (no roles)"
+            // No role actually changed (shouldn't happen)
+            body = "\(contactName)'s roles remain unchanged."
         }
 
         showSilentLocalNotification(
-            title: "Contact Role Updated",
-            body: "\(contactName) is now a \(roleText).",
+            title: title,
+            body: body,
             type: .contactRoleChanged
         )
     }

@@ -11,14 +11,13 @@ import UserNotifications
 @main
 struct MockApplicationApp: App {
     // Create shared view models for the app
-    @StateObject private var userViewModel = UserViewModel()
     @StateObject private var appState = AppState()
 
     init() {
         // Set up notification delegate - this is fine in init() as it's not accessing @StateObject
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
 
-        // Configure default values for UserViewModel and AppState
+        // Configure default values for AppState
         // This is done using a separate function to avoid accessing @StateObject directly
         configureDefaultValues()
     }
@@ -26,7 +25,6 @@ struct MockApplicationApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environmentObject(userViewModel)
                 .environmentObject(appState)
                 .onAppear {
                     // This is the proper place to configure the view models
@@ -55,25 +53,6 @@ struct MockApplicationApp: App {
         appState.isAuthenticated = UserDefaults.standard.bool(forKey: "isAuthenticated")
         appState.needsOnboarding = UserDefaults.standard.bool(forKey: "needsOnboarding")
 
-        // Initialize user data
-        if let name = UserDefaults.standard.string(forKey: "userName") {
-            userViewModel.name = name
-        } else {
-            userViewModel.name = "Sarah Johnson"
-        }
-
-        userViewModel.generateNewQRCode() // Generate a QR code ID
-
-        if let interval = UserDefaults.standard.object(forKey: "checkInInterval") as? TimeInterval {
-            userViewModel.checkInInterval = interval
-        } else {
-            userViewModel.checkInInterval = 8 * 3600 // 8 hours
-        }
-
-        if let lastCheckIn = UserDefaults.standard.object(forKey: "lastCheckIn") as? Date {
-            userViewModel.lastCheckIn = lastCheckIn
-        } else {
-            userViewModel.lastCheckIn = Date()
-        }
+        // Note: User data initialization has been moved to CheckInViewModel
     }
 }

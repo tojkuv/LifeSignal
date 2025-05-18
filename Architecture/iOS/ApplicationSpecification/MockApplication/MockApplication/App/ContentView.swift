@@ -5,7 +5,6 @@ import Combine
 
 /// The main content view of the app
 struct ContentView: View {
-    @EnvironmentObject private var userViewModel: UserViewModel
     @EnvironmentObject private var appState: AppState
 
     // Cancellable for notification observation
@@ -23,8 +22,7 @@ struct ContentView: View {
             signOutCancellable = NotificationCenter.default
                 .publisher(for: NSNotification.Name("UserSignedOut"))
                 .sink { _ in
-                    // Reset user data when signed out
-                    userViewModel.resetUserData()
+                    // Reset user data when signed out - removed userViewModel.resetUserData()
                     print("ContentView received UserSignedOut notification")
                 }
         }
@@ -41,6 +39,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .environmentObject(UserViewModel())
         .environmentObject(AppState())
 }

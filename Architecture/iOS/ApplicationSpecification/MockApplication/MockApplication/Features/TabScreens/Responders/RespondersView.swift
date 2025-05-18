@@ -39,10 +39,16 @@ struct RespondersView: View {
                         ResponderCardView(contact: responder, refreshID: viewModel.refreshID, viewModel: viewModel)
                     }
                 }
+
+                // Add extra padding at the bottom to ensure content doesn't overlap with tab bar
+                Spacer()
+                    .frame(height: 20)
             }
             .padding(.horizontal)
+            .padding(.bottom, 70) // Add padding to ensure content doesn't overlap with tab bar
         }
         .background(Color(UIColor.systemGroupedBackground))
+        .edgesIgnoringSafeArea(.bottom) // Extend background to bottom edge
         .onAppear {
             // Add observer for refresh notifications
             NotificationCenter.default.addObserver(forName: NSNotification.Name("RefreshRespondersView"), object: nil, queue: .main) { _ in
@@ -92,7 +98,9 @@ struct RespondersView: View {
                 secondaryButton: .cancel()
             )
         }
-
+        .sheet(item: $viewModel.selectedContact) { contact in
+            ContactDetailsSheetView(contact: contact)
+        }
     }
 }
 
@@ -100,7 +108,6 @@ struct ResponderCardView: View {
     let contact: Contact
     let refreshID: UUID // Used to force refresh when ping state changes
     let viewModel: RespondersViewModel
-    @State private var selectedContactID: ContactID?
 
     var statusText: String {
         if contact.hasIncomingPing, let pingTime = contact.incomingPingTimestamp {
@@ -165,19 +172,14 @@ struct ResponderCardView: View {
                     .accessibilityLabel("Ping notification from \(contact.name)")
             }
         }
-        .padding()
+        .padding() // This padding is inside the card
         .background(
             contact.hasIncomingPing ? Color.blue.opacity(0.1) : Color(UIColor.secondarySystemGroupedBackground)
         )
         .cornerRadius(12)
         .onTapGesture {
             HapticFeedback.triggerHaptic()
-            selectedContactID = ContactID(id: contact.id)
-        }
-        .sheet(item: $selectedContactID) { id in
-            if let contact = viewModel.responders.first(where: { $0.id == id.id }) {
-                ContactDetailsSheetView(contact: contact)
-            }
+            viewModel.selectedContact = contact
         }
     }
 }
