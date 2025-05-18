@@ -3,36 +3,23 @@ import SwiftUI
 
 /// A view for the unified notification center
 struct NotificationCenterView: View {
-    @EnvironmentObject private var userViewModel: UserViewModel
+    // Removed userViewModel dependency
     @StateObject private var viewModel = NotificationCenterViewModel()
-    @State private var selectedFilter: NotificationType? = nil
+    // Moved selectedFilter to view model
     @Environment(\.presentationMode) private var presentationMode
 
-    /// Filtered notifications based on the selected filter
-    private var filteredNotifications: [NotificationEvent] {
-        guard let filter = selectedFilter else {
-            return viewModel.notificationHistory
-        }
-
-        // Special case for Alerts filter - include both manual alerts and non-responsive notifications
-        if filter == .manualAlert {
-            return viewModel.notificationHistory.filter { $0.type == .manualAlert || $0.type == .nonResponsive }
-        }
-
-        return viewModel.notificationHistory.filter { $0.type == filter }
-    }
+    // Moved filteredNotifications to view model
 
     /// Create a filter button for the given type
     /// - Parameters:
     ///   - type: The notification type to filter by (nil for all)
     ///   - label: The button label
     /// - Returns: A button view
-    @ViewBuilder
     private func filterButton(for type: NotificationType?, label: String) -> some View {
         Button(action: {
             HapticFeedback.selectionFeedback()
             withAnimation {
-                selectedFilter = type
+                viewModel.setFilter(type)
             }
         }) {
             Text(label)
@@ -40,12 +27,12 @@ struct NotificationCenterView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(
-                    selectedFilter == type ?
+                    viewModel.selectedFilter == type ?
                         Color.blue :
                         Color(UIColor.systemBackground)
                 )
                 .foregroundColor(
-                    selectedFilter == type ?
+                    viewModel.selectedFilter == type ?
                         .white :
                         .primary
                 )
@@ -85,7 +72,7 @@ struct NotificationCenterView: View {
                 .background(Color(UIColor.secondarySystemBackground))
 
                 // Notification list
-                if filteredNotifications.isEmpty {
+                if viewModel.filteredNotifications.isEmpty {
                     VStack(spacing: 16) {
                         Spacer()
 
@@ -102,7 +89,7 @@ struct NotificationCenterView: View {
                     .frame(maxWidth: .infinity)
                 } else {
                     List {
-                        ForEach(filteredNotifications) { notification in
+                        ForEach(viewModel.filteredNotifications) { notification in
                             NotificationHistoryRow(notification: notification)
                                 .listRowSeparator(.hidden)
                                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
@@ -116,8 +103,9 @@ struct NotificationCenterView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(action: {
-                        HapticFeedback.triggerHaptic()
-                        presentationMode.wrappedValue.dismiss()
+                        viewModel.dismiss {
+                            presentationMode.wrappedValue.dismiss()
+                        }
                     }) {
                         HStack(spacing: 5) {
                             Image(systemName: "chevron.left")
@@ -135,9 +123,90 @@ struct NotificationCenterView: View {
     }
 }
 
-struct NotificationCenterView_Previews: PreviewProvider {
-    static var previews: some View {
-        NotificationCenterView()
-            .environmentObject(UserViewModel())
+/// A row for displaying a notification history item
+struct NotificationHistoryRow: View {
+    let notification: NotificationEvent
+
+    /// Get the color for the notification type
+    private var notificationColor: Color {
+        switch notification.type {
+        case .manualAlert:
+            return .red
+        case .nonResponsive:
+            return .orange
+        case .checkInReminder:
+            return .green
+        case .pingNotification:
+            return .blue
+        case .contactAdded:
+            return .purple
+        case .contactRemoved:
+            return .pink
+        case .contactRoleChanged:
+            return .teal
+        case .qrCodeNotification:
+            return .indigo
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Notification content
+            HStack(alignment: .top, spacing: 12) {
+                // Icon with color based on notification type
+                Image(systemName: iconForType(notification.type))
+                    .foregroundColor(notificationColor)
+                    .font(.system(size: 18))
+                    .frame(width: 24, height: 24)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(notification.title)
+                            .font(.headline)
+
+                        Spacer()
+
+                        Text(notification.timestamp, style: .relative)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Text(notification.body)
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding()
+            .background(Color(UIColor.systemBackground))
+            .cornerRadius(8)
+
+            // Divider (will appear between items)
+            Divider()
+                .padding(.vertical, 4)
+        }
+    }
+
+    /// Get the icon for the notification type
+    /// - Parameter type: The notification type
+    /// - Returns: The system image name
+    private func iconForType(_ type: NotificationType) -> String {
+        switch type {
+        case .manualAlert:
+            return "exclamationmark.octagon.fill"
+        case .nonResponsive:
+            return "person.badge.clock.fill"
+        case .checkInReminder:
+            return "checkmark.circle.fill"
+        case .pingNotification:
+            return "bell.fill"
+        case .contactAdded:
+            return "person.badge.plus.fill"
+        case .contactRemoved:
+            return "person.badge.minus.fill"
+        case .contactRoleChanged:
+            return "person.2.badge.gearshape.fill"
+        case .qrCodeNotification:
+            return "qrcode.fill"
+        }
     }
 }

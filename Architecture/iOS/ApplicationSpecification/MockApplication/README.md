@@ -58,7 +58,7 @@ MockApplication/
     │   ├── QRCode/ (QR code generation)
     │   └── QRScanner/ (QR code scanning)
     │
-    └── ContactDetailsSheet/ (Contact details sheet)
+    └── ContactDetailsSheetView/ (Contact details sheet)
 ```
 
 ## Key Components

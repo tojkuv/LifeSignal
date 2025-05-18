@@ -69,7 +69,6 @@ struct RespondersView: View {
                 }
             }
             .padding(.horizontal)
-            .padding(.vertical, 16)
         }
         .background(Color(UIColor.systemGroupedBackground))
         .onAppear {
@@ -231,7 +230,7 @@ struct ResponderCardView: View {
         }
         .sheet(item: $selectedContactID) { id in
             if let contact = userViewModel.contacts.first(where: { $0.id == id.id }) {
-                ContactDetailsSheet(contact: contact)
+                ContactDetailsSheetView(contact: contact)
             }
         }
     }

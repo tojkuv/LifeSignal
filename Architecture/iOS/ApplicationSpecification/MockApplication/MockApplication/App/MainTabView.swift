@@ -111,12 +111,3 @@ struct MainTabView: View {
         }
     }
 }
-
-#Preview {
-    let userViewModel = UserViewModel()
-    let appState = AppState()
-
-    return MainTabView()
-        .environmentObject(userViewModel)
-        .environmentObject(appState)
-}

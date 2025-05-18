@@ -50,7 +50,7 @@ struct Contact: Identifiable, Equatable, Sendable {
     /// The check-in interval in seconds
     var checkInInterval: TimeInterval? = 24 * 60 * 60 // Default to 24 hours
 
-    /// Alias for checkInInterval to match ContactDetailsSheet usage
+    /// Alias for checkInInterval to match ContactDetailsSheetView usage
     var interval: TimeInterval? { checkInInterval }
 
     // Removed duplicate manualAlertActive property

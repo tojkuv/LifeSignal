@@ -36,7 +36,7 @@ struct AppFeature {
         var error: String? = nil
         var isLoading: Bool = false
         
-        @Presents var contactDetails: ContactDetailsSheetFeature.State?
+        @Presents var contactDetails: ContactDetailsSheetViewFeature.State?
     }
     
     // ...
@@ -54,7 +54,7 @@ enum Action: Equatable, Sendable {
     case signOut
     case setError(String?)
     case setLoading(Bool)
-    case contactDetails(PresentationAction<ContactDetailsSheetFeature.Action>)
+    case contactDetails(PresentationAction<ContactDetailsSheetViewFeature.Action>)
 }
 ```
 

@@ -12,6 +12,23 @@ class NotificationCenterViewModel: ObservableObject {
     /// Whether the view model is loading
     @Published var isLoading: Bool = false
 
+    /// The currently selected filter
+    @Published var selectedFilter: NotificationType? = nil
+
+    /// Filtered notifications based on the selected filter
+    var filteredNotifications: [NotificationEvent] {
+        guard let filter = selectedFilter else {
+            return notificationHistory
+        }
+
+        // Special case for Alerts filter - include both manual alerts and non-responsive notifications
+        if filter == .manualAlert {
+            return notificationHistory.filter { $0.type == .manualAlert || $0.type == .nonResponsive }
+        }
+
+        return notificationHistory.filter { $0.type == filter }
+    }
+
     // MARK: - Private Properties
 
     /// The user defaults key for notification history
@@ -237,5 +254,18 @@ class NotificationCenterViewModel: ObservableObject {
 
         notificationHistory.insert(newEvent, at: 0)
         saveNotifications()
+    }
+
+    /// Set the selected filter
+    /// - Parameter filter: The notification type to filter by (nil for all)
+    func setFilter(_ filter: NotificationType?) {
+        selectedFilter = filter
+    }
+
+    /// Dismiss the notification center
+    func dismiss(completion: @escaping () -> Void) {
+        // Trigger haptic feedback
+        HapticFeedback.triggerHaptic()
+        completion()
     }
 }

@@ -69,7 +69,6 @@ struct DependentsView: View {
                 }
             }
             .padding(.horizontal)
-            .padding(.vertical, 16)
         }
         .background(Color(UIColor.systemGroupedBackground))
         .onAppear {
@@ -201,10 +200,10 @@ struct DependentCardView: View {
 
     var statusColor: Color {
         if contact.manualAlertActive {
-            // Match ContactDetailsSheet exactly
+            // Match ContactDetailsSheetView exactly
             return .red
         } else if contact.isNonResponsive || isCheckInExpired(contact) {
-            // Match ContactDetailsSheet exactly
+            // Match ContactDetailsSheetView exactly
             return Environment(\.colorScheme).wrappedValue == .light ? Color(UIColor.systemOrange) : .yellow
         } else {
             return .secondary
@@ -234,7 +233,7 @@ struct DependentCardView: View {
             }
             .sheet(item: $selectedContactID) { id in
                 if let contact = userViewModel.contacts.first(where: { $0.id == id.id }) {
-                    ContactDetailsSheet(contact: contact)
+                    ContactDetailsSheetView(contact: contact)
                 }
             }
             .alert(isPresented: $showPingAlert) {
@@ -311,10 +310,10 @@ struct DependentCardView: View {
     @ViewBuilder
     private var cardBackground: some View {
         if contact.manualAlertActive {
-            // Match ContactDetailsSheet exactly
+            // Match ContactDetailsSheetView exactly
             Color.red.opacity(0.1)
         } else if contact.isNonResponsive || isCheckInExpired(contact) {
-            // Match ContactDetailsSheet exactly
+            // Match ContactDetailsSheetView exactly
             Environment(\.colorScheme).wrappedValue == .light ?
                 Color.orange.opacity(0.15) : Color.yellow.opacity(0.15)
         } else {

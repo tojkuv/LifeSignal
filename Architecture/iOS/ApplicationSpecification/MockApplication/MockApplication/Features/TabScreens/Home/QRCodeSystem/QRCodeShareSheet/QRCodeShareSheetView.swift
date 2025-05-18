@@ -32,7 +32,7 @@ struct QRCodeShareSheetView: View {
         .background(Color(UIColor.systemGroupedBackground))
         .sheet(isPresented: $viewModel.isShareSheetPresented) {
             if let image = viewModel.qrCodeImage {
-                QRCodeShareSheet(items: [image])
+                ActivityShareSheet(items: [image])
             }
         }
         .alert("Reset QR Code", isPresented: $viewModel.isRefreshAlertPresented) {
@@ -111,31 +111,5 @@ struct QRCodeShareSheetView: View {
                 .foregroundColor(.blue)
         }
         .padding(.bottom)
-    }
-}
-
-/// A UIViewControllerRepresentable for sharing content
-struct QRCodeShareSheet: UIViewControllerRepresentable {
-    /// The items to share
-    let items: [Any]
-
-    /// Create the UIActivityViewController
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
-        return controller
-    }
-
-    /// Update the UIActivityViewController (not needed)
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
-
-/// Preview provider for QRCodeShareSheetView
-struct QRCodeShareSheetView_Previews: PreviewProvider {
-    static var previews: some View {
-        // Create a view with a custom view model for preview purposes
-        let view = QRCodeShareSheetView()
-
-        // In a real implementation, the presenting view would set the onDismiss callback
-        return view
     }
 }
