@@ -19,12 +19,7 @@ struct DependentsView: View {
 
     // State variables
     @State private var refreshID = UUID()
-    @State private var showQRScanner = false
-    @State private var showCameraDeniedAlert = false
-    @State private var showContactAddedAlert = false
     @State private var showCheckInConfirmation = false
-    @State private var pendingScannedCode: String? = nil
-    @State private var newContact: Contact? = nil
     @State private var sortMode: SortMode = .timeLeft
 
     // Debug state to track dependent count
@@ -135,51 +130,7 @@ struct DependentsView: View {
                 .hapticFeedback(style: .light)
             }
         }
-        .sheet(isPresented: $showQRScanner) {
-            // Use our new QRScannerView from the QRCodeSystem feature
-            QRScannerView { result in
-                pendingScannedCode = result
-                showQRScanner = false
-                // Directly create contact and show Add Contact sheet
-                if let code = pendingScannedCode {
-                    newContact = Contact(
-                        id: UUID().uuidString,
-                        name: "Jordan Taylor",
-                        phone: "555-123-4567",
-                        qrCodeId: code,
-                        lastCheckIn: Date(),
-                        note: "I work night shifts at City Hospital (7PM-7AM). If no response, contact my supervisor Dr. Smith at 555-999-8888. I have a service dog named Max who stays with me. Emergency contacts: Sister Amy (555-777-4444), Building security (555-666-5555). I have a heart condition and take medication daily.",
-                        manualAlertActive: false,
-                        isNonResponsive: false,
-                        hasIncomingPing: false,
-                        incomingPingTimestamp: nil,
-                        isResponder: false,
-                        isDependent: true,
-                        hasOutgoingPing: false,
-                        outgoingPingTimestamp: nil,
-                        checkInInterval: 24 * 60 * 60,
-                        manualAlertTimestamp: nil
-                    )
-                    pendingScannedCode = nil
-                }
-            }
-        }
-        .sheet(item: $newContact, onDismiss: {
-            newContact = nil
-        }) { contact in
-            // Use our new AddContactSheetView from the QRCodeSystem feature
-            AddContactSheetView(
-                qrCodeId: contact.qrCodeId,
-                onAddContact: { confirmedContact in
-                    userViewModel.contacts.append(confirmedContact)
-                    // Show alert after sheet closes
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        showContactAddedAlert = true
-                    }
-                },
-                onClose: { newContact = nil }
-            )
-        }
+
 
         .alert(isPresented: $showCheckInConfirmation) {
             Alert(
@@ -191,20 +142,7 @@ struct DependentsView: View {
                 secondaryButton: .cancel()
             )
         }
-        .alert(isPresented: $showCameraDeniedAlert) {
-            Alert(
-                title: Text("Camera Access Denied"),
-                message: Text("Please enable camera access in Settings to scan QR codes."),
-                dismissButton: .default(Text("OK"))
-            )
-        }
-        .alert(isPresented: $showContactAddedAlert) {
-            Alert(
-                title: Text("Contact Added"),
-                message: Text("The contact was successfully added."),
-                dismissButton: .default(Text("OK"))
-            )
-        }
+
         .onAppear {
             // Sync view model with user view model
             viewModel.setUserViewModel(userViewModel)

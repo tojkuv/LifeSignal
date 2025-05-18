@@ -364,6 +364,14 @@ class NotificationManager {
         )
     }
 
+    /// Show a notification when notification settings are updated
+    func showNotificationSettingsUpdatedNotification() {
+        showFeedbackNotification(
+            title: "Notification Settings Updated",
+            body: "Your notification settings have been successfully updated."
+        )
+    }
+
     /// Show a notification for adding a contact
     /// - Parameter contactName: The name of the contact being added
     func showContactAddedNotification(contactName: String) {

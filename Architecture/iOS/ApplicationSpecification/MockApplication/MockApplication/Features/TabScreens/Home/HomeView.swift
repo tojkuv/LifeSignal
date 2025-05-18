@@ -2,60 +2,10 @@ import SwiftUI
 import Foundation
 import UIKit
 import AVFoundation
-
-// Import QRCodeSystem components
 import PhotosUI
 
-// Import HapticFeedback
-
-
 struct HomeView: View {
-    @EnvironmentObject private var userViewModel: UserViewModel
-    @State private var showQRScanner = false
-    @State private var showIntervalPicker = false
-    @State private var showInstructions = false
-    @State private var showCheckInConfirmation = false
-    @State private var showShareSheet = false
-    @State private var qrCodeImage: UIImage? = nil
-    @State private var isImageReady = false
-    @State private var isGeneratingImage = false
-    @State private var showCameraDeniedAlert = false
-    @State private var newContact: Contact? = nil
-    @State private var pendingScannedCode: String? = nil
-    @State private var shareImage: UIImage? = nil
-    @State private var showContactAddedAlert = false
-    @State private var selectedQRDesign: QRCodeDesign = .standard
-    @State private var showResetQRConfirmation = false
-    @State private var showIntervalChangeConfirmation = false
-    @State private var pendingIntervalChange: TimeInterval? = nil
-
-    func prepareForSharing(completion: @escaping () -> Void = {}) {
-        if isGeneratingImage { return }
-
-        isGeneratingImage = true
-
-        // Since QRCodeShareSheetViewModel is @MainActor, we need to use Task
-        Task {
-            // Create a QRCodeShareSheetViewModel with the user's information on the main actor
-            await MainActor.run {
-                let shareSheetViewModel = QRCodeShareSheetViewModel(
-                    name: userViewModel.name,
-                    qrCodeId: userViewModel.qrCodeId,
-                    subtitle: "LifeSignal contact",
-                    footer: "Use LifeSignal's QR code scanner to add this contact"
-                )
-
-                // Generate the shareable image using the view model
-                shareSheetViewModel.generateShareableImage { image in
-                    // We're already on the main thread due to @MainActor
-                    // No need for [weak self] in a struct
-                    self.shareImage = image
-                    self.isGeneratingImage = false
-                    completion()
-                }
-            }
-        }
-    }
+    @StateObject private var viewModel = HomeViewModel()
 
     var body: some View {
         ScrollView {
@@ -66,78 +16,61 @@ struct HomeView: View {
                 // Settings Section
                 settingsSection
             }
-            .padding(.vertical)
         }
         .background(Color(UIColor.systemGroupedBackground))
         .navigationTitle("Home")
-        .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            // Prepare the QR code image when the view appears
-            prepareForSharing()
+            // Generate QR code when the view appears
+            viewModel.generateQRCode()
         }
-        .sheet(isPresented: $showQRScanner) {
-            QRScannerView(onScanned: { code in
-                pendingScannedCode = code
-                showQRScanner = false
-                // Process scanned code and directly show the Add Contact sheet
-                if let code = pendingScannedCode {
-                    newContact = Contact(
-                        id: UUID().uuidString,
-                        name: "New Contact",
-                        phone: "",
-                        qrCodeId: code,
-                        lastCheckIn: Date(),
-                        note: "",
-                        manualAlertActive: false,
-                        isNonResponsive: false,
-                        hasIncomingPing: false,
-                        incomingPingTimestamp: nil,
-                        isResponder: true,
-                        isDependent: false,
-                        hasOutgoingPing: false,
-                        outgoingPingTimestamp: nil,
-                        checkInInterval: 24 * 60 * 60,
-                        manualAlertTimestamp: nil
-                    )
-                }
-            })
+
+        // QR Scanner Sheet
+        .sheet(isPresented: $viewModel.showQRScanner) {
+            QRScannerView()
         }
-        .sheet(isPresented: $showIntervalPicker) {
-            IntervalPickerView(
-                interval: userViewModel.checkInInterval,
-                onSave: { interval in
-                    // Apply the interval change directly without confirmation
-                    userViewModel.checkInInterval = interval
-                    showIntervalPicker = false
-                }
-            )
+
+        // Interval Picker Sheet
+        .sheet(isPresented: $viewModel.showIntervalPicker) {
+            intervalPickerView()
             .presentationDetents([.medium])
         }
-        .alert("Change Notification Setting?", isPresented: $showIntervalChangeConfirmation) {
+
+        // Instructions Sheet
+        .sheet(isPresented: $viewModel.showInstructions) {
+            instructionsView
+        }
+
+        // Share Sheet
+        .sheet(isPresented: $viewModel.showShareSheet) {
+            if let shareImage = viewModel.shareableImage {
+                ActivityShareSheet(items: ["My LifeSignal QR Code", shareImage])
+            }
+        }
+
+
+
+        // Notification Setting Change Alert
+        .alert("Change Notification Setting?", isPresented: $viewModel.showIntervalChangeConfirmation) {
             Button("Cancel", role: .cancel) {
-                pendingIntervalChange = nil
+                viewModel.pendingIntervalChange = nil
             }
             Button("Change") {
-                if let interval = pendingIntervalChange {
+                if let interval = viewModel.pendingIntervalChange {
                     switch Int(interval) {
                     case 0: // Disabled
-                        userViewModel.notificationsEnabled = false
+                        viewModel.updateNotificationSettings(enabled: false, notify30Min: false, notify2Hours: false)
                     case 30: // 30 minutes
-                        userViewModel.notificationsEnabled = true
-                        userViewModel.notify30MinBefore = true
-                        userViewModel.notify2HoursBefore = false
+                        viewModel.updateNotificationSettings(enabled: true, notify30Min: true, notify2Hours: false)
                     case 120: // 2 hours
-                        userViewModel.notificationsEnabled = true
-                        userViewModel.notify30MinBefore = false
-                        userViewModel.notify2HoursBefore = true
+                        viewModel.updateNotificationSettings(enabled: true, notify30Min: false, notify2Hours: true)
                     default:
                         break
                     }
-                    pendingIntervalChange = nil
+                    viewModel.pendingIntervalChange = nil
                 }
             }
         } message: {
-            if let interval = pendingIntervalChange {
+            if let interval = viewModel.pendingIntervalChange {
                 switch Int(interval) {
                 case 0:
                     Text("Are you sure you want to disable check-in notifications?")
@@ -152,64 +85,16 @@ struct HomeView: View {
                 Text("Are you sure you want to change your notification setting?")
             }
         }
-        .sheet(isPresented: $showInstructions) {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("How to use LifeSignal")
-                    .font(.title)
-                    .fontWeight(.bold)
-                    .padding(.bottom, 10)
 
-                VStack(alignment: .leading, spacing: 15) {
-                    instructionItem(
-                        number: "1",
-                        title: "Set your interval",
-                        description: "Choose how often you need to check in. This is the maximum time before your contacts are alerted if you don't check in."
-                    )
+        // Contact Added Alert - Removed as NotificationManager already shows a silent notification
+        // .alert("Contact Added", isPresented: $viewModel.showContactAddedAlert) {
+        //     Button("OK", role: .cancel) { }
+        // } message: {
+        //     Text("New responder has been added to your contacts.")
+        // }
 
-                    instructionItem(
-                        number: "2",
-                        title: "Add responders",
-                        description: "Share your QR code with trusted contacts who will respond if you need help. They'll be notified if you miss a check-in."
-                    )
-
-                    instructionItem(
-                        number: "3",
-                        title: "Check in regularly",
-                        description: "Tap the check-in button before your timer expires. This resets your countdown and lets your contacts know you're safe."
-                    )
-
-                    instructionItem(
-                        number: "4",
-                        title: "Emergency alert",
-                        description: "If you need immediate help, activate the alert to notify all your responders instantly."
-                    )
-                }
-
-                Spacer()
-
-                Button(action: {
-                    HapticFeedback.triggerHaptic()
-                    showInstructions = false
-                }) {
-                    Text("Got it")
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                }
-                .padding(.top)
-                .hapticFeedback()
-            }
-            .padding()
-        }
-        .alert("Contact Added", isPresented: $showContactAddedAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("New responder has been added to your contacts.")
-        }
-        .alert("Camera Access Denied", isPresented: $showCameraDeniedAlert) {
+        // Camera Access Denied Alert
+        .alert("Camera Access Denied", isPresented: $viewModel.showCameraDeniedAlert) {
             Button("OK", role: .cancel) { }
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -219,78 +104,276 @@ struct HomeView: View {
         } message: {
             Text("Please allow camera access in Settings to scan QR codes.")
         }
-        .alert("Reset QR Code", isPresented: $showResetQRConfirmation) {
+
+        // Reset QR Code Confirmation Alert
+        .alert("Reset QR Code", isPresented: $viewModel.showResetQRConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Reset") {
-                // Generate a new QR code ID
-                userViewModel.generateNewQRCode()
-                // The QR code will automatically refresh due to the onChange handler in QRCodeVariationView
-                // Show a silent local notification
-                NotificationManager.shared.showQRCodeResetNotification()
+                viewModel.resetQRCode()
             }
         } message: {
             Text("Are you sure you want to reset your QR code? This will invalidate any previously shared QR codes.")
         }
-
-        .sheet(isPresented: $showShareSheet) {
-            if let shareImage = shareImage {
-                // Add a descriptive text along with the image
-                let text = "My LifeSignal QR Code"
-                ShareSheet(items: [text, shareImage])
-            }
-        }
     }
 
-    // Generate a QR code from a string
-    private func generateQRCode(from string: String) -> UIImage? {
-        let data = string.data(using: .utf8)
-        if let filter = CIFilter(name: "CIQRCodeGenerator") {
-            filter.setValue(data, forKey: "inputMessage")
-            filter.setValue("H", forKey: "inputCorrectionLevel")
-            if let ciImage = filter.outputImage {
-                let transform = CGAffineTransform(scaleX: 10, y: 10)
-                let scaledCIImage = ciImage.transformed(by: transform)
-                let context = CIContext()
-                if let cgImage = context.createCGImage(scaledCIImage, from: scaledCIImage.extent) {
-                    return UIImage(cgImage: cgImage)
+    // MARK: - Instructions View
+
+    private var instructionsView: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("How to use LifeSignal")
+                .font(.title)
+                .fontWeight(.bold)
+                .padding(.bottom, 10)
+
+            VStack(alignment: .leading, spacing: 15) {
+                instructionItem(
+                    number: "1",
+                    title: "Set your interval",
+                    description: "Choose how often you need to check in. This is the maximum time before your contacts are alerted if you don't check in."
+                )
+
+                instructionItem(
+                    number: "2",
+                    title: "Add responders",
+                    description: "Share your QR code with trusted contacts who will respond if you need help. They'll be notified if you miss a check-in."
+                )
+
+                instructionItem(
+                    number: "3",
+                    title: "Check in regularly",
+                    description: "Tap the check-in button before your timer expires. This resets your countdown and lets your contacts know you're safe."
+                )
+
+                instructionItem(
+                    number: "4",
+                    title: "Emergency alert",
+                    description: "If you need immediate help, activate the alert to notify all your responders instantly."
+                )
+            }
+
+            Spacer()
+
+            Button(action: {
+                HapticFeedback.triggerHaptic()
+                viewModel.showInstructions = false
+            }) {
+                Text("Got it")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+            }
+            .padding(.top)
+            .hapticFeedback()
+        }
+        .padding()
+    }
+
+    private func instructionItem(number: String, title: String, description: String) -> some View {
+        HStack(alignment: .top, spacing: 15) {
+            Text(number)
+                .font(.headline)
+                .foregroundColor(.white)
+                .frame(width: 30, height: 30)
+                .background(Color.blue)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title)
+                    .font(.headline)
+                Text(description)
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.bottom, 10)
+    }
+
+    // MARK: - Interval Picker View
+
+    private func intervalPickerView() -> some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("Unit", selection: $viewModel.intervalPickerUnit) {
+                        Text("Days").tag("days")
+                        Text("Hours").tag("hours")
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                    .onChange(of: viewModel.intervalPickerUnit) { oldUnit, newUnit in
+                        viewModel.updateIntervalPickerUnit(newUnit)
+                    }
+
+                    Picker("Value", selection: $viewModel.intervalPickerValue) {
+                        if viewModel.isDayUnit {
+                            ForEach(viewModel.dayValues, id: \.self) { day in
+                                Text("\(day) day\(day > 1 ? "s" : "")").tag(day)
+                            }
+                        } else {
+                            ForEach(viewModel.hourValues, id: \.self) { hour in
+                                Text("\(hour) hours").tag(hour)
+                            }
+                        }
+                    }
+                    .pickerStyle(WheelPickerStyle())
+                    .frame(height: 150)
+                    .clipped()
+                    .onChange(of: viewModel.intervalPickerValue) { _, _ in
+                        HapticFeedback.selectionFeedback()
+                    }
                 }
             }
-        }
-        return nil
-    }
-
-    // Format an interval for display
-    private func formatInterval(_ interval: TimeInterval) -> String {
-        let hours = Int(interval / 3600)
-
-        // Special case for our specific hour values (8, 16, 32)
-        if hours == 8 || hours == 16 || hours == 32 {
-            return "\(hours) hours"
-        }
-
-        // For other values, use the standard formatting
-        let days = hours / 24
-        if days > 0 {
-            return "\(days) day\(days == 1 ? "" : "s")"
-        } else {
-            return "\(hours) hour\(hours == 1 ? "" : "s")"
+            .navigationTitle("Interval")
+            .navigationBarItems(
+                trailing: Button("Save") {
+                    HapticFeedback.notificationFeedback(type: .success)
+                    viewModel.updateCheckInInterval(viewModel.getComputedIntervalInSeconds())
+                    viewModel.showIntervalPicker = false
+                }
+            )
         }
     }
 
-    // Break up the complex expression into smaller parts
+    // MARK: - QR Code Section
+
+    private var qrCodeSection: some View {
+        VStack(spacing: 16) {
+            // QR Code Card
+            qrCodeCard
+
+            // Action Buttons
+            HStack(spacing: 12) {
+                // Reset QR Code Button
+                qrCodeActionButton(
+                    icon: "arrow.triangle.2.circlepath",
+                    label: "Reset QR",
+                    action: {
+                        HapticFeedback.triggerHaptic()
+                        viewModel.showResetQRConfirmation = true
+                    }
+                )
+
+                // Share QR Button
+                qrCodeActionButton(
+                    icon: "square.and.arrow.up",
+                    label: "Share QR",
+                    action: {
+                        HapticFeedback.triggerHaptic()
+                        viewModel.generateShareableQRCode {
+                            viewModel.showShareSheet = true
+                        }
+                    }
+                )
+
+                // Scan QR Button
+                qrCodeActionButton(
+                    icon: "qrcode.viewfinder",
+                    label: "Scan QR",
+                    action: {
+                        HapticFeedback.triggerHaptic()
+                        viewModel.showQRScanner = true
+                    }
+                )
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private var qrCodeCard: some View {
+        HStack(alignment: .top, spacing: 16) {
+            // QR Code
+            ZStack {
+                if viewModel.isQRCodeReady, let qrImage = viewModel.qrCodeImage {
+                    Image(uiImage: qrImage)
+                        .resizable()
+                        .interpolation(.none)
+                        .scaledToFit()
+                        .frame(width: 130, height: 130)
+                } else {
+                    ProgressView()
+                        .frame(width: 130, height: 130)
+                }
+            }
+            .padding(12)
+            .background(Color.white)
+            .cornerRadius(10)
+            .shadow(color: Color.black.opacity(Environment(\.colorScheme).wrappedValue == .light ? 0.15 : 0.05),
+                    radius: Environment(\.colorScheme).wrappedValue == .light ? 4 : 2,
+                    x: 0,
+                    y: Environment(\.colorScheme).wrappedValue == .light ? 2 : 1)
+
+            // Info and button
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Your QR Code")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+
+                Text("Share this QR code with others to add contacts.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.leading)
+
+                // Copy ID button
+                Button(action: {
+                    UIPasteboard.general.string = viewModel.qrCodeId
+                    HapticFeedback.notificationFeedback(type: .success)
+                    NotificationManager.shared.showQRCodeCopiedNotification()
+                }) {
+                    Label("Copy ID", systemImage: "doc.on.doc")
+                        .font(.caption)
+                        .foregroundColor(.primary)
+                        .padding(.vertical, 5)
+                        .padding(.horizontal, 10)
+                        .background(
+                            Environment(\.colorScheme).wrappedValue == .light ?
+                                Color(UIColor.tertiarySystemGroupedBackground) :
+                                Color(UIColor.secondarySystemGroupedBackground)
+                        )
+                        .cornerRadius(10)
+                }
+                .hapticFeedback(style: .light)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 20)
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .cornerRadius(16)
+        .padding(.horizontal)
+    }
+
+    private func qrCodeActionButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 24))
+                Text(label)
+                    .font(.caption)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 80)
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .foregroundColor(.primary)
+            .cornerRadius(12)
+        }
+    }
+
+
+
+    // MARK: - Settings Section
+
     private var settingsSection: some View {
-        settingsSectionContent
-    }
-
-    private var settingsSectionContent: some View {
         VStack(alignment: .leading, spacing: 24) {
-            // Section: Check-in Interval
+            // Check-in Interval
             checkInIntervalSection
 
-            // Section: Notifications
+            // Notifications
             notificationsSection
 
-            // Section: Help/Instructions
+            // Help/Instructions
             helpSection
         }
     }
@@ -303,10 +386,10 @@ struct HomeView: View {
 
             Button(action: {
                 HapticFeedback.triggerHaptic()
-                showIntervalPicker = true
+                viewModel.showIntervalPicker = true
             }) {
                 HStack {
-                    Text(formatInterval(userViewModel.checkInInterval))
+                    Text(viewModel.formatInterval(viewModel.checkInInterval))
                         .foregroundColor(.primary)
                     Spacer()
                     Image(systemName: "chevron.right")
@@ -334,21 +417,21 @@ struct HomeView: View {
             Text("Check-in notification")
                 .foregroundColor(.primary)
                 .padding(.horizontal)
+
             Picker("Check-in notification", selection: Binding(
                 get: {
-                    if !userViewModel.notificationsEnabled {
+                    if !viewModel.notificationsEnabled {
                         return 0
-                    } else if userViewModel.notify2HoursBefore {
+                    } else if viewModel.notify2HoursBefore {
                         return 120
                     } else {
                         return 30
                     }
                 },
                 set: { newValue in
-                    // Store the pending interval change and show confirmation
-                    pendingIntervalChange = TimeInterval(newValue)
+                    viewModel.pendingIntervalChange = TimeInterval(newValue)
                     HapticFeedback.selectionFeedback()
-                    showIntervalChangeConfirmation = true
+                    viewModel.showIntervalChangeConfirmation = true
                 }
             )) {
                 Text("Disabled").tag(0)
@@ -357,20 +440,20 @@ struct HomeView: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)
+
             Text("Choose when you'd like to be reminded before your countdown expires.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        // No onAppear needed
     }
 
     private var helpSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button(action: {
                 HapticFeedback.triggerHaptic()
-                showInstructions = true
+                viewModel.showInstructions = true
             }) {
                 HStack {
                     Text("Review instructions")
@@ -388,108 +471,26 @@ struct HomeView: View {
             .padding(.horizontal)
         }
     }
-
-    private var qrCodeSection: some View {
-        VStack(spacing: 16) {
-            // QR Code Variations
-            QRCodeVariationView(
-                qrCodeId: userViewModel.qrCodeId,
-                design: selectedQRDesign,
-                userName: userViewModel.name,
-                onRefresh: {
-                    // Generate a new QR code ID
-                    userViewModel.generateNewQRCode()
-                    // QRCodeVariationView will automatically refresh when qrCodeId changes
-                    // Show a silent local notification
-                    NotificationManager.shared.showQRCodeResetNotification()
-                }
-            )
-
-            // Action Buttons - Standardized sizing and padding
-            HStack(spacing: 12) {
-                // Reset QR Code Button
-                Button(action: {
-                    // Show confirmation alert
-                    HapticFeedback.triggerHaptic()
-                    showResetQRConfirmation = true
-                }) {
-                    VStack(spacing: 8) { // Standardized spacing
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 24))
-                        Text("Reset QR")
-                            .font(.caption)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 80) // Standardized height
-                    .background(Color(UIColor.secondarySystemGroupedBackground))
-                    .foregroundColor(.primary)
-                    .cornerRadius(12)
-                }
-
-                // Share QR Button
-                Button(action: {
-                    // Always generate a fresh QR code image before showing the share sheet
-                    // This ensures the image is ready when the sheet appears
-                    HapticFeedback.triggerHaptic()
-
-                    // Prepare for sharing and show the share sheet when ready
-                    prepareForSharing {
-                        self.showShareSheet = true
-                    }
-                }) {
-                    VStack(spacing: 8) { // Standardized spacing
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 24))
-                        Text("Share QR")
-                            .font(.caption)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 80) // Standardized height
-                    .background(Color(UIColor.secondarySystemGroupedBackground))
-                    .foregroundColor(.primary)
-                    .cornerRadius(12)
-                }
-
-                // Scan QR Button
-                Button(action: {
-                    HapticFeedback.triggerHaptic()
-                    showQRScanner = true
-                }) {
-                    VStack(spacing: 8) { // Standardized spacing
-                        Image(systemName: "qrcode.viewfinder")
-                            .font(.system(size: 24))
-                        Text("Scan QR")
-                            .font(.caption)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 80) // Standardized height
-                    .background(Color(UIColor.secondarySystemGroupedBackground))
-                    .foregroundColor(.primary)
-                    .cornerRadius(12)
-                }
-            }
-            .padding(.horizontal, 16) // Standardized padding
-        }
-    }
-
-    private func instructionItem(number: String, title: String, description: String) -> some View {
-        HStack(alignment: .top, spacing: 15) {
-            Text(number)
-                .font(.headline)
-                .foregroundColor(.white)
-                .frame(width: 30, height: 30)
-                .background(Color.blue)
-                .clipShape(Circle())
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(.headline)
-                Text(description)
-                    .font(.body)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.bottom, 10)
-    }
 }
 
+/// A UIViewControllerRepresentable for sharing content
+struct ActivityShareSheet: UIViewControllerRepresentable {
+    /// The items to share
+    let items: [Any]
+
+    /// Create the UIActivityViewController
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        return controller
+    }
+
+    /// Update the UIActivityViewController (not needed)
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+#Preview {
+    HomeView()
+        .previewDisplayName("Home View")
+        .padding()
+        .background(Color(UIColor.systemGroupedBackground))
+}
