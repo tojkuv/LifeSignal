@@ -7,9 +7,8 @@ import UIKit
 // MARK: - Main Profile View
 struct ProfileView: View {
     @StateObject private var viewModel = ProfileViewModel()
-    @Environment(\.presentationMode) private var presentationMode
 
-    // Focus states
+    // Focus states bound to view model
     @FocusState private var textEditorFocused: Bool
     @FocusState private var nameFieldFocused: Bool
     @FocusState private var phoneNumberFieldFocused: Bool
@@ -188,164 +187,156 @@ struct ProfileView: View {
     // MARK: - Private Computed Properties
 
     // Emergency Note Sheet View
+    @ViewBuilder
     private var emergencyNoteSheetView: some View {
-        var view: some View {
-            NavigationStack {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextEditor(text: $viewModel.newDescription)
-                            .font(.body)
-                            .foregroundColor(.primary)
-                            .frame(minHeight: 240) // Doubled the height
-                            .padding(.vertical, 4)
-                            .padding(.horizontal)
-                            .scrollContentBackground(.hidden)
-                            .background(Color(UIColor.secondarySystemGroupedBackground))
-                            .cornerRadius(12)
-                            .focused($textEditorFocused)
-                        Text("This note is visible to your contacts when they view your profile.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 4)
-                    }
-                    .padding(.horizontal)
-                    Spacer(minLength: 0)
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextEditor(text: $viewModel.newDescription)
+                        .font(.body)
+                        .foregroundColor(.primary)
+                        .frame(minHeight: 240) // Doubled the height
+                        .padding(.vertical, 4)
+                        .padding(.horizontal)
+                        .scrollContentBackground(.hidden)
+                        .background(Color(UIColor.secondarySystemGroupedBackground))
+                        .cornerRadius(12)
+                        .focused($textEditorFocused)
+                    Text("This note is visible to your contacts when they view your profile.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 4)
                 }
-                .navigationBarTitleDisplayMode(.inline)
-                .navigationTitle("Emergency Note")
-                .navigationBarItems(
-                    leading: Button("Cancel") {
-                        viewModel.cancelEditDescription()
-                    },
-                    trailing: Button("Save") {
-                        viewModel.saveEditedDescription()
-                        viewModel.showEditDescriptionSheet = false
-                    }
-                    .disabled(viewModel.newDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                              viewModel.newDescription == viewModel.profileDescription)
-                )
-                .background(Color(UIColor.systemGroupedBackground))
-                .onAppear {
-                    // Bind the focus state to the view model's focus state
-                    textEditorFocused = viewModel.isDescriptionFieldFocused
-                }
-                .onChange(of: textEditorFocused) { newValue in
-                    viewModel.isDescriptionFieldFocused = newValue
-                }
-                .onChange(of: viewModel.isDescriptionFieldFocused) { newValue in
-                    textEditorFocused = newValue
-                }
+                .padding(.horizontal)
+                Spacer(minLength: 0)
             }
-            .presentationDetents([.large])
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Emergency Note")
+            .navigationBarItems(
+                leading: Button("Cancel") {
+                    viewModel.cancelEditDescription()
+                },
+                trailing: Button("Save") {
+                    viewModel.saveEditedDescription()
+                }
+                .disabled(viewModel.newDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                          viewModel.newDescription == viewModel.profileDescription)
+            )
+            .background(Color(UIColor.systemGroupedBackground))
+            .onAppear {
+                // Bind the focus state to the view model's focus state
+                textEditorFocused = viewModel.textEditorFocused
+            }
+            .onChange(of: textEditorFocused) { newValue in
+                viewModel.handleTextEditorFocusChange(newValue: newValue)
+            }
+            .onChange(of: viewModel.textEditorFocused) { newValue in
+                textEditorFocused = newValue
+            }
         }
-        return view
+        .presentationDetents([.large])
     }
 
     // Name Edit Sheet View
+    @ViewBuilder
     private var nameEditSheetView: some View {
-        var view: some View {
-            NavigationStack {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("Name", text: $viewModel.newName)
-                            .font(.body)
-                            .padding(.vertical, 12)
-                            .padding(.horizontal)
-                            .background(Color(UIColor.secondarySystemGroupedBackground))
-                            .cornerRadius(12)
-                            .foregroundColor(.primary)
-                            .focused($nameFieldFocused)
-                        Text("People will see this name if you interact with them and they don't have you saved as a contact.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 4)
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 24)
-                    Spacer(minLength: 0)
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("Name", text: $viewModel.newName)
+                        .font(.body)
+                        .padding(.vertical, 12)
+                        .padding(.horizontal)
+                        .background(Color(UIColor.secondarySystemGroupedBackground))
+                        .cornerRadius(12)
+                        .foregroundColor(.primary)
+                        .focused($nameFieldFocused)
+                    Text("People will see this name if you interact with them and they don't have you saved as a contact.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 4)
                 }
-                .background(Color(UIColor.systemGroupedBackground))
-                .navigationBarTitleDisplayMode(.inline)
-                .navigationTitle("Name")
-                .navigationBarItems(
-                    leading: Button("Cancel") {
-                        viewModel.cancelEditName()
-                    },
-                    trailing: Button("Save") {
-                        viewModel.saveEditedName()
-                        viewModel.showEditNameSheet = false
-                    }
-                    .disabled(viewModel.newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                              viewModel.newName == viewModel.name)
-                )
-                .onAppear {
-                    // Bind the focus state to the view model's focus state
-                    nameFieldFocused = viewModel.isNameFieldFocused
+                .padding(.horizontal)
+                .padding(.top, 24)
+                Spacer(minLength: 0)
+            }
+            .background(Color(UIColor.systemGroupedBackground))
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Name")
+            .navigationBarItems(
+                leading: Button("Cancel") {
+                    viewModel.cancelEditName()
+                },
+                trailing: Button("Save") {
+                    viewModel.saveEditedName()
                 }
-                .onChange(of: nameFieldFocused) { newValue in
-                    viewModel.isNameFieldFocused = newValue
-                }
-                .onChange(of: viewModel.isNameFieldFocused) { newValue in
-                    nameFieldFocused = newValue
-                }
+                .disabled(viewModel.newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                          viewModel.newName == viewModel.name)
+            )
+            .onAppear {
+                // Bind the focus state to the view model's focus state
+                nameFieldFocused = viewModel.nameFieldFocused
+            }
+            .onChange(of: nameFieldFocused) { newValue in
+                viewModel.handleNameFieldFocusChange(newValue: newValue)
+            }
+            .onChange(of: viewModel.nameFieldFocused) { newValue in
+                nameFieldFocused = newValue
             }
         }
-        return view
     }
 
     // Avatar Edit Sheet View
+    @ViewBuilder
     private var avatarEditSheetView: some View {
-        var view: some View {
-
-            VStack(spacing: 20) {
-                Text("Avatar")
-                    .font(.headline.bold())
-                    .foregroundColor(.primary)
-                VStack(spacing: 0) {
-                    Button(action: {
-                        viewModel.showImagePickerWithSourceType(.photoLibrary)
-                    }) {
-                        HStack {
-                            Text("Choose photo")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Image(systemName: "photo")
-                                .foregroundColor(.primary)
-                        }
-                        .padding()
-                    }
-                }
-                .background(Color(UIColor.secondarySystemGroupedBackground))
-                .cornerRadius(12)
-                .padding(.horizontal)
+        VStack(spacing: 20) {
+            Text("Avatar")
+                .font(.headline.bold())
+                .foregroundColor(.primary)
+            VStack(spacing: 0) {
                 Button(action: {
-                    viewModel.showDeleteAvatarConfirmationDialog()
-                    viewModel.closeAvatarEditor()
+                    viewModel.showImagePickerWithSourceType(.photoLibrary)
                 }) {
                     HStack {
-                        Text("Delete avatar photo")
-                            .foregroundColor(.red)
+                        Text("Choose photo")
+                            .foregroundColor(.primary)
                         Spacer()
-                        Image(systemName: "trash")
-                            .foregroundColor(.red)
+                        Image(systemName: "photo")
+                            .foregroundColor(.primary)
                     }
                     .padding()
-                    .background(Color(UIColor.secondarySystemGroupedBackground))
-                    .cornerRadius(12)
                 }
-                .padding(.horizontal)
-                .disabled(viewModel.isUsingDefaultAvatar)
-                .opacity(viewModel.isUsingDefaultAvatar ? 0.5 : 1.0)
-                Spacer(minLength: 0)
             }
-            .padding(.top, 24)
-            .background(Color(UIColor.systemGroupedBackground))
-            .presentationDetents([.medium])
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .cornerRadius(12)
+            .padding(.horizontal)
+            Button(action: {
+                viewModel.showDeleteAvatarConfirmationDialog()
+                viewModel.closeAvatarEditor()
+            }) {
+                HStack {
+                    Text("Delete avatar photo")
+                        .foregroundColor(.red)
+                    Spacer()
+                    Image(systemName: "trash")
+                        .foregroundColor(.red)
+                }
+                .padding()
+                .background(Color(UIColor.secondarySystemGroupedBackground))
+                .cornerRadius(12)
+            }
+            .padding(.horizontal)
+            .disabled(viewModel.isUsingDefaultAvatar)
+            .opacity(viewModel.isUsingDefaultAvatar ? 0.5 : 1.0)
+            Spacer(minLength: 0)
         }
-        return view
+        .padding(.top, 24)
+        .background(Color(UIColor.systemGroupedBackground))
+        .presentationDetents([.medium])
     }
 
     // Phone Number Change View
+    @ViewBuilder
     private var phoneNumberChangeSheetView: some View {
         NavigationStack {
             ScrollView {
@@ -500,19 +491,19 @@ struct ProfileView: View {
             .background(Color(UIColor.systemGroupedBackground))
             .onAppear {
                 // Bind the focus states to the view model's focus states
-                phoneNumberFieldFocused = viewModel.isPhoneNumberFieldFocused
-                verificationCodeFieldFocused = viewModel.isVerificationCodeFieldFocused
+                phoneNumberFieldFocused = viewModel.phoneNumberFieldFocused
+                verificationCodeFieldFocused = viewModel.verificationCodeFieldFocused
             }
             .onChange(of: phoneNumberFieldFocused) { newValue in
-                viewModel.isPhoneNumberFieldFocused = newValue
+                viewModel.handlePhoneNumberFieldFocusChange(newValue: newValue)
             }
-            .onChange(of: viewModel.isPhoneNumberFieldFocused) { newValue in
+            .onChange(of: viewModel.phoneNumberFieldFocused) { newValue in
                 phoneNumberFieldFocused = newValue
             }
             .onChange(of: verificationCodeFieldFocused) { newValue in
-                viewModel.isVerificationCodeFieldFocused = newValue
+                viewModel.handleVerificationCodeFieldFocusChange(newValue: newValue)
             }
-            .onChange(of: viewModel.isVerificationCodeFieldFocused) { newValue in
+            .onChange(of: viewModel.verificationCodeFieldFocused) { newValue in
                 verificationCodeFieldFocused = newValue
             }
         }

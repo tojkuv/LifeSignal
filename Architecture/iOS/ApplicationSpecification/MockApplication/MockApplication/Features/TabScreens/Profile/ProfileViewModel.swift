@@ -46,6 +46,10 @@ class ProfileViewModel: ObservableObject {
     // Focus States (for SwiftUI @FocusState binding)
     @Published var isNameFieldFocused: Bool = false
     @Published var isDescriptionFieldFocused: Bool = false
+    @Published var textEditorFocused: Bool = false
+    @Published var nameFieldFocused: Bool = false
+    @Published var phoneNumberFieldFocused: Bool = false
+    @Published var verificationCodeFieldFocused: Bool = false
 
     // MARK: - Computed Properties
 
@@ -111,6 +115,7 @@ class ProfileViewModel: ObservableObject {
 
         // Focus the text editor when the sheet appears
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.textEditorFocused = true
             self.isDescriptionFieldFocused = true
         }
     }
@@ -123,6 +128,7 @@ class ProfileViewModel: ObservableObject {
             saveProfileDescription()
             HapticFeedback.notificationFeedback(type: .success)
         }
+        showEditDescriptionSheet = false
     }
 
     /// Cancel editing description
@@ -139,6 +145,7 @@ class ProfileViewModel: ObservableObject {
 
         // Focus the name field when the sheet appears
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.nameFieldFocused = true
             self.isNameFieldFocused = true
         }
     }
@@ -151,6 +158,7 @@ class ProfileViewModel: ObservableObject {
             saveName()
             HapticFeedback.notificationFeedback(type: .success)
         }
+        showEditNameSheet = false
     }
 
     /// Cancel editing name
@@ -213,6 +221,7 @@ class ProfileViewModel: ObservableObject {
 
         // Focus the phone number field when the view appears
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.phoneNumberFieldFocused = true
             self.isPhoneNumberFieldFocused = true
         }
     }
@@ -238,6 +247,7 @@ class ProfileViewModel: ObservableObject {
 
             // Focus the verification code field
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.verificationCodeFieldFocused = true
                 self.isVerificationCodeFieldFocused = true
             }
         }
@@ -271,23 +281,32 @@ class ProfileViewModel: ObservableObject {
             return
         }
 
-        // Format the phone number based on the selected region
-        let filtered = newValue.filter { $0.isNumber }
+        // Use PhoneFormatter to format the phone number for editing
+        editingPhone = PhoneFormatter.formatPhoneNumberForEditing(newValue, region: editingPhoneRegion)
+    }
 
-        switch editingPhoneRegion {
-        case "US", "CA":
-            // Format for US and Canada: XXX-XXX-XXXX
-            formatUSPhoneNumber(filtered)
-        case "UK":
-            // Format for UK: XXXX-XXX-XXX
-            formatUKPhoneNumber(filtered)
-        case "AU":
-            // Format for Australia: XXXX-XXX-XXX
-            formatAUPhoneNumber(filtered)
-        default:
-            // Default format: XXX-XXX-XXXX
-            formatUSPhoneNumber(filtered)
-        }
+    /// Handle focus state changes for text editor
+    func handleTextEditorFocusChange(newValue: Bool) {
+        textEditorFocused = newValue
+        isDescriptionFieldFocused = newValue
+    }
+
+    /// Handle focus state changes for name field
+    func handleNameFieldFocusChange(newValue: Bool) {
+        nameFieldFocused = newValue
+        isNameFieldFocused = newValue
+    }
+
+    /// Handle focus state changes for phone number field
+    func handlePhoneNumberFieldFocusChange(newValue: Bool) {
+        phoneNumberFieldFocused = newValue
+        isPhoneNumberFieldFocused = newValue
+    }
+
+    /// Handle focus state changes for verification code field
+    func handleVerificationCodeFieldFocusChange(newValue: Bool) {
+        verificationCodeFieldFocused = newValue
+        isVerificationCodeFieldFocused = newValue
     }
 
     /// Handle verification code text change
@@ -411,69 +430,5 @@ class ProfileViewModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "userAvatarImage")
     }
 
-    /// Format a US/Canada phone number (XXX-XXX-XXXX)
-    private func formatUSPhoneNumber(_ filtered: String) {
-        // Limit to 10 digits
-        let limitedFiltered = String(filtered.prefix(10))
-
-        // Format with hyphens
-        if limitedFiltered.count > 6 {
-            let areaCode = limitedFiltered.prefix(3)
-            let prefix = limitedFiltered.dropFirst(3).prefix(3)
-            let lineNumber = limitedFiltered.dropFirst(6)
-            editingPhone = "\(areaCode)-\(prefix)-\(lineNumber)"
-        } else if limitedFiltered.count > 3 {
-            let areaCode = limitedFiltered.prefix(3)
-            let prefix = limitedFiltered.dropFirst(3)
-            editingPhone = "\(areaCode)-\(prefix)"
-        } else if limitedFiltered.count > 0 {
-            editingPhone = limitedFiltered
-        } else {
-            editingPhone = ""
-        }
-    }
-
-    /// Format a UK phone number (XXXX-XXX-XXX)
-    private func formatUKPhoneNumber(_ filtered: String) {
-        // Limit to 10 digits
-        let limitedFiltered = String(filtered.prefix(10))
-
-        // Format with hyphens
-        if limitedFiltered.count > 7 {
-            let areaCode = limitedFiltered.prefix(4)
-            let prefix = limitedFiltered.dropFirst(4).prefix(3)
-            let lineNumber = limitedFiltered.dropFirst(7)
-            editingPhone = "\(areaCode)-\(prefix)-\(lineNumber)"
-        } else if limitedFiltered.count > 4 {
-            let areaCode = limitedFiltered.prefix(4)
-            let prefix = limitedFiltered.dropFirst(4)
-            editingPhone = "\(areaCode)-\(prefix)"
-        } else if limitedFiltered.count > 0 {
-            editingPhone = limitedFiltered
-        } else {
-            editingPhone = ""
-        }
-    }
-
-    /// Format an Australian phone number (XXXX-XXX-XXX)
-    private func formatAUPhoneNumber(_ filtered: String) {
-        // Limit to 10 digits
-        let limitedFiltered = String(filtered.prefix(10))
-
-        // Format with hyphens
-        if limitedFiltered.count > 7 {
-            let areaCode = limitedFiltered.prefix(4)
-            let prefix = limitedFiltered.dropFirst(4).prefix(3)
-            let lineNumber = limitedFiltered.dropFirst(7)
-            editingPhone = "\(areaCode)-\(prefix)-\(lineNumber)"
-        } else if limitedFiltered.count > 4 {
-            let areaCode = limitedFiltered.prefix(4)
-            let prefix = limitedFiltered.dropFirst(4)
-            editingPhone = "\(areaCode)-\(prefix)"
-        } else if limitedFiltered.count > 0 {
-            editingPhone = limitedFiltered
-        } else {
-            editingPhone = ""
-        }
-    }
+    // Phone formatting is now handled by the PhoneFormatter utility
 }
