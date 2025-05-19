@@ -1,10 +1,10 @@
 # LifeSignal Architecture
 
-**Navigation:** [General Architecture](General/README.md) | [iOS Architecture](iOS/README.md) | [Backend Architecture](Backend/README.md)
+**Navigation:** [iOS Architecture](iOS/README.md) | [Backend Architecture](Backend/README.md)
 
 ---
 
-> **Note:** This architecture is still an MVP and the folder structure and files are likely to change as the project evolves. The current implementation is a starting point that will be refined based on real-world usage and feedback.
+> **Note:** This architecture documentation is being refactored to improve organization, reduce duplication, and ensure consistency. The current structure reflects the new organization that will be refined based on real-world usage and feedback.
 
 ## Overview
 
@@ -20,8 +20,8 @@ This architecture documentation provides a comprehensive guide to the design, im
 
 Across all platforms and components, LifeSignal follows these core principles:
 
-1. **Vertical Slice Architecture** - Organize code by feature rather than by technical layer
-2. **Infrastructure Agnosticism** - Build features that are independent of specific backend technologies
+1. **Modular Features** - Organize code by feature rather than by technical layer
+2. **Middleware Clients** - Build features that are independent of specific backend technologies through backend agnostic anti-corruption clients
 3. **Type Safety** - Maintain strong typing throughout the codebase
 4. **Concurrency Safety** - Handle asynchronous operations safely and efficiently
 5. **Testability** - Design all components to be testable in isolation
@@ -35,8 +35,8 @@ Across all platforms and components, LifeSignal follows these core principles:
 The iOS application uses The Composable Architecture (TCA) with a layered approach:
 
 ```
-Feature Layer → Domain-Specific Clients → Core Infrastructure Clients → Adapters → Backend
-(UserFeature)    (UserClient)            (StorageClient)              (StorageAdapter)  (Firebase)
+Feature Layer → Middleware Clients → Adapters → Platform Backend Clients → Backend
+(UserFeature)    (UserClient)       (FirebaseUserAdapter)  (FirebaseClient)     (Firebase/Supabase)
 ```
 
 Key components:
@@ -92,19 +92,29 @@ The LifeSignal application integrates across platforms through:
 
 ## Documentation Structure
 
-The architecture documentation is organized as follows:
+The architecture documentation is organized into platform-specific sections:
 
-- **[General Architecture](General/README.md)** - Platform-agnostic architectural principles
-  - Core Principles, Vertical Slice Architecture, Infrastructure Agnosticism, etc.
+1. **[iOS Architecture](iOS/README.md)**: Documentation for the iOS application
+   - [Guidelines](iOS/Guidelines/README.md): How to implement
+   - [Specification](iOS/Specification/README.md): What to implement
 
-- **[iOS Architecture](iOS/README.md)** - iOS-specific architecture documentation
-  - TCA Implementation, Firebase Integration, Feature Architecture, Navigation, Testing, etc.
+2. **[Backend Architecture](Backend/README.md)**: Documentation for the backend services
+   - [Guidelines](Backend/Guidelines/README.md): How to implement
+   - [Specification](Backend/Specification/README.md): What to implement
 
-- **[Backend Architecture](Backend/README.md)** - Backend-specific architecture documentation
-  - Core Principles, Function Architecture, Data Model, Security Rules, etc.
+## Implementation Strategy
 
-## Conclusion
+The LifeSignal implementation follows a phased approach:
 
-This architecture provides a solid foundation for building a scalable, maintainable, and testable multi-platform application. By following consistent architectural principles across platforms, we ensure that the LifeSignal application is flexible and can adapt to changing requirements.
+1. **Mock Application**: MVVM-based mock application for UI/UX iteration
+2. **Production Application**: TCA-based production application
+3. **Backend Services**: Firebase and Supabase services
+4. **Android Application**: Future implementation
 
-> **Important:** This architecture document represents the current MVP state of the project. The folder structure, file organization, and specific implementation details are expected to evolve as the project matures. We will continuously refine this architecture based on real-world usage patterns and feedback.
+For detailed implementation guidelines, see the platform-specific Guidelines sections:
+- [iOS Guidelines](iOS/Guidelines/README.md)
+- [Backend Guidelines](Backend/Guidelines/README.md)
+
+For detailed specifications, see the platform-specific Specification sections:
+- [iOS Specification](iOS/Specification/README.md)
+- [Backend Specification](Backend/Specification/README.md)

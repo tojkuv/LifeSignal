@@ -2,6 +2,25 @@
 
 This file tracks significant changes to the iOS architecture documentation.
 
+## 2023-05-16
+
+### Added
+- Created `ApplicationSpecification/Examples/ClientExample.md` with example client implementation
+- Created `ApplicationSpecification/Examples/AdapterExample.md` with example adapter implementation
+- Created `ApplicationSpecification/TCAMigrationGuide.md` with comprehensive migration guide
+- Created `ApplicationSpecification/UserExperience.md` with detailed user flows and interactions
+- Created `ApplicationSpecification/Infrastructure/README.md` with infrastructure layer overview
+- Created `ApplicationSpecification/Infrastructure/Firebase/README.md` with Firebase integration details
+- Created `ApplicationSpecification/Infrastructure/Testing/README.md` with testing strategy
+
+## 2023-05-15
+
+### Added
+- Created `ApplicationSpecification/Features/Alert/README.md` with AlertFeature overview
+- Created `ApplicationSpecification/Features/Alert/State.md` with AlertFeature state documentation
+- Created `ApplicationSpecification/Features/Alert/Actions.md` with AlertFeature actions documentation
+- Created `ApplicationSpecification/Features/Alert/Effects.md` with AlertFeature effects documentation
+
 ## 2023-05-14
 
 ### Added
