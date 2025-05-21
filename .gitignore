@@ -1,4 +1,4 @@
 # LifeSignal .gitignore
-Backends/
-iOSApplication/
-AndroidApplication/
+3-Backends/
+2-iOSApplication/
+4-AndroidApplication/

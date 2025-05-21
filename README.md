@@ -1,5 +1,2 @@
 - this file will describe our coding agent workflow
-- the only source of truth is our architecture documentation and the mock projects
-- the mock projects are an example of our user experience and the user interface the user expects
-- you have full control to update, add, and remove files from the iOS, android, and backend folders
-- previews and test are really important to our development cycle
+- the only source of truth for guidelines is our architecture documentation

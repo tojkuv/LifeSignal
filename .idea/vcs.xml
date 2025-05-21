@@ -2,8 +2,8 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/AndroidApplication" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/Backends" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/iOSApplication" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/2-iOSApplication" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/3-Backends" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/4-AndroidApplication" vcs="Git" />
   </component>
 </project>
