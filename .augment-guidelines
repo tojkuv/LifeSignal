@@ -1,0 +1,36 @@
+# Augment Guidelines
+
+## RESPONSE
+1. **No Hallucination:** If unknown, say "I don't know"
+2. **Specific:** No vague answers to specific queries
+3. **"Why" on Mistakes:** Analyze actual code/actions, identify errors, give examples
+4. **Code First:** Check code before making claims
+5. **Uncertainty:** State it, verify with tools, explain verification
+6. **No Assumptions:** About project, configs
+7. **Analyze Mistakes:** Provide specific feedback on errors
+
+## CODEBASE
+1. **Pre-Change:** Use codebase-retrieval before changes
+2. **Context:** Understand dependencies before modifying
+3. **For Each Change:** Retrieve files, check imports/patterns
+4. **File Edits:** View entire file, ID affected elements
+5. **Verify Imports:** Ensure correctness before submitting
+6. **New Functions:** Check for existing similar ones first
+7. **No Blind Copy:** Understand any copied code
+
+## SERVERS
+1. **No New Servers:** Never use "npm run dev" without killing running servers first
+2. **Check Processes:** Use `list-processes` before restarts
+3. **Restart Existing:** Use exact terminal ID
+4. **Restart Steps:** list-processes→kill-process→npm run dev
+5. **No New Ports:** Use existing ports only
+
+
+# USER PREFERENCES
+- User prefers using MCP Sequential Thinking for planning and task completion.
+- User prefers MCP Vertex AI over augment context engine.
+- User prefers MCP Context 7 to get up to date documentation.
+- User prefers MCP Task Manager for planning.
+    - User prefers that the agent never waits for task approvals (agent should always approves them automatically)
+
+- User prefers that the agent does not create nor delete any files nor folders

@@ -2,68 +2,126 @@
 
 This document outlines the structure and organization of our architecture documentation to ensure consistency and ease of navigation.
 
-## Document Organization
+## Core Principles
 
-Each document in our architecture documentation follows this consistent structure:
+The architecture core principles that all documentation should take into consideration:
+- Type Safety 
+- Modularity/Composability
+- Testability
 
-1. **Clear Purpose Statement**: Paragraph describing the component's purpose
-2. **Core Principles Section**: Bullet points for each core principle
-	* Type Safety
-	* Modularity/Composability
-	* Testability
-3. **Content Structure**:
-	* Clear headings and subheadings
-	* Short, focused paragraphs
-	* Bullet points for lists of related items
-	* Code examples where appropriate
-4. **Error Handling**:
-	* Clear headings and subheadings
-	* Short, focused paragraphs
-	* Bullet points for lists of related items
-	* Code examples where appropriate
-5. **Testing**:
-	* Clear headings and subheadings
-	* Short, focused paragraphs
-	* Bullet points for lists of related items
-	* Code examples where appropriate
-6. **Best Practices**: Bullet points of best practices
-7. **Anti-patterns**: Bullet points of common anti-patterns to avoid
+## FileSystem Structure
 
-## Folder Structure
-
-The documentation is organized in a hierarchical structure:
+The documentation filesystem is organized in a hierarchical structure, with the following considerations:
 
 ```
 1-Architecture/
 ├── README.md                           # Overview of architecture documentation
-├── CHANGELOG.md                        # Architecture documentation changelog
 │
 ├── 1-Backend/                          # Backend architecture
-│   ├── 1-Firebase/                     # Firebase backend architecture
-│   │   ├── 1-Authentication.md           # Authentication guidelines
-│   │   ├── 2-Database.md                 # Database guidelines
-│   │   ├── 3-Storage.md                  # Storage guidelines
-│   │   ├── 4-Functions.md                # Cloud Functions guidelines
-│   │   └── 5-Deployment.md               # Deployment guidelines
-│   │
-│   └── 2-Supabase/                     # Supabase backend architecture
-│       ├── 1-Authentication.md           # Authentication guidelines
-│       ├── 2-Database.md                 # Database guidelines
-│       ├── 3-Storage.md                  # Storage guidelines
-│       ├── 4-Functions.md                # Edge Functions guidelines
-│       └── 5-Deployment.md               # Deployment guidelines
+│   ├── 1-Authentication.md             # Firebase Authentication (phone only)
+│   ├── 2-Database.md                   # Supabase Database (accessed only through Fly.io APIs)
+│   ├── 3-Storage.md                    # Supabase Storage (accessed only through Fly.io APIs)
+│   └── 4-Functions.md                  # Fly.io APIs (using Go typed SQL and Go gRPC functions and firebase authentication)
 │
 ├── 2-iOS/                              # iOS architecture
-│   ├── 1-MockApplication/              # Mock Application (MVVM)
-│   │   ├── 1-Views.md                  # Views and design system
-│   │   ├── 2-ViewModels.md             # View models and data binding
-│   │   └── 3-Clients.md                # Device clients and key mock clients
+│   ├── 1-MockApplication/              # Mock Application (using vanilla MVVM)
+│   │   ├── 1-Views.md                  # Views and design system (no state extensive state management)
+│   │   ├── 2-ViewModels.md             # View models and data binding (one per view)
+│   │   └── 3-Clients.md                # Device clients and key mock clients (mock notification client)
 │   │
-│   └── 2-ProductionApplication/        # Production Application (TCA)
-│       ├── 1-Views.md                  # TCA compliant views
-│       ├── 2-Features.md               # TCA Features
-│       └── 3-Clients.md                # Domain clients and platform clients
+│   └── 2-ProductionApplication/        # Production Application (using TCA from swift-composable-architecture)
+│       ├── 1-Views.md                  # TCA compliant views (UI focused)
+│       ├── 2-Features.md               # TCA reducer features (comprehensive state management and side effects)
+│       └── 3-Clients.md                # TCA domain clients and platform clients (using @DependencyClient from swift-dependencies)
 ```
+
+## Documents Structure
+
+Each document in our architecture documentation follows a consistent structure
+
+### iOS Mock Application Documents
+
+**Title**
+
+1. **Clear Purpose Statement**: Paragraph describing the component's purpose
+
+2. **Content Structure**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+    * items should be in the following format: - **Key phrase**: Description
+
+3. **Testing**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
+
+4. **Anti-patterns**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
+
+
+### iOS Production Application Documents
+
+**Title**
+
+1. **Clear Purpose Statement**: Paragraph describing the component's purpose
+
+2. **Content Structure**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
+
+3. **Error Handling**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
+
+4. **Testing**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
+
+5. **Anti-patterns**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
+
+### Backend Documents
+
+**Title**
+
+1. **Clear Purpose Statement**: Paragraph describing the component's purpose
+
+2. **Content Structure**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
+
+3. **Error Handling**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
+
+4. **Testing**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
+
+5. **Deployment**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
+
+5. **Monitoring**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
+
+7. **Anti-patterns**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
 
 ## Contribution Guidelines
 
@@ -72,5 +130,3 @@ When contributing to the architecture documentation:
 1. Follow the templates provided above
 2. Maintain consistent formatting
 3. Keep content concise and focused
-4. Include practical code examples
-6. Update the CHANGELOG.md file with your changes

@@ -1,911 +1,99 @@
-# Production Application Views
+# Views
 
-## Purpose
-
-This document outlines the view architecture, components, and design patterns for the iOS Production Application using The Composable Architecture (TCA).
-
-## Core Principles
-
-### Type Safety
-
-- Use strongly typed view modifiers
-- Implement type-safe theme constants
-- Create typed wrappers for UI components
-- Use enums for finite UI states
-
-### Modularity/Composability
-
-- Build small, reusable UI components
-- Compose complex views from simpler components
-- Implement consistent view builder patterns
-- Create modular view modifiers
-
-### Testability
-
-- Create preview providers for all components
-- Implement snapshot testing for UI verification
-- Design components with testability in mind
-- Use dependency injection for view dependencies
+Views in the iOS Production Application serve as SwiftUI components that integrate with The Composable Architecture (TCA), providing unidirectional data flow, predictable state management, and comprehensive error handling while maintaining separation of concerns and testable architecture patterns for robust production-grade applications.
 
 ## Content Structure
 
-### View Architecture
-
-#### View Structure
-
-Each view follows a consistent structure:
-
-```
-Views/
-└── FeatureName/
-    ├── FeatureNameView.swift     // Main view for the feature
-    ├── FeatureNameComponents.swift // Subcomponents specific to the feature
-    └── FeatureNameTests.swift    // View tests (snapshots, etc.)
-```
-
-#### View-Feature Connection
-
-Views should be connected to their corresponding TCA features:
-
-```swift
-struct ProfileView: View {
-    @Bindable var store: StoreOf<ProfileFeature>
-
-    var body: some View {
-        VStack {
-            Text(store.user.displayName)
-                .font(.title)
-
-            Text(store.user.email)
-                .font(.subheadline)
-
-            Button("Edit Profile") {
-                store.send(.editProfileButtonTapped)
-            }
-            .sheet(
-                store: store.scope(
-                    state: \.$editProfile,
-                    action: \.editProfile
-                )
-            ) { store in
-                EditProfileView(store: store)
-            }
-        }
-    }
-}
-```
-
-### View Components
-
-#### Buttons
-
-Button variants include:
-
-- Primary buttons
-- Secondary buttons
-- Text buttons
-- Icon buttons
-
-Example implementation:
-
-```swift
-struct PrimaryButton: View {
-    let title: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.headline)
-                .foregroundColor(.white)
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(Color.accent)
-                .cornerRadius(10)
-        }
-    }
-}
-```
-
-#### Text Fields
-
-Text field variants include:
-
-- Standard text fields
-- Secure text fields
-- Text areas
-- Search fields
-
-Example implementation with TCA binding:
-
-```swift
-struct StandardTextField: View {
-    let placeholder: String
-    @Binding var text: String
-
-    var body: some View {
-        TextField(placeholder, text: $text)
-            .padding()
-            .background(Color.secondaryBackground)
-            .cornerRadius(10)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
-            )
-    }
-}
-
-// Usage in a TCA view
-struct EditProfileView: View {
-    @Bindable var store: StoreOf<EditProfileFeature>
-
-    var body: some View {
-        Form {
-            StandardTextField(
-                placeholder: "Name",
-                text: $store.displayName
-            )
-
-            Button("Save") {
-                store.send(.saveButtonTapped)
-            }
-        }
-    }
-}
-```
-
-#### Cards
-
-Card components for displaying grouped content:
-
-- Standard cards
-- Interactive cards
-- List item cards
-
-Example implementation:
-
-```swift
-struct StandardCard<Content: View>: View {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-
-    var body: some View {
-        content
-            .padding()
-            .background(Color.secondaryBackground)
-            .cornerRadius(10)
-            .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 2)
-    }
-}
-```
-
-### Navigation Patterns
-
-#### Tab Navigation
-
-Tab navigation using TCA:
-
-```swift
-struct MainTabView: View {
-    @Bindable var store: StoreOf<MainTabFeature>
-
-    var body: some View {
-        TabView(selection: $store.selectedTab) {
-            HomeView(
-                store: store.scope(
-                    state: \.home,
-                    action: \.home
-                )
-            )
-            .tabItem {
-                Label("Home", systemImage: "house")
-            }
-            .tag(MainTabFeature.Tab.home)
-
-            ProfileView(
-                store: store.scope(
-                    state: \.profile,
-                    action: \.profile
-                )
-            )
-            .tabItem {
-                Label("Profile", systemImage: "person")
-            }
-            .tag(MainTabFeature.Tab.profile)
-        }
-    }
-}
-```
-
-#### Stack Navigation
-
-Stack navigation using TCA:
-
-```swift
-struct HomeView: View {
-    @Bindable var store: StoreOf<HomeFeature>
-
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(store.items) { item in
-                    NavigationLink(
-                        state: HomeFeature.Path.State.detail(
-                            DetailFeature.State(item: item)
-                        )
-                    ) {
-                        ItemRow(item: item)
-                    }
-                }
-            }
-            .navigationTitle("Home")
-            .navigationDestination(
-                for: HomeFeature.Path.State.self,
-                destination: { state in
-                    SwitchStore(store.scope(state: \.path, action: \.path)) { state in
-                        switch state {
-                        case .detail:
-                            CaseLet(
-                                /HomeFeature.Path.State.detail,
-                                action: HomeFeature.Path.Action.detail,
-                                then: DetailView.init(store:)
-                            )
-                        }
-                    }
-                }
-            )
-        }
-    }
-}
-```
-
-#### Modal Presentation
-
-Modal presentation using TCA:
-
-```swift
-struct ProfileView: View {
-    @Bindable var store: StoreOf<ProfileFeature>
-
-    var body: some View {
-        VStack {
-            // Content
-
-            Button("Edit Profile") {
-                store.send(.editProfileButtonTapped)
-            }
-            .sheet(
-                store: store.scope(
-                    state: \.$editProfile,
-                    action: \.editProfile
-                )
-            ) { store in
-                EditProfileView(store: store)
-            }
-        }
-    }
-}
-```
-
-Example implementation:
-
-```swift
-Text("Label")
-    .font(.body)
-    .foregroundColor(.primaryText)
-    .accessibilityLabel("Descriptive label")
-    .accessibilityHint("Tap to perform action")
-```
-
-### Migration from Mock Application
-
-#### Component Transformation
-
-Transform SwiftUI views from MVVM to TCA by copying the view and updating it to use TCA instead of MVVM:
-
-#### MVVM Component:
-
-```swift
-// Example: MVVM Profile View
-struct ProfileView: View {
-    @ObservedObject var viewModel: ProfileViewModel
-
-    var body: some View {
-        VStack {
-            Text(viewModel.user.displayName)
-                .font(.title)
-
-            Text(viewModel.user.email)
-                .font(.subheadline)
-
-            Button("Edit Profile") {
-                viewModel.showEditProfile = true
-            }
-            .sheet(isPresented: $viewModel.showEditProfile) {
-                EditProfileView(viewModel: viewModel.editProfileViewModel)
-            }
-        }
-    }
-}
-```
-
-#### TCA Component:
-
-```swift
-// Example: TCA Profile View (copied from MVVM view and updated)
-struct ProfileView: View {
-    @Bindable var store: StoreOf<ProfileFeature>
-
-    var body: some View {
-        VStack {
-            Text(store.user.displayName)
-                .font(.title)
-
-            Text(store.user.email)
-                .font(.subheadline)
-
-            Button("Edit Profile") {
-                store.send(.editProfileButtonTapped)
-            }
-            .sheet(
-                store: store.scope(
-                    state: \.$editProfile,
-                    action: \.editProfile
-                )
-            ) { store in
-                EditProfileView(store: store)
-            }
-        }
-    }
-}
-```
-
-#### View Migration Strategy
-
-Instead of reusing or wrapping MVVM views, copy and transform them to TCA:
-
-1. **Copy the View**: Copy the MVVM view to the production application
-2. **Update Dependencies**: Change from @ObservedObject to @Bindable store
-3. **Update Bindings**: Replace view model bindings with store bindings
-4. **Update Actions**: Replace view model methods with store actions
-
-```swift
-// INCORRECT: Do not create wrappers around MVVM views
-// ❌ Don't do this
-struct ProfileViewWrapper: View {
-    @Bindable var store: StoreOf<ProfileFeature>
-
-    var body: some View {
-        // Create a view model from TCA state
-        let viewModel = ProfileViewModel(
-            user: store.user,
-            onUserUpdated: { updatedUser in
-                // Send TCA action when user is updated
-                store.send(.userUpdated(updatedUser))
-            }
-        )
-
-        // Use the existing MVVM view
-        ProfileView(viewModel: viewModel)
-    }
-}
-
-// CORRECT: Copy and transform the view
-// ✅ Do this instead
-struct ProfileView: View {
-    @Bindable var store: StoreOf<ProfileFeature>
-
-    var body: some View {
-        VStack {
-            Text(store.user.displayName)
-                .font(.title)
-
-            Text(store.user.email)
-                .font(.subheadline)
-
-            Button("Edit Profile") {
-                store.send(.editProfileButtonTapped)
-            }
-            .sheet(
-                store: store.scope(
-                    state: \.$editProfile,
-                    action: \.editProfile
-                )
-            ) { store in
-                EditProfileView(store: store)
-            }
-        }
-    }
-}
-```
-
-#### Binding Migration
-
-Transform two-way bindings from MVVM to TCA:
-
-#### MVVM Binding:
-
-```swift
-// Example: MVVM Binding
-struct EditProfileView: View {
-    @ObservedObject var viewModel: EditProfileViewModel
-
-    var body: some View {
-        Form {
-            TextField("Name", text: $viewModel.displayName)
-
-            Button("Save") {
-                viewModel.save()
-            }
-        }
-    }
-}
-```
-
-#### TCA Binding:
-
-```swift
-// Example: TCA Binding
-struct EditProfileView: View {
-    @Bindable var store: StoreOf<EditProfileFeature>
-
-    var body: some View {
-        Form {
-            TextField("Name", text: $store.displayName)
-
-            Button("Save") {
-                store.send(.saveButtonTapped)
-            }
-        }
-    }
-}
-```
+### TCA Integration
+- **Store Observation**: Direct state access through @ObservableState enabling automatic UI updates and efficient rendering
+- **Action Dispatching**: User interactions translated to typed actions sent to the Store for processing
+- **Unidirectional Data Flow**: Predictable state management with clear data flow patterns and debugging capabilities
+- **Runtime Integration**: Store serves as the runtime driving feature behavior with state observation and action processing
+
+### State Management
+- **Immutable State Design**: Value-type state management using structs for predictable behavior and thread safety
+- **@ObservableState Macro**: Automatic SwiftUI observation enabling efficient view updates and minimal re-rendering
+- **State Composition**: Hierarchical state organization with clear boundaries and modular architecture patterns
+- **Direct State Access**: Modern TCA enables direct state observation without ViewStore wrapper for simplified code
+
+### Action Handling
+- **Event-Based Naming**: Actions named by "what happened" rather than expected effects for clear separation of concerns
+- **Type Safety**: Enum-based actions providing compile-time validation and exhaustive handling requirements
+- **@ViewAction Macro**: Simplified action dispatching for view-specific events with reduced boilerplate
+- **Binding Integration**: BindableAction and BindingReducer for two-way data flow with SwiftUI bindings
+
+### View Composition
+- **Store Scoping**: Parent-to-child Store scoping ensuring proper state isolation and action boundaries
+- **Optional Features**: IfLetStore for conditional feature presentation with safe state unwrapping
+- **Collection Features**: ForEachStore for managing collections of features with unique Store instances
+- **Feature Integration**: Seamless integration of child features within parent feature hierarchies
 
 ## Error Handling
 
-### Error Types
+### Error Categories
+- **Network Errors**: API failures, connectivity issues, timeout errors, and service unavailability with retry mechanisms
+- **Validation Errors**: User input validation failures, form errors, and data format issues with clear feedback
+- **State Errors**: Invalid state transitions, concurrent modification conflicts, and consistency violations
+- **System Errors**: Device capability failures, permission denials, and platform-specific errors with graceful degradation
+- **Business Logic Errors**: Domain-specific validation failures and business rule violations with contextual messaging
+- **Effect Errors**: Asynchronous operation failures, dependency errors, and external service integration issues
 
-The production application handles the following error types:
-
-- **Network Errors**: Connection issues, timeouts, server unavailable
-- **Authentication Errors**: Invalid credentials, expired tokens, unauthorized access
-- **Data Errors**: Missing data, invalid format, parsing errors
-- **Business Logic Errors**: Application-specific validation errors
-- **Server Errors**: Backend failures, API errors, unexpected responses
-
-### Error Presentation Patterns
-
-#### Alert-Based Error Handling
-
-```swift
-struct ProfileView: View {
-    @Bindable var store: StoreOf<ProfileFeature>
-
-    var body: some View {
-        VStack {
-            // Main content
-            if let user = store.user {
-                ProfileContentView(user: user)
-            } else if store.isLoading {
-                ProgressView()
-            }
-        }
-        .alert(
-            store: store.scope(state: \.$alert, action: \.alert)
-        )
-        .onAppear {
-            store.send(.loadProfile)
-        }
-    }
-}
-
-// In the Feature file
-@Reducer
-struct ProfileFeature {
-    @ObservableState
-    struct State: Equatable {
-        var user: User?
-        var isLoading = false
-        @Presents var alert: AlertState<Action.Alert>?
-    }
-
-    enum Action: Equatable {
-        case loadProfile
-        case profileResponse(Result<User, Error>)
-        case alert(PresentationAction<Alert>)
-        case retry
-
-        enum Alert: Equatable {}
-    }
-
-    var body: some ReducerOf<Self> {
-        Reduce { state, action in
-            switch action {
-            case .profileResponse(.failure(let error)):
-                state.isLoading = false
-                state.alert = AlertState {
-                    TextState("Error Loading Profile")
-                } actions: {
-                    ButtonState(role: .cancel) {
-                        TextState("Dismiss")
-                    }
-                    ButtonState {
-                        TextState("Retry")
-                    } action: .retry
-                } message: {
-                    TextState(error.localizedDescription)
-                }
-                return .none
-
-            case .retry:
-                return .send(.loadProfile)
-
-            // Other cases
-            }
-        }
-    }
-}
-```
-
-#### Inline Error Handling
-
-```swift
-struct ProfileView: View {
-    @Bindable var store: StoreOf<ProfileFeature>
-
-    var body: some View {
-        ZStack {
-            // Main content
-            if let user = store.user {
-                ProfileContentView(user: user)
-            } else if store.isLoading {
-                ProgressView()
-            }
-
-            // Error overlay
-            if let error = store.error {
-                VStack(spacing: 16) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.largeTitle)
-                        .foregroundColor(.red)
-
-                    Text(errorTitle(for: error))
-                        .font(.headline)
-
-                    Text(errorMessage(for: error))
-                        .font(.subheadline)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-
-                    Button("Try Again") {
-                        store.send(.retry)
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button("Dismiss") {
-                        store.send(.dismissError)
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .padding()
-                .background(Material.regularMaterial)
-                .cornerRadius(16)
-                .shadow(radius: 4)
-                .padding()
-                .transition(.opacity)
-                .zIndex(1)
-            }
-        }
-        .onAppear {
-            store.send(.loadProfile)
-        }
-    }
-
-    private func errorTitle(for error: ProfileFeature.ErrorState) -> String {
-        switch error {
-        case .networkError:
-            return "Network Error"
-        case .authError:
-            return "Authentication Error"
-        case .serverError:
-            return "Server Error"
-        }
-    }
-
-    private func errorMessage(for error: ProfileFeature.ErrorState) -> String {
-        switch error {
-        case .networkError(let message):
-            return message
-        case .authError(let message):
-            return message
-        case .serverError(let message):
-            return message
-        }
-    }
-}
-```
-
-### Error State Mapping
-
-Map low-level errors to user-friendly error states in the reducer:
-
-```swift
-private func mapError(_ error: Error) -> State.ErrorState {
-    if let networkError = error as? NetworkError {
-        switch networkError {
-        case .connectionFailed:
-            return .networkError(message: "Cannot connect to the server. Please check your internet connection.")
-        case .timeout:
-            return .networkError(message: "The request timed out. Please try again.")
-        case .serverError(let statusCode):
-            return .serverError(message: "Server error occurred (Code: \(statusCode)). Please try again later.")
-        }
-    } else if let authError = error as? AuthenticationError {
-        return .authError(message: "Your session has expired. Please sign in again.")
-    }
-
-    return .serverError(message: "An unexpected error occurred. Please try again.")
-}
-```
-
-### Error Recovery Patterns
-
-- **Automatic Retry**: Implement automatic retry for transient errors
-- **User-Initiated Retry**: Provide retry buttons for user-initiated recovery
-- **Graceful Degradation**: Show partial content when possible
-- **Offline Support**: Cache data for offline access
-- **Error Logging**: Log errors for debugging and analytics
+### Recovery Strategies
+- **Effect-Based Error Handling**: Errors transformed into actions within Effects for proper state management and user feedback
+- **State-Driven Error Display**: Error state reflected in UI through reducer state updates and view rendering
+- **Retry Mechanisms**: Automatic and user-initiated retry patterns for transient failures with exponential backoff
+- **Graceful Degradation**: Fallback functionality and limited feature sets during error conditions
+- **User Feedback**: Clear error messaging with actionable recovery steps and contextual information
+- **Error Logging**: Comprehensive error tracking and analytics for debugging and system improvement
 
 ## Testing
 
-### Unit Testing Strategy
+### Reducer Testing
+- **TestStore Framework**: Built-in TCA testing framework for exhaustive reducer and effect validation
+- **State Transition Testing**: Comprehensive validation of state changes and action handling patterns
+- **Effect Testing**: Asynchronous operation testing with mock dependencies and controlled environments
+- **Business Logic Testing**: Isolated testing of business logic using TestStore with predictable scenarios
 
-The production application implements a comprehensive testing strategy:
+### View Integration Testing
+- **SwiftUI Testing**: Native SwiftUI testing capabilities with ViewInspector integration for view validation
+- **Store Integration Testing**: Testing SwiftUI view integration with TCA Store and user interaction simulation
+- **Action Dispatching Testing**: Validation that user interactions correctly trigger appropriate actions
+- **State Rendering Testing**: Testing that view correctly renders different state configurations
 
-1. **Component Testing**: Test individual UI components in isolation
-2. **State Testing**: Verify UI renders correctly for different states
-3. **Interaction Testing**: Test user interactions and state changes
-4. **Accessibility Testing**: Ensure UI meets accessibility standards
-5. **Responsive Testing**: Verify layouts across device sizes and orientations
+### Visual Testing
+- **Snapshot Testing**: Visual regression testing for consistent UI appearance across devices and configurations
+- **Accessibility Testing**: Comprehensive validation of VoiceOver support, Dynamic Type, and assistive technology compatibility
+- **Xcode Previews**: Real-time view rendering with multiple Store states and configuration validation
+- **Cross-Device Testing**: Testing view behavior across different device sizes and orientations
 
-### Preview Testing
-
-Create comprehensive preview providers for all views:
-
-```swift
-#Preview("Default State") {
-    ProfileView(
-        store: Store(initialState: ProfileFeature.State()) {
-            ProfileFeature()
-        }
-    )
-}
-
-#Preview("Loading State") {
-    ProfileView(
-        store: Store(initialState: ProfileFeature.State(isLoading: true)) {
-            ProfileFeature()
-        }
-    )
-}
-
-#Preview("Loaded State") {
-    ProfileView(
-        store: Store(
-            initialState: ProfileFeature.State(
-                user: User(id: "1", name: "John Doe", email: "john@example.com")
-            )
-        ) {
-            ProfileFeature()
-        }
-    )
-}
-
-#Preview("Error State") {
-    ProfileView(
-        store: Store(
-            initialState: ProfileFeature.State(
-                error: .networkError(message: "Cannot connect to the server")
-            )
-        ) {
-            ProfileFeature()
-        }
-    )
-}
-```
-
-### Snapshot Testing
-
-Implement snapshot tests for UI verification:
-
-```swift
-import XCTest
-import SnapshotTesting
-import SwiftUI
-import ComposableArchitecture
-@testable import MyApp
-
-class ProfileViewTests: XCTestCase {
-    func testProfileView_DefaultState() {
-        let view = ProfileView(
-            store: Store(initialState: ProfileFeature.State()) {
-                ProfileFeature()
-            }
-        )
-
-        let hostingController = UIHostingController(rootView: view)
-        assertSnapshot(matching: hostingController, as: .image(on: .iPhone13))
-    }
-
-    func testProfileView_LoadingState() {
-        let view = ProfileView(
-            store: Store(initialState: ProfileFeature.State(isLoading: true)) {
-                ProfileFeature()
-            }
-        )
-
-        let hostingController = UIHostingController(rootView: view)
-        assertSnapshot(matching: hostingController, as: .image(on: .iPhone13))
-    }
-
-    func testProfileView_LoadedState() {
-        let view = ProfileView(
-            store: Store(
-                initialState: ProfileFeature.State(
-                    user: User(id: "1", name: "John Doe", email: "john@example.com")
-                )
-            ) {
-                ProfileFeature()
-            }
-        )
-
-        let hostingController = UIHostingController(rootView: view)
-        assertSnapshot(matching: hostingController, as: .image(on: .iPhone13))
-    }
-
-    func testProfileView_ErrorState() {
-        let view = ProfileView(
-            store: Store(
-                initialState: ProfileFeature.State(
-                    error: .networkError(message: "Cannot connect to the server")
-                )
-            ) {
-                ProfileFeature()
-            }
-        )
-
-        let hostingController = UIHostingController(rootView: view)
-        assertSnapshot(matching: hostingController, as: .image(on: .iPhone13))
-    }
-}
-```
-
-### Accessibility Testing
-
-Test accessibility support:
-
-```swift
-func testProfileView_Accessibility() {
-    let view = ProfileView(
-        store: Store(
-            initialState: ProfileFeature.State(
-                user: User(id: "1", name: "John Doe", email: "john@example.com")
-            )
-        ) {
-            ProfileFeature()
-        }
-    )
-
-    let hostingController = UIHostingController(rootView: view)
-    let accessibilityElements = hostingController.view.accessibilityElements ?? []
-
-    XCTAssertTrue(accessibilityElements.count > 0, "View should have accessibility elements")
-
-    // Verify specific accessibility elements
-    let nameLabel = accessibilityElements.first {
-        ($0 as? UIAccessibilityElement)?.accessibilityLabel == "Name: John Doe"
-    }
-    XCTAssertNotNil(nameLabel, "Name label should be accessible")
-
-    let editButton = accessibilityElements.first {
-        ($0 as? UIAccessibilityElement)?.accessibilityLabel == "Edit Profile"
-    }
-    XCTAssertNotNil(editButton, "Edit button should be accessible")
-    XCTAssertEqual(
-        (editButton as? UIAccessibilityElement)?.accessibilityTraits,
-        .button,
-        "Edit button should have button traits"
-    )
-}
-```
-
-### UI Testing with XCUITest
-
-```swift
-func testProfileView_EditProfile() {
-    let app = XCUIApplication()
-    app.launch()
-
-    // Navigate to profile
-    app.tabBars.buttons["Profile"].tap()
-
-    // Verify profile elements
-    XCTAssertTrue(app.staticTexts["John Doe"].exists)
-    XCTAssertTrue(app.staticTexts["john@example.com"].exists)
-
-    // Tap edit profile
-    app.buttons["Edit Profile"].tap()
-
-    // Verify edit profile sheet appeared
-    XCTAssertTrue(app.textFields["Name"].exists)
-
-    // Edit name
-    let nameField = app.textFields["Name"]
-    nameField.tap()
-    nameField.typeText(" Updated")
-
-    // Save changes
-    app.buttons["Save"].tap()
-
-    // Verify profile updated
-    XCTAssertTrue(app.staticTexts["John Doe Updated"].exists)
-}
-```
-
-### Testing Different Device Sizes and Orientations
-
-```swift
-func testProfileView_DifferentDevices() {
-    let view = ProfileView(
-        store: Store(
-            initialState: ProfileFeature.State(
-                user: User(id: "1", name: "John Doe", email: "john@example.com")
-            )
-        ) {
-            ProfileFeature()
-        }
-    )
-
-    // Test on iPhone SE (smallest supported device)
-    assertSnapshot(matching: UIHostingController(rootView: view), as: .image(on: .iPhoneSE))
-
-    // Test on iPhone 13 Pro Max (largest iPhone)
-    assertSnapshot(matching: UIHostingController(rootView: view), as: .image(on: .iPhone13ProMax))
-
-    // Test on iPad
-    assertSnapshot(matching: UIHostingController(rootView: view), as: .image(on: .iPadPro11))
-
-    // Test in landscape orientation
-    assertSnapshot(
-        matching: UIHostingController(rootView: view),
-        as: .image(on: .iPhone13, traits: .landscapeRight)
-    )
-}
-```
-
-## Best Practices
-
-* Use SwiftUI previews for rapid UI development
-* Maintain consistent spacing and alignment
-* Implement responsive layouts that adapt to different screen sizes
-* Use semantic colors instead of hard-coded values
-* Implement proper accessibility support
-* Follow Apple's Human Interface Guidelines
-* Break up complex views into computed properties for different sections
-* Use TCA binding for form inputs
-* Keep views focused on presentation, not logic
-* Implement consistent error handling across all views
+### Development Testing
+- **Mock Dependencies**: Controlled dependency implementations for deterministic testing scenarios
+- **Performance Testing**: View rendering performance analysis and TCA integration optimization tools
+- **Memory Testing**: Testing proper memory management and Store lifecycle handling
+- **Integration Testing**: End-to-end testing of complete feature flows with realistic data and interactions
 
 ## Anti-patterns
 
-* Creating reusable UI components that increase coupling
-* Using local state in views (@State, @StateObject)
-* Mixing UI and business logic
-* Ignoring accessibility
-* Inconsistent error handling
-* Deeply nested view hierarchies
-* Implementing business logic in views
-* Not testing views with different states
+### Architecture Violations
+- **Business Logic in Views**: Implementing complex business logic directly in SwiftUI views instead of delegating to reducers
+- **State Mutation**: Mutating state outside of reducers bypassing unidirectional data flow and predictable state management
+- **Action Misuse**: Using actions as methods for sharing logic instead of representing events that occurred
+- **Side Effects in Reducers**: Implementing side effects directly in reducers instead of using Effects for asynchronous operations
+
+### Performance Issues
+- **Over-observing State**: Over-observing state in views leading to unnecessary re-renders and performance degradation
+- **High-frequency Actions**: Sending high-frequency actions directly to reducers without debouncing or throttling mechanisms
+- **Synchronous Action Chains**: Creating synchronous action chains that immediately trigger other actions leading to complex debugging
+- **Memory Leaks**: Not properly managing Store lifecycle and subscriptions leading to memory issues
+
+### Testing Deficiencies
+- **Missing Testing**: Not implementing comprehensive testing for reducers and effects missing TCA's testability advantages
+- **Poor Dependency Management**: Ignoring TCA's dependency management system for external services reducing testability and modularity
+- **Insufficient Coverage**: Not testing all state transitions, error conditions, and edge cases in features
+- **Integration Gaps**: Not testing view-store integration and user interaction flows comprehensively
+
+### Design Problems
+- **Monolithic Features**: Creating monolithic features that violate single responsibility principle and reduce composability
+- **Poor Store Scoping**: Not using Store scoping for child features creating tight coupling and state management complexity
+- **Architectural Inconsistency**: Not following TCA's architectural patterns leading to unpredictable behavior and maintenance issues
+- **Complex View Logic**: Creating complex view logic that should be handled in reducers or effects
