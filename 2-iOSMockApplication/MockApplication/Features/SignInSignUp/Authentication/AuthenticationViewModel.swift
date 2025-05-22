@@ -162,6 +162,9 @@ class AuthenticationViewModel: ObservableObject {
     /// Skip authentication (debug mode)
     func skipAuthentication() {
         HapticFeedback.triggerHaptic()
+
+        // Call callbacks to update the app state directly
+        // This will update the bindings in the parent view
         authenticationSuccessCallback?(true)
         needsOnboardingCallback?(false)
     }
@@ -202,6 +205,8 @@ class AuthenticationViewModel: ObservableObject {
         // Simulate a network delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             self.isLoading = false
+
+            // No need to save to UserDefaults, we'll use the binding directly
 
             // For the mock app, we'll always succeed and show onboarding
             self.needsOnboardingCallback?(true)

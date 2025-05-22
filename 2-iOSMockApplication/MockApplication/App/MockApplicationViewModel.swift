@@ -4,7 +4,7 @@ import Combine
 
 /// Global app state
 /// This class is designed to mirror the structure of AppFeature.State in the TCA implementation
-class AppViewModel: ObservableObject {
+class MockApplicationViewModel: ObservableObject {
     // MARK: - Published Properties
 
     /// Whether the user is authenticated
@@ -16,11 +16,11 @@ class AppViewModel: ObservableObject {
     /// Whether the app is in the foreground
     @Published var isActive: Bool = true
 
+    /// Cancellable for sign out notification
+    @Published var signOutCancellable: AnyCancellable? = nil
+
     /// Error state
     @Published var error: String? = nil
-
-    /// Loading state
-    @Published var isLoading: Bool = false
 
     /// Presentation states (will be @Presents in TCA)
     @Published var showContactDetails: Bool = false
@@ -50,7 +50,7 @@ class AppViewModel: ObservableObject {
 
     /// Sign out the user
     func signOut() {
-        print("AppState.signOut() called")
+        print("MockApplicationViewModel.signOut() called")
 
         // Reset authentication state
         self.isAuthenticated = false
@@ -59,8 +59,7 @@ class AppViewModel: ObservableObject {
         // Publish changes to ensure UI updates
         objectWillChange.send()
 
-        // Post notification for app-wide sign out
-        NotificationCenter.default.post(name: NSNotification.Name("UserSignedOut"), object: nil)
+        // No need to post notification, the binding will handle UI updates
 
         // Log for debugging
         print("User signed out: isAuthenticated = \(isAuthenticated)")
@@ -69,11 +68,6 @@ class AppViewModel: ObservableObject {
     /// Set error message
     func setError(_ message: String?) {
         error = message
-    }
-
-    /// Set loading state
-    func setLoading(_ loading: Bool) {
-        isLoading = loading
     }
 
     /// Show contact details
@@ -88,6 +82,3 @@ class AppViewModel: ObservableObject {
         selectedContactId = nil
     }
 }
-
-// For backward compatibility
-typealias AppState = AppViewModel

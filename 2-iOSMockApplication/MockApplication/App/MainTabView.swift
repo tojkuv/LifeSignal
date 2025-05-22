@@ -10,7 +10,6 @@ import Foundation
 
 /// The main tab view of the app
 struct MainTabView: View {
-    @EnvironmentObject private var appState: AppState
     @StateObject private var viewModel: MainTabViewModel
 
     init() {

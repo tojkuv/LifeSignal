@@ -98,6 +98,9 @@ class OnboardingViewModel: ObservableObject {
             // Save user data to UserDefaults
             self.saveUserData()
 
+            // No need to update UserDefaults or post notifications
+            // The binding will handle this
+
             // Show instructions sheet
             self.showInstructions = true
 
@@ -131,6 +134,9 @@ class OnboardingViewModel: ObservableObject {
     func handleGotItButtonTap() {
         // First dismiss the sheet, then mark onboarding as complete
         showInstructions = false
+
+        // No need to update UserDefaults or post notifications
+        // The binding will handle this
 
         // Use a slight delay to ensure the sheet is dismissed before changing isOnboarding
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
