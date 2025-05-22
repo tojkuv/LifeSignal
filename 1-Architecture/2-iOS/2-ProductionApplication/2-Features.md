@@ -1,32 +1,32 @@
 # Features
 
-Features in the iOS Production Application serve as TCA Reducer-based business logic components that encapsulate state management, action handling, and side effects. They provide modular, composable, and testable architecture patterns with clear separation of concerns and comprehensive dependency management for robust production-grade applications.
+TCA Reducer Features implement comprehensive state management and side effects using State, Action, Reducer, and Store patterns for each feature in the iOS production application.
 
 ## Content Structure
 
-### Feature Architecture
-- **State Management**: Immutable value types using @ObservableState structs for automatic SwiftUI observation and efficient change detection
-- **Action Definition**: Comprehensive event modeling through enum-based action systems representing "what happened" rather than intended effects
-- **Reducer Composition**: Pure function-based business logic implementation through Reducer protocol conformance with deterministic state transformations
-- **Effect Management**: Comprehensive side effect handling through TCA's Effect system and asynchronous operation management
+### Feature Components
+- **State**: Immutable `struct` state with `@ObservableState` for automatic UI updates
+- **Action**: Define events via `Action` enums representing what happened
+- **Reducer**: Handle side effects with `Effect.run` and IDs for cancellation
+- **Store**: Each feature includes State, Action, Reducer, and Store
+- **Type Safety**: Leverage Swift's type system for compile-time safety and error prevention
+- **Sendable Conformance**: Ensure all state types conform to Sendable for concurrency safety
 
 ### State Management
-- **@ObservableState Structs**: Value-type state containers with automatic SwiftUI observation and efficient change detection
-- **Single Source of Truth**: Centralized state management eliminating data inconsistencies and synchronization issues
-- **Hierarchical Composition**: Nested state structures for complex features with clear data organization and boundaries
-- **State Mutations**: Direct state modification within reducer functions ensuring predictable behavior and performance
+- **Immutable State**: Use immutable `struct` state with `@ObservableState`
+- **Single Source of Truth**: Centralized state management for each feature
+- **State Composition**: Compose features hierarchically with clear boundaries
+- **Direct State Access**: Modern TCA enables direct state observation
+- **Concurrency Safety**: Follow Swift's strict concurrency requirements for state access
+- **Value Semantics**: Leverage Swift's value types for predictable state mutations
 
-### Action Handling
-- **Event-Based Design**: Actions represent "what happened" rather than intended effects for clear separation of concerns
-- **Exhaustive Handling**: Enum-based actions ensuring all possible events are explicitly handled by reducers
-- **Type Safety**: Compile-time validation of action handling with associated values and payload validation
-- **Action Boundaries**: Clear action scope definition preventing unintended cross-feature dependencies and coupling
-
-### Effect Management
-- **Effect.run Integration**: Swift Concurrency support with async/await patterns for modern asynchronous programming
-- **Cancellation Management**: Effect cancellation with unique identifiers for resource cleanup and lifecycle management
-- **Dependency Integration**: Seamless integration with dependency injection for testable and modular side effects
-- **Effect Testing**: Comprehensive testing support through TestStore and controlled execution environments
+### Side Effects
+- **Effect.run**: Handle side effects with `Effect.run` and async/await
+- **Cancellation IDs**: Use IDs for effect cancellation and resource cleanup
+- **Dependency Injection**: Integrate with dependency system for testable effects using @Dependency
+- **Error Handling**: Transform errors into actions for proper state management
+- **Task Management**: Proper Task lifecycle management with cancellation support
+- **Async/Await Integration**: Use modern Swift concurrency patterns throughout effects
 
 ## Error Handling
 
@@ -45,6 +45,8 @@ Features in the iOS Production Application serve as TCA Reducer-based business l
 - **Retry Mechanisms**: Automatic and user-initiated retry patterns for transient failures with exponential backoff
 - **Graceful Degradation**: Fallback functionality and limited feature sets during error conditions
 - **User Feedback**: Clear error messaging with actionable recovery steps and contextual information
+- **Async Error Handling**: Use async/await with proper error propagation and Task cancellation
+- **Effect Cancellation**: Implement proper effect cancellation for error recovery and resource cleanup
 
 ## Testing
 
@@ -59,6 +61,8 @@ Features in the iOS Production Application serve as TCA Reducer-based business l
 - **Cancellation Testing**: Testing proper effect cancellation and resource cleanup
 - **TestClock Integration**: Predictable time-based testing for effects involving timers and scheduling
 - **Error Handling Testing**: Testing error propagation and recovery strategies within effects
+- **Async/Await Testing**: Test async effects with proper Task management and cancellation handling
+- **Concurrency Testing**: Validate Sendable conformance and thread safety in effect implementations
 
 ### Integration Testing
 - **Feature Composition Testing**: Integration testing of parent-child feature relationships and communication patterns
@@ -71,6 +75,8 @@ Features in the iOS Production Application serve as TCA Reducer-based business l
 - **Performance Testing**: Feature performance analysis and optimization tools for development debugging and validation
 - **Memory Testing**: Testing proper memory management and effect lifecycle handling
 - **Dependency Injection Testing**: Test-friendly dependency substitution enabling comprehensive feature testing
+- **@Dependency Testing**: Test dependency injection patterns with proper mock implementations
+- **Task Lifecycle Testing**: Test proper Task creation, execution, and cancellation in feature effects
 
 ## Anti-patterns
 
@@ -85,6 +91,9 @@ Features in the iOS Production Application serve as TCA Reducer-based business l
 - **Expensive Reducer Operations**: Performing expensive operations directly in reducers blocking the main thread and degrading UI performance
 - **High-frequency Actions**: Sending high-frequency actions directly to reducers without debouncing or throttling mechanisms
 - **Synchronous Effects**: Implementing synchronous operations that should be asynchronous within effects
+- **Poor Task Management**: Not properly managing Task lifecycle in effects leading to resource leaks
+- **Missing Sendable**: Not conforming state types to Sendable for concurrency safety
+- **Outdated Async Patterns**: Using completion handlers instead of modern async/await in effects
 
 ### Testing Deficiencies
 - **Exhaustive Testing**: Creating exhaustive tests that verify everything in one go leading to fragile and unmaintainable test suites

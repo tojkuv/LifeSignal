@@ -1,32 +1,32 @@
 # ViewModels
 
-ViewModels in the iOS Mock Application serve as ObservableObject classes that embody the presentation layer within vanilla MVVM architecture. They manage UI state, handle user interactions, and provide reactive data binding between Views and business logic using simple state management patterns appropriate for rapid prototyping and development validation.
+ViewModels use `ObservableObject` with `@Published` properties to manage UI state for individual screens and features in the iOS mock application.
 
 ## Content Structure
 
-### ViewModel Architecture
-- **ObservableObject Protocol**: Enables automatic UI updates through objectWillChange publisher and reactive programming patterns
-- **Single Responsibility**: Each ViewModel focuses on one specific view or feature with clear boundaries and focused functionality
-- **Data Transformation**: Transform and format data for presentation without complex business logic
-- **Lifecycle Management**: Proper memory management and resource cleanup with simple state patterns
+### ViewModel Structure
+- **ObservableObject**: Use `ObservableObject` with `@Published` properties for reactive state
+- **One Per Screen**: Each ViewModel serves one screen/feature with focused responsibility
+- **UI State Only**: Contain only UI state, no network or service logic
+- **No Dependencies**: No dependency injection or abstractions for mock applications
 
 ### State Management
-- **@Published Properties**: Automatic change notification system for UI-relevant state with efficient update cycles
-- **Simple State Patterns**: Use basic state management appropriate for mock applications without complex flows
-- **Type Safety**: Compile-time validation for published properties with explicit type declarations
-- **Memory Management**: Proper subscription lifecycle management with automatic cleanup
+- **@Published Properties**: Use `@Published` for properties that trigger UI updates
+- **Simple State**: Keep state simple and focused on UI presentation needs
+- **Local Data**: Use hard-coded data and simple state transformations
+- **Memory Management**: Proper cleanup and lifecycle management
 
-### Data Binding
-- **Property Wrapper Integration**: Use @StateObject for ViewModel ownership and @ObservedObject for observation
-- **Reactive Updates**: Automatic UI invalidation triggered by @Published property changes
-- **Two-way Binding**: Support for @Binding when parent-child communication is needed
-- **Environment Objects**: Use @EnvironmentObject for shared state across view hierarchies when appropriate
+### Data Sources
+- **Hard-coded Data**: Use hard-coded structs, enums, or JSON literals for data
+- **Async Simulation**: Simulate async operations with `DispatchQueue.main.asyncAfter`
+- **No Persistence**: Data resets on app launch; no persistence layer
+- **Realistic Content**: Use production-like data structures for validation
 
-### Mock Data Integration
-- **Embedded Mock Data**: Self-contained mock data within ViewModels for independent development and testing
-- **Realistic Content**: Production-like data structures and content for accurate development validation
-- **Deterministic Behavior**: Predictable data states for reliable testing and development workflows
-- **Type Safety**: Strongly-typed mock data with compile-time validation and error prevention
+### Integration Patterns
+- **@StateObject**: Use `@StateObject` for ViewModel ownership in views
+- **@ObservedObject**: Use `@ObservedObject` for ViewModel observation
+- **Simple Binding**: Keep data binding patterns simple and straightforward
+- **No Complex Flow**: Avoid complex state flows or business logic
 
 ## Testing
 

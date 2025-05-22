@@ -25,12 +25,12 @@
 4. **Restart Steps:** list-processes→kill-process→npm run dev
 5. **No New Ports:** Use existing ports only
 
-
-# USER PREFERENCES
+# USER MCP PREFERENCES
+- User prefers always call the MCP Context 7 at the start of planning and on each task as needed (before calling the MCP Sequential Thinking).
 - User prefers using MCP Sequential Thinking for planning and task completion.
 - User prefers MCP Vertex AI over augment context engine.
-- User prefers MCP Context 7 to get up to date documentation.
 - User prefers MCP Task Manager for planning.
     - User prefers that the agent never waits for task approvals (agent should always approves them automatically)
 
+USER GENERAL PREFERENCES
 - User prefers that the agent does not create nor delete any files nor folders

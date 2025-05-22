@@ -1,145 +1,99 @@
 # Authentication
 
-Firebase Authentication serves as the centralized identity provider for phone-only authentication, delivering secure user authentication and authorization with seamless integration across Supabase Database, Supabase Storage, and Fly.io gRPC Functions to ensure consistent user identity and access control throughout the backend architecture.
+Firebase Authentication provides phone-only authentication for the backend system, handling user verification through SMS and token management for secure access to Supabase Database, Supabase Storage, and Fly.io APIs.
 
 ## Content Structure
 
-### Authentication Methods
-- **Phone Number Authentication**: SMS-based verification with rate limiting and regional support as the primary authentication method
-- **Custom Token**: Server-side user creation and administrative authentication for system operations
-- **Anonymous Authentication**: Temporary access for guest users with upgrade paths to phone authentication
-- **JWT Token Management**: Secure token generation, validation, and refresh handling across all services
+### Phone Authentication
+- **Firebase Phone Auth**: Primary authentication method using SMS verification with async/await patterns
+- **TCA Client Architecture**: iOS clients use @DependencyClient for Firebase authentication platform integration
+- **Token Verification**: Go backend verifies Firebase ID tokens using `firebase.google.com/go` with context.Context
+- **UID Extraction**: Extract `uid` and custom claims from verified tokens with type-safe Go patterns
+- **Client Integration**: Clients include ID token in gRPC API calls for authentication
+- **Structured Logging**: Authentication events logged to Loki with structured fields for observability
 
-### Service Integration
-- **Database Integration**: Firebase JWT validation in PostgreSQL functions with Row Level Security policies
-- **Storage Integration**: Firebase authentication controls file access permissions with user-scoped organization
-- **gRPC Integration**: Centralized JWT validation in gRPC interceptors with context propagation
-- **Custom Claims**: Structured role-based access control across all backend services
+### Token Management
+- **ID Token Verification**: Verify Firebase ID tokens in Go middleware with context.Context
+- **Custom Claims**: Extract user roles and permissions from token claims with type-safe Go patterns
+- **Token Propagation**: Pass `uid` to Supabase DB via RLS and Supabase Storage
+- **Admin Credentials**: Never expose Firebase Admin credentials to clients
+- **gRPC Integration**: Include token verification in gRPC interceptors for service authentication
+- **Dependency Injection**: Use @Dependency pattern for testable token management in iOS clients
 
-### Authentication Flow
-- **User Authentication**: Client authenticates using phone number verification
-- **Token Generation**: Firebase issues signed JWT with user context and custom claims
-- **Service Validation**: Backend services verify token signature and expiration
-- **Claims Processing**: Services extract and validate user permissions for access control
-
-### Security Architecture
-- **Multi-Factor Authentication**: Enhanced security for administrative and sensitive operations
-- **Role-Based Access Control**: Hierarchical permission system using custom claims
-- **Session Management**: Secure token refresh handling with automatic session restoration
-- **Rate Limiting**: Protection against brute force attacks and excessive authentication attempts
+### Security Measures
+- **Rate Limiting**: Enforce rate limits on SMS and login endpoints with Go middleware
+- **Exponential Backoff**: Implement exponential backoff on auth attempts with context cancellation
+- **Circuit Breakers**: Use circuit breakers for authentication service protection with Go patterns
+- **Admin Isolation**: Keep Firebase Admin SDK server-side only
+- **Fly.io Security**: Secure credential management using Fly.io secrets and environment variables
+- **Structured Security Logging**: Log security events to Loki with structured fields for monitoring
 
 ## Error Handling
 
-### Error Categories
-- **Validation Errors**: Invalid input format, missing fields, or malformed requests
-- **Authentication Errors**: Invalid credentials, expired tokens, or account issues
-- **Authorization Errors**: Insufficient permissions or access control violations
-- **Network Errors**: Connection timeouts, service unavailability, or API limits
-- **Rate Limiting**: Excessive authentication attempts or quota exceeded
-- **SMS Delivery Errors**: SMS provider failures, invalid phone numbers, or regional restrictions
+### Authentication Failures
+- **Invalid Token**: Handle expired or malformed Firebase ID tokens gracefully
+- **Missing Claims**: Manage tokens without required custom claims
+- **Network Timeouts**: Implement retry logic for Firebase service connectivity
+- **Rate Limit Exceeded**: Return appropriate HTTP status codes for rate limiting
 
 ### Recovery Strategies
-- **Graceful Degradation**: Limited functionality for unauthenticated users with clear upgrade paths
-- **Exponential Backoff**: Progressive retry delays for transient failures with circuit breaker patterns
-- **User-Friendly Messages**: Clear error communication with actionable guidance and support options
-- **Fallback Methods**: Alternative authentication options when primary SMS delivery fails
-- **Session Recovery**: Automatic token refresh and seamless session restoration
-- **Circuit Breakers**: Service protection during authentication service outages
+- **Token Refresh**: Guide clients to refresh expired tokens
+- **Graceful Degradation**: Provide limited functionality when auth services are down
+- **Error Logging**: Log authentication failures with request context
+- **Circuit Breaker**: Prevent cascading failures during auth service outages
 
 ## Testing
 
 ### Unit Testing
-- **Mock Firebase Authentication**: Isolated component validation with deterministic mock providers
-- **JWT Token Testing**: Comprehensive validation of token generation, validation, and expiration
-- **Custom Claims Testing**: Role-based access control validation with various permission scenarios
-- **Error Handling Testing**: Comprehensive error condition simulation and recovery validation
+- **Token Verification**: Test Firebase ID token validation with mock tokens
+- **Middleware Testing**: Test authentication middleware with valid and invalid tokens
+- **Claims Extraction**: Test extraction of `uid` and custom claims from tokens
+- **Error Scenarios**: Test handling of expired, malformed, and missing tokens
 
 ### Integration Testing
-- **Firebase Emulator Suite**: End-to-end authentication flows in isolated environment
-- **Cross-Service Testing**: Authentication integration verification across all backend services
-- **SMS Provider Testing**: Phone authentication flow testing with mock SMS providers
-- **Database Integration Testing**: JWT validation and RLS policy testing with Supabase
-
-### Security Testing
-- **Authentication Rules Testing**: Comprehensive validation of access policies and security rules
-- **Penetration Testing**: Security vulnerability assessment and threat modeling
-- **Rate Limiting Testing**: Brute force protection and quota enforcement validation
-- **Token Security Testing**: JWT signature validation and expiration handling
-
-### Performance Testing
-- **Load Testing**: Concurrent user authentication and throughput validation
-- **Scalability Testing**: Authentication service performance under high load
-- **Latency Testing**: Authentication response time optimization and monitoring
-- **Resource Usage Testing**: Memory and CPU usage optimization for authentication operations
+- **Firebase Integration**: Test actual Firebase token verification in test environment
+- **End-to-End Flow**: Test complete authentication flow from client to backend
+- **Rate Limiting**: Test rate limiting enforcement on authentication endpoints
+- **Service Integration**: Test token propagation to Supabase and other services
 
 ## Deployment
 
-### Environment Configuration
-- **Development**: Firebase Emulator Suite with local configuration and test data
-- **Staging**: Isolated Firebase project for pre-production validation and testing
-- **Production**: Hardened Firebase project with security monitoring and alerting
-- **Configuration Management**: Secure environment variable management and secret rotation
+### Firebase Configuration
+- **Project Setup**: Configure Firebase project with phone authentication enabled
+- **Service Account**: Generate and securely store Firebase Admin SDK service account key
+- **Environment Variables**: Set Firebase project ID and credentials in deployment environment
+- **Regional Settings**: Configure SMS providers for target geographic regions
 
-### Provider Setup
-- **Phone Authentication**: SMS provider configuration with rate limiting and fraud protection
-- **Custom Domains**: Branded authentication domains with SSL certificates and security headers
-- **OAuth Integration**: Social provider setup for future expansion with secure redirect URLs
-- **Security Policies**: Password policies, account verification, and recovery procedures
-
-### Service Configuration
-- **Database Integration**: JWT validation configuration for Supabase RLS policies
-- **Storage Integration**: Authentication-based access control for file operations
-- **gRPC Integration**: Authentication middleware deployment for Fly.io services
-- **Monitoring Setup**: Health checks, performance metrics, and security event tracking
-
-### Infrastructure Deployment
-- **Container Deployment**: Authentication service containerization and orchestration
-- **Load Balancing**: High availability setup with failover and redundancy
-- **SSL/TLS Configuration**: Secure communication channels for all authentication operations
-- **Backup and Recovery**: Authentication data backup and disaster recovery procedures
+### Go Service Deployment
+- **Authentication Middleware**: Deploy JWT verification middleware in gRPC services
+- **Environment Secrets**: Securely manage Firebase credentials using secret management
+- **Health Checks**: Implement health endpoints that verify Firebase connectivity
+- **Logging Configuration**: Set up structured logging for authentication events
 
 ## Monitoring
 
-### Performance Monitoring
-- **Authentication Metrics**: Response times, success rates, and throughput monitoring
-- **Error Rate Tracking**: Authentication failure patterns and error categorization
-- **Resource Utilization**: CPU, memory, and network usage monitoring for authentication services
-- **Scalability Metrics**: Concurrent user capacity and performance under load
+### Authentication Metrics
+- **Success Rate**: Track authentication success/failure rates
+- **Response Time**: Monitor Firebase token verification latency
+- **Rate Limiting**: Track rate limit hits and blocked requests
+- **Token Usage**: Monitor token validation frequency and patterns
 
 ### Security Monitoring
-- **Authentication Events**: Continuous monitoring for security threats and anomalies
-- **Failed Login Attempts**: Brute force attack detection and automated response
-- **Token Usage Patterns**: Suspicious token usage and potential security breaches
-- **Rate Limiting Alerts**: Quota exceeded notifications and abuse pattern detection
-
-### Operational Monitoring
-- **Service Health**: Authentication service availability and uptime monitoring
-- **SMS Provider Status**: SMS delivery success rates and provider performance
-- **Database Connectivity**: Authentication database connection health and performance
-- **Integration Status**: Cross-service authentication integration monitoring
-
-### Alerting and Response
-- **Security Alerts**: Immediate notification for security incidents and threats
-- **Performance Alerts**: Authentication service degradation and response time issues
-- **Error Rate Alerts**: Elevated error rates and service failure notifications
-- **Capacity Alerts**: Resource utilization thresholds and scaling requirements
+- **Failed Attempts**: Alert on authentication spikes or unusual patterns
+- **Token Anomalies**: Detect suspicious token usage or validation failures
+- **Admin Access**: Monitor Firebase Admin SDK usage and access patterns
+- **Geographic Patterns**: Track authentication attempts by region
 
 ## Anti-patterns
 
 ### Security Anti-patterns
-- **Client-Side Only Validation**: Relying exclusively on client-side authentication without server-side validation
-- **Insecure Token Storage**: Storing authentication tokens in insecure locations without proper encryption
-- **Weak Security Policies**: Using weak password policies or not implementing proper security requirements
-- **Missing Rate Limiting**: Not implementing rate limiting, leading to potential brute force vulnerabilities
-
-### Architecture Anti-patterns
-- **Mixed Concerns**: Mixing authentication concerns with business logic in the same components
-- **Hardcoded Logic**: Hardcoding user roles, permissions, or authentication logic in client applications
-- **Admin Privilege Misuse**: Exposing Firebase Admin SDK credentials or using admin privileges in client code
-- **Custom Claims Misuse**: Storing sensitive or large amounts of data in Firebase Authentication custom claims
+- **Exposing Admin Credentials**: Never include Firebase Admin SDK credentials in client-side code
+- **Bypassing Token Verification**: Skipping Firebase ID token verification in backend services
+- **Client-Side Only Auth**: Relying solely on client-side authentication without server verification
+- **Weak Rate Limiting**: Not implementing proper rate limiting on authentication endpoints
 
 ### Implementation Anti-patterns
-- **Inadequate Error Handling**: Ignoring authentication errors or providing inadequate error handling and recovery
-- **Missing Verification**: Skipping phone verification for new accounts or not enforcing account verification
-- **Token Scope Violations**: Using authentication tokens beyond their intended scope or lifetime
-- **Insufficient Testing**: Implementing custom authentication without comprehensive security review and testing
+- **Hardcoded Credentials**: Embedding Firebase configuration or secrets directly in code
+- **Missing Error Handling**: Not properly handling authentication failures or network errors
+- **Temporary RLS Bypass**: Temporarily disabling RLS policies for admin operations
+- **Insufficient Logging**: Not logging authentication events for security monitoring

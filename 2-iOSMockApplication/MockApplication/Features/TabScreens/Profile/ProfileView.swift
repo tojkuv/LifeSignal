@@ -34,7 +34,6 @@ struct ProfileView: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
-                .padding(.top, 20)
 
                 // Description Setting Card
                 Button(action: {

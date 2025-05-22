@@ -1,33 +1,30 @@
 # Storage
 
-Supabase Storage delivers secure, scalable file storage with Firebase Authentication integration, serving as the primary file storage layer accessed only through Fly.io APIs. It provides bucket-based organization, Row Level Security policies, and CDN-optimized delivery that seamlessly integrates with Supabase Database and Fly.io gRPC services for comprehensive file management.
+Supabase Storage provides secure file storage with bucket organization, signed URL generation, and Row Level Security policies for user-scoped file access through Go backend services.
 
 ## Content Structure
 
-### Bucket Organization
-- **Public Assets**: Publicly accessible files including avatars, logos, shared media, marketing content, and CDN-optimized resources
-- **User Files**: Private user-specific documents, images, personal content, application data, and secure uploads
-- **System Assets**: Application resources, templates, configuration files, administrative content, and deployment artifacts
-- **Temporary Storage**: Short-lived files for processing, uploads, cache, intermediate transformations, and workflow staging
-- **Archive Storage**: Long-term retention for compliance, backups, historical data, and audit trails
+### Bucket Layout
+- **public/**: Read-only assets accessible to all users
+- **user_uploads/<uid>/**: Private user files restricted by UID
+- **temp/**: Ephemeral, short-lived files for processing
+- **archive/**: Long-term retention for compliance and backups
 
-### File Management
-- **Path Organization**: Hierarchical organization by Firebase UID for clear ownership, access control, and data isolation
-- **Content-Type Paths**: Logical grouping by file type (images, documents, videos, audio) for efficient management and processing
-- **Access Control**: Comprehensive file access control through Row Level Security policies and bucket configurations
-- **Metadata Management**: Automated extraction and indexing of file metadata for search, organization, and content management
+### File Operations
+- **Signed URLs**: Generate signed URLs in Go for upload/download operations with context.Context
+- **MIME Validation**: Validate MIME type, file size, and scan uploads for malware with type-safe Go patterns
+- **RLS Enforcement**: Enforce RLS on `storage.objects` to restrict access by `uid`
+- **Service Role Security**: Never include `service_role` keys in client-side code
+- **Type Safety**: Use structured Go types for file metadata and operation responses
+- **Structured Logging**: Log all file operations to Loki with structured fields for observability
 
-### Firebase Integration
-- **User Context Propagation**: Firebase UID embedded in storage path structure, policy evaluation, and access control logic
-- **JWT Token Validation**: Seamless Firebase JWT validation for all storage operations, policy checks, and authorization workflows
-- **Custom Claims Processing**: Firebase custom claims accessible in storage policy functions and permission evaluation
-- **Dynamic Authorization**: Real-time permission checking based on authentication state changes and role updates
-
-### File Processing
-- **Content Validation**: Comprehensive file type, size, content validation before storage operations with security scanning
-- **Image Processing**: Automatic resizing, compression, format conversion, thumbnail generation, and optimization pipelines
-- **CDN Integration**: Global content delivery optimization with edge caching, performance monitoring, and geographic distribution
-- **Transformation Pipelines**: Configurable file processing workflows for different content types and business requirements
+### Processing Pipeline
+- **Background Jobs**: Offload media processing to background jobs or edge functions with gRPC integration
+- **Content Scanning**: Validate file content and scan for security threats with structured error handling
+- **Size Limits**: Enforce file size limits to prevent abuse with proper Go validation
+- **Type Restrictions**: Restrict allowed file extensions and content types with type-safe patterns
+- **Context Management**: Use context.Context for all file operations with proper timeout and cancellation
+- **Metrics Collection**: Collect file operation metrics with Prometheus for monitoring and alerting
 
 ## Error Handling
 
@@ -54,12 +51,16 @@ Supabase Storage delivers secure, scalable file storage with Firebase Authentica
 - **Storage Service Testing**: Isolated testing of storage service components with comprehensive mock providers and predictable behaviors
 - **Policy Testing**: Comprehensive validation of storage access policies with diverse user contexts, roles, and edge cases
 - **File Processing Testing**: Validation of file processing pipelines, transformations, metadata extraction, and workflow integrity
+- **Type Safety Testing**: Test structured Go types for file metadata and operation responses with comprehensive validation
+- **Context Testing**: Test context.Context usage in file operations for proper timeout and cancellation handling
 
 ### Integration Testing
 - **End-to-End File Operations**: Testing with local Supabase Storage, authentication integration, and cross-system validation
 - **Firebase Integration Testing**: Local authentication testing with consistent user contexts, permissions, and authorization validation
 - **CDN Integration Testing**: Testing content delivery network functionality, caching, and performance optimization
 - **Cross-Service Testing**: Storage integration testing with Fly.io gRPC services and Supabase Database
+- **gRPC Integration**: Test storage operations through gRPC services with proper context propagation and error handling
+- **Metrics Testing**: Validate Prometheus metrics collection for file operations and performance monitoring
 
 ### Performance Testing
 - **Load Testing**: Concurrent uploads, downloads, CDN delivery optimization, and scalability limits
@@ -98,6 +99,8 @@ Supabase Storage delivers secure, scalable file storage with Firebase Authentica
 - **Load Balancing**: High availability setup with failover, redundancy, and traffic distribution
 - **Backup Strategy**: Automated backup procedures, disaster recovery, and data retention policies
 - **SSL/TLS Configuration**: Secure communication channels for all storage operations and file transfers
+- **Fly.io Deployment**: Deploy Go storage services on Fly.io with proper health checks and scaling
+- **gRPC Services**: Deploy storage access through gRPC services with proper connection management
 
 ## Monitoring
 
@@ -150,4 +153,7 @@ Supabase Storage delivers secure, scalable file storage with Firebase Authentica
 - **Missing Lifecycle Management**: Not implementing proper file lifecycle management, retention policies, and compliance requirements
 - **Inadequate Backup**: Not implementing proper backup and disaster recovery strategies for critical file data
 - **Poor Resource Management**: Not implementing proper resource management and capacity planning for storage operations
+- **Missing Context**: Not using context.Context for file operation timeouts and cancellation
+- **Unstructured Logging**: Not using structured logging for file operations and performance tracking
+- **Poor Type Safety**: Not using structured Go types for file metadata and operation responses
 

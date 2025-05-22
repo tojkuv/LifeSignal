@@ -1,32 +1,38 @@
 # Clients
 
-Clients in the iOS Production Application serve as dependency-injected service abstractions that provide domain-specific business logic and platform integration capabilities. They enable testable, modular, and maintainable architecture patterns with clear separation of concerns and comprehensive error handling for robust production-grade applications using TCA's @DependencyClient from swift-dependencies.
+TCA domain clients and platform clients implement a two-tier client architecture using @DependencyClient for platform clients and plain structs for domain clients, providing modular and testable service integration.
 
 ## Content Structure
 
-### Client Architecture
-- **Dependency Management**: Centralized dependency registration through DependencyValues and @Dependency property wrapper
-- **Service Abstraction**: Protocol-based interfaces defining clear contracts for external service interactions
-- **Implementation Separation**: Clear separation between live production implementations and test mock implementations
-- **Injection Mechanism**: Automatic dependency injection through TCA's dependency management system
+### Two-Tier Architecture
+- **Platform Clients**: Low-level wrappers (Fly.io gRPC/HTTP, Supabase DB, Supabase Storage, Keychain, etc.)
+- **Domain Clients**: High-level operations like `createAccount`, `uploadProfileImage`
+- **Feature Dependencies**: Features should depend only on domain clients, never directly on platform clients
+- **Clear Separation**: Platform clients handle infrastructure, domain clients handle business operations
+
+### Platform Clients
+- **@DependencyClient**: Implemented as `@DependencyClient` with `live`, `preview`, `test` variants
+- **Infrastructure Focus**: Handle auth headers, retries, decoding with async/await patterns
+- **No Business Logic**: No business logic, only infrastructure concerns
+- **Protocol-Based**: Define clear interfaces for external service interactions
+- **Async/Await Integration**: Use modern Swift concurrency for all network operations
+- **Type Safety**: Leverage Swift's type system for compile-time safety and error prevention
 
 ### Domain Clients
-- **Business Logic Encapsulation**: Domain clients provide high-level business operations combining multiple lower-level services
-- **Service Composition**: Domain clients compose multiple platform clients to provide cohesive business functionality
-- **Multi-Service Operations**: Coordinated operations across multiple platform services with transaction-like behavior
-- **Business Rule Enforcement**: Domain-specific validation and business logic implementation within client abstractions
+- **Plain Structs**: Implemented as plain structs injected via `DependencyValues`
+- **Business Operations**: Compose multiple platform clients for business operations with async/await
+- **Validation and Mapping**: Perform validation and mapping between platform and domain models
+- **Platform Client Dependencies**: Depend only on platform client protocols
+- **Concurrency Safety**: Follow Swift's strict concurrency requirements for thread safety
+- **Error Handling**: Implement comprehensive error handling with Swift's Result and async throws patterns
 
-### Platform Integration
-- **System Framework Clients**: Protocol-based abstractions for iOS system frameworks and device capabilities
-- **Network Clients**: URLSession abstraction for HTTP requests with authentication, retry logic, and error handling
-- **Storage Clients**: Core Data, UserDefaults, and file system abstractions with consistent interfaces
-- **Device Capability Clients**: Location services, camera, contacts, and sensor access with permission management
-
-### Service Abstraction
-- **Interface Contracts**: Well-defined method signatures with explicit input/output types and error handling
-- **Behavioral Specifications**: Clear documentation of expected behavior, side effects, and error conditions
-- **Dependency Relationships**: Explicit dependency declarations enabling proper injection and testing
-- **Lifecycle Management**: Proper resource management and cleanup for long-running services and connections
+### Dependency Registration
+- **DependencyValues**: Register clients through `DependencyValues` extension
+- **Client Protocols**: Define clear interfaces for both platform and domain clients
+- **Injection Pattern**: Use `@Dependency` property wrapper for client injection
+- **Test Variants**: Provide test implementations for all client types
+- **Sendable Conformance**: Ensure all client types conform to Sendable for concurrency safety
+- **Dependency Keys**: Use proper DependencyKey implementations for type-safe dependency registration
 
 ## Error Handling
 
@@ -45,6 +51,8 @@ Clients in the iOS Production Application serve as dependency-injected service a
 - **Graceful Degradation**: Fallback functionality and limited feature sets during error conditions
 - **User Feedback**: Clear error messaging with actionable recovery steps and contextual information
 - **Error Logging**: Comprehensive error tracking and analytics for debugging and system improvement
+- **Async Error Handling**: Use async/await with proper error propagation and cancellation support
+- **Task Cancellation**: Implement proper Task cancellation for network operations and long-running processes
 
 ## Testing
 
@@ -53,12 +61,16 @@ Clients in the iOS Production Application serve as dependency-injected service a
 - **Mock Dependencies**: Controlled dependency implementations for deterministic testing scenarios and isolation
 - **Dependency Testing**: Comprehensive validation of dependency injection patterns and service substitution mechanisms
 - **Contract Testing**: Interface contract validation ensuring compatibility between client abstractions and implementations
+- **Async Testing**: Test async/await client methods with proper Task and cancellation handling
+- **Concurrency Testing**: Validate Sendable conformance and thread safety in concurrent environments
 
 ### Integration Testing
 - **End-to-End Testing**: Client behavior testing with realistic service interactions and error scenarios
 - **Service Integration Testing**: Testing client behavior with actual external services in controlled environments
 - **Multi-Client Testing**: Testing complex workflows that involve multiple client interactions
 - **Performance Testing**: Client performance analysis and optimization for production workloads and scalability
+- **Async Integration**: Test async workflows and proper error propagation across client boundaries
+- **Cancellation Testing**: Test Task cancellation behavior and resource cleanup in integration scenarios
 
 ### Error Handling Testing
 - **Error Simulation**: Comprehensive error condition simulation for robust error handling testing
@@ -71,6 +83,8 @@ Clients in the iOS Production Application serve as dependency-injected service a
 - **Performance Profiling**: Client performance analysis and optimization tools for development debugging and validation
 - **Memory Testing**: Testing proper memory management and resource cleanup in client implementations
 - **Concurrency Testing**: Testing client behavior under concurrent access and Swift's strict concurrency requirements
+- **Async Performance**: Profile async/await performance and identify potential bottlenecks in client operations
+- **Task Lifecycle Testing**: Test proper Task creation, execution, and cancellation throughout client lifecycles
 
 ## Anti-patterns
 
@@ -97,3 +111,6 @@ Clients in the iOS Production Application serve as dependency-injected service a
 - **Performance Ignorance**: Ignoring performance considerations for client operations leading to poor user experience
 - **Concurrency Issues**: Not following Swift and iOS development best practices for concurrency safety and resource management
 - **Memory Leaks**: Not implementing proper resource management and cleanup for long-running services and connections
+- **Poor Async Patterns**: Using outdated completion handler patterns instead of modern async/await
+- **Missing Sendable**: Not conforming to Sendable protocol for types used across concurrency boundaries
+- **Task Mismanagement**: Not properly managing Task lifecycle, leading to resource leaks and cancellation issues

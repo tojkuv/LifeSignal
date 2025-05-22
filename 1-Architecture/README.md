@@ -27,7 +27,6 @@ The documentation filesystem is organized in a hierarchical structure, with the 
 │   ├── 1-MockApplication/              # Mock Application (using vanilla MVVM)
 │   │   ├── 1-Views.md                  # Views and design system (no state extensive state management)
 │   │   ├── 2-ViewModels.md             # View models and data binding (one per view)
-│   │   └── 3-Clients.md                # Device clients and key mock clients (mock notification client)
 │   │
 │   └── 2-ProductionApplication/        # Production Application (using TCA from swift-composable-architecture)
 │       ├── 1-Views.md                  # TCA compliant views (UI focused)
@@ -103,17 +102,17 @@ Each document in our architecture documentation follows a consistent structure
 	* Bullet points for lists of related items
 	* items should be in the following format: - **Key phrase**: Description
 
+5. **Monitoring**:
+	* Clear headings and subheadings
+	* Bullet points for lists of related items
+	* items should be in the following format: - **Key phrase**: Description
+
 4. **Testing**:
 	* Clear headings and subheadings
 	* Bullet points for lists of related items
 	* items should be in the following format: - **Key phrase**: Description
 
 5. **Deployment**:
-	* Clear headings and subheadings
-	* Bullet points for lists of related items
-	* items should be in the following format: - **Key phrase**: Description
-
-5. **Monitoring**:
 	* Clear headings and subheadings
 	* Bullet points for lists of related items
 	* items should be in the following format: - **Key phrase**: Description

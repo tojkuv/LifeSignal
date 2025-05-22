@@ -1,35 +1,32 @@
 # Functions
 
-Fly.io gRPC Functions deliver high-performance, globally distributed backend services using Go and Protocol Buffers, providing seamless Firebase Authentication integration, efficient Supabase Database and Storage connectivity, and type-safe microservice architecture that scales horizontally across multiple regions with low-latency communication and robust error handling.
+Go gRPC Functions on Fly.io provide scalable microservices with authentication middleware, database connections, and comprehensive error handling for backend API operations.
 
 ## Content Structure
 
-### Service Organization
-- **Authentication Service**: Firebase JWT validation, user context management, authorization policies, and security enforcement
-- **User Service**: User profile management, account operations, identity lifecycle, and preference management
-- **Data Service**: Database operations, data processing, analytics, reporting, and business intelligence workflows
-- **File Service**: Storage operations, file management, processing pipelines, CDN integration, and content delivery
-- **Notification Service**: Real-time notifications, messaging, communication workflows, and event distribution
-- **Analytics Service**: Event tracking, metrics collection, business intelligence, and performance monitoring
-- **Integration Service**: Third-party API management, webhooks, external service orchestration, and data synchronization
+### Service Architecture
+- **Services**: `auth`, `user`, `data`, `file`, `notifications` with type-safe gRPC definitions
+- **gRPC Middleware**: JWT verification, Context propagation of `uid`, roles with context.Context
+- **Database Connections**: Use `pgxpool` for DB connections with SQLC-generated type-safe queries
+- **Multi-Region**: Deploy multi-region with Fly volumes or Postgres read replicas
+- **Type Safety**: Use Protocol Buffers for service contracts and Go code generation
+- **Context Propagation**: Pass context.Context through all service layers for cancellation and tracing
 
-### Service Communication
-- **Synchronous gRPC**: Direct service-to-service calls for immediate response requirements and real-time operations
-- **Asynchronous Messaging**: Event-driven communication using message queues, pub/sub patterns, and workflow orchestration
-- **Service Mesh**: Traffic management, security, observability for service-to-service communication and network policies
-- **Circuit Breaker**: Resilience patterns for handling service failures, cascading errors, and system stability
+### Resilience Patterns
+- **Timeouts**: Apply timeouts on all operations using context.Context with proper cancellation
+- **Retries**: Implement retries with jitter for transient failures using Go patterns
+- **Circuit Breakers**: Use circuit breakers to prevent cascade failures with Go implementations
+- **Bulkhead Isolation**: Isolate critical resources and prevent resource exhaustion
+- **Graceful Shutdown**: Implement graceful shutdown with context cancellation and resource cleanup
+- **Health Checks**: Implement comprehensive health checks with dependency validation
 
-### External Integration
-- **Supabase Database**: Type-safe PostgreSQL operations with connection pooling, transaction management, and query optimization
-- **Supabase Storage**: File operations with CDN integration, processing pipelines, metadata management, and content delivery
-- **Firebase Authentication**: User validation, custom claims processing, real-time authentication state, and security context
-- **Third-Party APIs**: External service integrations with rate limiting, retry logic, comprehensive error handling, and monitoring
-
-### Authentication Integration
-- **JWT Middleware**: Automatic Firebase JWT validation with comprehensive error handling, logging, and security monitoring
-- **User Context Propagation**: Seamless user information and custom claims extraction across service boundaries and request contexts
-- **Role-Based Access Control**: Granular authorization using Firebase custom claims, service-specific policies, and permission matrices
-- **Cross-Service Security**: Consistent authentication and authorization patterns across all gRPC services and communication channels
+### Error Handling & Monitoring
+- **Structured Logging**: Include request ID, `uid`, and full error stack trace logged to Loki
+- **Export Logs**: Export logs to Grafana/Loki for centralized monitoring with structured fields
+- **Health Checks**: Implement graceful shutdown and health/readiness checks with gRPC health protocol
+- **DB Connectivity**: Validate DB connectivity on startup with proper error handling
+- **Prometheus Metrics**: Collect gRPC metrics, request duration, and error rates
+- **Distributed Tracing**: Implement tracing with context propagation across service boundaries
 
 ## Error Handling
 
@@ -44,10 +41,12 @@ Fly.io gRPC Functions deliver high-performance, globally distributed backend ser
 ### Recovery Strategies
 - **Graceful Degradation**: Provide limited functionality and fallback responses when dependencies fail with service continuity
 - **Circuit Breaker**: Prevent cascade failures and protect services during extended outages with automatic recovery mechanisms
-- **Exponential Backoff**: Progressive retry delays for transient failures with jitter, maximum limits, and intelligent retry policies
+- **Exponential Backoff**: Progressive retry delays for transient failures with jitter, maximum limits, and intelligent retry policies using context.Context
 - **Bulkhead Pattern**: Isolate critical resources and prevent resource exhaustion across service boundaries with resource isolation
 - **Error Context Propagation**: Comprehensive error information passing between services with correlation IDs and distributed tracing
-- **Monitoring Integration**: Automatic error reporting, alerting, distributed tracing for debugging, and operational visibility
+- **Monitoring Integration**: Automatic error reporting, alerting, distributed tracing for debugging, and operational visibility with Loki
+- **Context Cancellation**: Proper context.Context cancellation handling for request timeouts and resource cleanup
+- **Structured Error Logging**: Log all errors with structured fields for observability and debugging
 
 ## Testing
 
@@ -56,12 +55,16 @@ Fly.io gRPC Functions deliver high-performance, globally distributed backend ser
 - **Mock Dependencies**: Comprehensive mocks, stubs, and fakes for external dependencies, service isolation, and deterministic testing
 - **Contract Testing**: Comprehensive validation of gRPC service contracts, Protocol Buffer schema evolution, and API compatibility
 - **Business Logic Testing**: Testing core business logic separate from gRPC transport and infrastructure concerns
+- **Context Testing**: Test context.Context cancellation, timeouts, and propagation in service methods
+- **Table-Driven Tests**: Use Go table-driven tests for comprehensive scenario coverage with type safety
 
 ### Integration Testing
 - **End-to-End Workflows**: Service workflows with external dependencies, cross-service communication, and system integration
 - **Cross-Service Testing**: Testing service interactions, data flow, and communication patterns between microservices
 - **External Service Testing**: Testing integration with Supabase Database, Storage, and Firebase Authentication
 - **Authentication Flow Testing**: Testing JWT validation, user context propagation, and authorization across services
+- **gRPC Client Testing**: Test gRPC client implementations with proper context propagation and error handling
+- **Database Integration**: Test SQLC-generated code integration with gRPC services and proper transaction handling
 
 ### Performance Testing
 - **Load Testing**: Concurrent requests, scalability limits, resource utilization, and global distribution performance
@@ -82,12 +85,16 @@ Fly.io gRPC Functions deliver high-performance, globally distributed backend ser
 - **Staging**: Pre-production environment with full service integration, production-like data, and deployment validation
 - **Production**: Multi-region deployment with auto-scaling, monitoring, disaster recovery, and high availability
 - **Configuration Management**: Secure environment variables, secrets management, configuration drift detection, and compliance controls
+- **Fly.io Integration**: Use Fly.io secrets for service configuration and environment-specific settings
+- **Context Configuration**: Configure services with proper context.Context timeout and cancellation settings
 
 ### Infrastructure Management
 - **Container Orchestration**: Docker containers with optimized Go binaries, multi-stage builds, and resource optimization
 - **Service Discovery**: Automatic service registration, discovery, health-based routing, and network topology management
 - **Load Balancing**: Intelligent traffic distribution with sticky sessions, geographic routing, and performance optimization
 - **Global Distribution**: Multi-region deployment with edge locations, latency optimization, and geographic redundancy
+- **gRPC Deployment**: Deploy gRPC services on Fly.io with proper health checks and service mesh integration
+- **Structured Logging**: Configure structured logging to Loki for all deployed services
 
 ### Deployment Automation
 - **Auto-Scaling**: Dynamic horizontal and vertical scaling based on metrics, traffic patterns, and resource utilization
@@ -104,22 +111,27 @@ Fly.io gRPC Functions deliver high-performance, globally distributed backend ser
 ## Monitoring
 
 ### Performance Monitoring
-- **Service Metrics**: Response times, throughput, error rates, and resource utilization across all gRPC services
+- **Service Metrics**: Response times, throughput, error rates, and resource utilization across all gRPC services with Prometheus
 - **Resource Utilization**: CPU, memory, network, and disk usage monitoring for optimization and capacity planning
 - **Latency Tracking**: Request latency distribution, geographic performance, and network optimization metrics
 - **Scalability Metrics**: Auto-scaling effectiveness, load distribution, and capacity utilization monitoring
+- **gRPC Metrics**: Monitor gRPC method calls, response times, and error rates with structured metrics
+- **Context Monitoring**: Track context.Context usage, timeouts, and cancellation patterns across services
 
 ### Security Monitoring
-- **Authentication Events**: JWT validation success/failure rates, authentication patterns, and security violations
+- **Authentication Events**: JWT validation success/failure rates, authentication patterns, and security violations logged to Loki
 - **Authorization Monitoring**: Access control violations, permission failures, and role-based access patterns
 - **Security Threats**: Suspicious request patterns, potential attacks, and security incident detection
 - **Compliance Monitoring**: Security policy compliance, audit trails, and regulatory requirement adherence
+- **Structured Security Logging**: Log all security events with structured fields for analysis and alerting
 
 ### Operational Monitoring
-- **Service Health**: Service availability, uptime, and operational status across all microservices
+- **Service Health**: Service availability, uptime, and operational status across all microservices with Prometheus
 - **Inter-Service Communication**: Service-to-service communication health, dependency status, and integration monitoring
 - **External Service Integration**: Supabase Database, Storage, and Firebase Authentication integration health
 - **Deployment Monitoring**: Deployment success rates, rollback events, and release management metrics
+- **Distributed Tracing**: Monitor request flows across services with context propagation and trace correlation
+- **Structured Operational Logging**: Log all operational events to Loki with structured fields for observability
 
 ### Alerting and Response
 - **Performance Alerts**: Service performance degradation, high latency, and resource exhaustion alerts
@@ -146,9 +158,13 @@ Fly.io gRPC Functions deliver high-performance, globally distributed backend ser
 - **No Connection Pooling**: Not using connection pooling, leading to resource exhaustion and performance degradation
 - **Missing Monitoring**: Ignoring performance monitoring, optimization opportunities, and resource utilization metrics
 - **Poor Resource Management**: Not implementing proper resource cleanup, lifecycle management, and graceful shutdown procedures
+- **Missing Context**: Not using context.Context for request timeouts, cancellation, and resource management
+- **Unstructured Logging**: Not using structured logging for performance tracking and observability
 
 ### Testing and Operational Anti-patterns
 - **Insufficient Testing**: Not testing services with realistic load, error scenarios, edge cases, and production-like conditions
 - **Poor Error Handling**: Not handling errors gracefully or providing meaningful error messages and recovery guidance
 - **Missing Observability**: Not implementing proper logging, observability, debugging capabilities, and distributed tracing
 - **Version Ignorance**: Ignoring service versioning, backward compatibility requirements, and Protocol Buffer schema evolution
+- **Poor Context Testing**: Not testing context.Context cancellation, timeouts, and propagation scenarios
+- **Missing gRPC Testing**: Not testing gRPC client/server implementations with proper error handling and context usage
