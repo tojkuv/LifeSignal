@@ -1,20 +1,13 @@
 # Project Modules (exclude full directories)
 Backend/
+AndroidMockApplication/
 AndroidApplication/
 
 # Node.js dependencies
 node_modules/
 
 # VS Code / IDE settings
-tasks.json
 .idea/
-.augment-guidelines
-.taskmasterconfig
-
-# Temporary or local files
-tasks/
-vertex-ai-mcp-server-main/
-.DS_Store
 
 # macOS system file
 .DS_Store

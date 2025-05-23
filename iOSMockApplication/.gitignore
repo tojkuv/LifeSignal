@@ -1,0 +1,72 @@
+# iOS Mock Applicaiton .gitignore
+
+## User settings
+xcuserdata/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/**/*.xcuserdatad/
+*.xcodeproj/project.xcworkspace/xcuserdata/**/*.xcuserdatad/UserInterfaceState.xcuserstate
+LifeSignal/LifeSignal.xcodeproj/project.xcworkspace/xcuserdata/tojkuv.xcuserdatad/UserInterfaceState.xcuserstate
+*.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+*.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+
+## Obj-C/Swift specific
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+## Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Sensitive files
+private_keys/
+*.p8
+*.p12
+*.mobileprovision
+*.cer
+*.certSigningRequest
+*.key
+*.env
+*.env.*
+AppSubmissionKey.p8
+AuthKey_*.p8
+api_key.txt
+secrets.json
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+*.swp
+*~.nib
+DerivedData/
+build/
+*.moved-aside
+
+# Generated files
+*.generated.swift
+
+# Debug files
+*.dSYM
+*.dSYM.zip
+
+# Scripts output
+scripts_output/
