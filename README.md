@@ -1,2 +1,0 @@
-- this file will describe our coding agent workflow
-- the only source of truth for guidelines is our architecture documentation
