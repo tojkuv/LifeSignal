@@ -1,0 +1,191 @@
+import SwiftUI
+import Foundation
+import ComposableArchitecture
+import Perception
+
+struct CheckInView: View {
+    @Perception.Bindable var store: StoreOf<CheckInFeature>
+
+    var body: some View {
+        WithPerceptionTracking {
+            // Scrollable view for better horizontal mode support
+            ScrollView(.vertical, showsIndicators: true) {
+                // Single vertical stack for the entire view with equal spacing
+                VStack(spacing: 16) {
+                    // Alert Button
+                    alertButtonView
+
+                    // Countdown display
+                    countdownView
+
+                    // Check-in button
+                    checkInButtonView
+
+                    // Add extra padding at the bottom to ensure content doesn't overlap with tab bar
+                    Spacer()
+                        .frame(height: 20)
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 50) // Add padding to ensure content doesn't overlap with tab bar
+            }
+            .background(Color(UIColor.systemGroupedBackground))
+            .edgesIgnoringSafeArea(.bottom) // Extend background to bottom edge
+            .onAppear {
+                // Check if alert is already active when view appears
+                store.send(.checkAlertStatus)
+
+                // Start the timer to update the time display
+                store.send(.startUpdateTimer)
+            }
+            .onDisappear {
+                // Clean up all timers when the view disappears
+                store.send(.cleanUpTimers)
+            }
+        }
+    }
+
+    /// Alert button view
+    private var alertButtonView: some View {
+        ZStack(alignment: .center) {
+            Button(action: {
+                store.send(.handleAlertButtonTap)
+            }) {
+                ZStack {
+                    // Background
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(store.isAlertActive ? Color.red.opacity(0.3) : Color(UIColor.secondarySystemGroupedBackground))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 100) // Same height as countdown
+
+                    // Progress animation layer (below text)
+                    if !store.isAlertActive {
+                        GeometryReader { geometry in
+                            // Rectangle that grows from center to edges
+                            Rectangle()
+                                .fill(Color.red.opacity(0.3)) // Use the same red color as the active alert button
+                                .frame(width: geometry.size.width * store.tapProgress, height: geometry.size.height)
+                                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                                .opacity(0.7) // Reduce opacity to ensure text remains visible in light mode
+                        }
+                        .animation(.linear(duration: 0.3), value: store.tapProgress)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    // Deactivation animation layer (below text)
+                    if store.isLongPressing && store.isAlertActive && store.canDeactivateAlert {
+                        GeometryReader { geometry in
+                            // Growing rectangle that expands horizontally from center
+                            Rectangle()
+                                .fill(Color(UIColor.secondarySystemGroupedBackground))
+                                .frame(width: geometry.size.width * store.longPressProgress, height: geometry.size.height)
+                                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                        }
+                        .animation(.linear, value: store.longPressProgress)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    // Stack for main text and subtext
+                    VStack(alignment: .center, spacing: 4) {
+                        // Main button text
+                        Text(store.isAlertActive ? "Alert Is Active" : "Activate Alert")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundColor(.primary) // Always use primary color for main text
+
+                        // Subtext - directly below main text
+                        if store.isAlertActive && store.canDeactivateAlert {
+                            // "Hold to deactivate" text (visible whenever alert is active and can be deactivated)
+                            Text("Hold to Deactivate")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(.secondary) // Use secondary color for subtext
+                        } else if !store.isAlertActive && store.canActivateAlert {
+                            // "Tap repeatedly to activate" text (visible whenever alert is not active and button can receive taps)
+                            Text("Tap Repeatedly to Activate")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(.secondary) // Use secondary color for subtext
+                        }
+                    }
+                    .zIndex(10) // Ensure text is always on top
+                    .frame(maxWidth: .infinity)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 100) // Same height as countdown
+            }
+            .buttonStyle(PlainButtonStyle())
+            // Disable the default button highlight effect
+            .buttonStyle(BorderlessButtonStyle())
+            // Use a gesture for handling the long press
+            .gesture(
+                LongPressGesture(minimumDuration: 3.0)
+                    .onChanged { _ in
+                        if store.isAlertActive && store.canDeactivateAlert {
+                            store.send(.startLongPress)
+                        }
+                    }
+                    .onEnded { _ in
+                        store.send(.handleLongPressEnded)
+                    }
+            )
+            // Add a DragGesture to detect when the user's finger moves away
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        store.send(.handleDragGestureChanged)
+                    }
+                    .onEnded { _ in
+                        store.send(.handleDragGestureEnded)
+                    }
+            )
+        }
+    }
+
+    /// Countdown view
+    private var countdownView: some View {
+        VStack {
+            Text("Interval Time Left")
+                .font(.system(size: 14, weight: .semibold))
+                .tracking(0.5) // Add letter spacing for better readability
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 12)
+
+            // Center content vertically and horizontally
+            // Time text (centered)
+            Text(store.timeUntilNextCheckInText)
+                .font(.system(size: 38, weight: .bold))
+                .foregroundColor(.primary)
+                .minimumScaleFactor(0.7) // Allow text to scale down if needed
+                .lineLimit(1) // Ensure single line
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.bottom, 12)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 100) // Fixed height
+        .background(Color(UIColor.secondarySystemGroupedBackground)) // Use secondarySystemGroupedBackground
+        .cornerRadius(12)
+    }
+
+    /// Check-in button view
+    private var checkInButtonView: some View {
+        Button(action: {
+            store.send(.checkIn)
+        }) {
+            Text("Check-in")
+                .font(.system(size: 26, weight: .bold))
+                .tracking(0.5) // Add letter spacing for better readability
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 200) // Twice the height of alert button
+                .background(store.checkInButtonBackgroundColor)
+                .cornerRadius(12)
+        }
+        .disabled(store.isCheckInButtonCoolingDown)
+    }
+}
+
+#Preview {
+    CheckInView(
+        store: Store(initialState: CheckInFeature.State()) {
+            CheckInFeature()
+        }
+    )
+}

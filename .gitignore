@@ -6,8 +6,10 @@ AndroidApplication/
 # Node.js dependencies
 node_modules/
 
-# VS Code / IDE settings
+# Development
 .idea/
+.build/
+.claude/
 
 # macOS system file
 .DS_Store
