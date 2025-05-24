@@ -1,8 +1,15 @@
 import ComposableArchitecture
 import Foundation
 import UIKit
-import Sharing
 import SwiftUI
+
+// Define Alert enum outside of the feature to avoid circular dependencies
+enum HomeAlert: Equatable {
+    case cameraDenied
+    case contactAdded(Contact)
+    case resetQRConfirmation
+    case intervalChangeConfirmation(TimeInterval)
+}
 
 /// Home Feature - QR code generation and settings management using TCA
 @Reducer
@@ -24,10 +31,7 @@ struct HomeFeature {
         var showIntervalPicker: Bool = false
         var showInstructions: Bool = false
         @Presents var qrShareSheet: QRCodeShareSheetFeature.State?
-        var showCameraDeniedAlert: Bool = false
-        var showContactAddedAlert: Bool = false
-        var showResetQRConfirmation: Bool = false
-        var showIntervalChangeConfirmation: Bool = false
+        @Presents var alert: AlertState<HomeAlert>?
         var showShareSheet: Bool = false
 
         // Interval Picker Properties
@@ -91,10 +95,7 @@ struct HomeFeature {
         case setShowIntervalPicker(Bool)
         case setShowInstructions(Bool)
         case qrShareSheet(PresentationAction<QRCodeShareSheetFeature.Action>)
-        case setShowCameraDeniedAlert(Bool)
-        case setShowContactAddedAlert(Bool)
-        case setShowResetQRConfirmation(Bool)
-        case setShowIntervalChangeConfirmation(Bool)
+        case alert(PresentationAction<HomeAlert>)
         case setShowShareSheet(Bool)
 
         // Contact actions
@@ -119,7 +120,7 @@ struct HomeFeature {
     @Dependency(\.loggingClient) var logging
 
     /// Home reducer body implementing business logic
-    var body: some Reducer<State, Action> {
+    var body: some ReducerOf<Self> {
         BindingReducer()
         
         Reduce { state, action in
@@ -134,14 +135,11 @@ struct HomeFeature {
                 return .run { send in
                     if let user = await userRepository.getCurrentUser() {
                         await send(.userLoaded(user))
-                    } else if let legacyUser = await userRepository.loadUser() {
-                        // Handle legacy user migration
-                        await send(.userLoaded(legacyUser))
                     }
                 }
 
             case let .userLoaded(user):
-                state.currentUser = user
+                state.$currentUser.withLock { $0 = user }
                 return .merge(
                     .send(.initializeIntervalPicker),
                     .send(.generateQRCode)
@@ -151,8 +149,13 @@ struct HomeFeature {
                 state.isQRCodeReady = false
                 return .run { [qrCodeId = state.currentUser?.qrCodeId ?? ""] send in
                     await send(._qrCodeGenerationStarted)
-                    let image = await qrCodeGenerator.generateQRCode(qrCodeId, 300)
-                    await send(.qrCodeGenerated(image))
+                    do {
+                        let image = try await qrCodeGenerator.generateQRCode(qrCodeId, 300)
+                        await send(.qrCodeGenerated(image))
+                    } catch {
+                        // Handle QR code generation error
+                        await send(.qrCodeGenerated(nil))
+                    }
                 }
 
             case ._qrCodeGenerationStarted:
@@ -166,32 +169,32 @@ struct HomeFeature {
                 return .none
 
             case .resetQRCode:
-                if var user = state.currentUser {
-                    user = user.withNewQRCodeId()
-                    state.currentUser = user
-                }
-                state.shareableImage = nil
-
-                return .run { [user = state.currentUser] send in
-                    if let user = user {
-                        _ = try? await userRepository.updateProfile(user)
-                        await notificationRepository.sendLocalNotification(
-                            .system,
-                            "QR Code Reset",
-                            "Your QR code has been reset. Previous QR codes are no longer valid."
-                        )
-                        await analytics.track(.featureUsed(feature: "qr_code_reset", context: [:]))
-                        await send(.generateQRCode)
+                state.alert = AlertState {
+                    TextState("Reset QR Code")
+                } actions: {
+                    ButtonState(role: .destructive, action: .resetQRConfirmation) {
+                        TextState("Reset")
                     }
+                    ButtonState(role: .cancel) {
+                        TextState("Cancel")
+                    }
+                } message: {
+                    TextState("This will invalidate your current QR code. Existing contacts will need to scan your new code.")
                 }
+                return .none
 
             case .generateShareableQRCode:
                 guard !state.isGeneratingQRCode else { return .none }
 
                 return .run { [qrCodeImage = state.qrCodeImage, userName = state.currentUser?.name ?? ""] send in
                     await send(._shareableQRCodeGenerationStarted)
-                    let shareableImage = await qrCodeGenerator.generateShareableQRCode(qrCodeImage, userName)
-                    await send(.shareableQRCodeGenerated(shareableImage))
+                    do {
+                        let shareableImage = try await qrCodeGenerator.generateShareableQRCode(qrCodeImage, userName)
+                        await send(.shareableQRCodeGenerated(shareableImage))
+                    } catch {
+                        // Handle shareable QR code generation error
+                        await send(.shareableQRCodeGenerated(nil))
+                    }
                 }
 
             case ._shareableQRCodeGenerationStarted:
@@ -219,8 +222,17 @@ struct HomeFeature {
 
             case let .updateCheckInInterval(interval):
                 if var user = state.currentUser {
-                    user = user.withCheckInInterval(interval)
-                    state.currentUser = user
+                    user = User(
+                        id: user.id,
+                        firebaseUID: user.firebaseUID,
+                        name: user.name,
+                        email: user.email,
+                        phoneNumber: user.phoneNumber,
+                        lastCheckInTime: user.lastCheckInTime,
+                        emergencyNote: user.emergencyNote,
+                        qrCodeId: user.qrCodeId
+                    )
+                    state.$currentUser.withLock { $0 = user }
                 }
 
                 return .run { [user = state.currentUser] send in
@@ -274,23 +286,30 @@ struct HomeFeature {
                     newInterval = TimeInterval(state.intervalPickerValue * 3600)
                 }
                 state.pendingIntervalChange = newInterval
-                state.showIntervalChangeConfirmation = true
+                state.alert = AlertState {
+                    TextState("Update Check-In Interval")
+                } actions: {
+                    ButtonState(action: .intervalChangeConfirmation(newInterval)) {
+                        TextState("Update")
+                    }
+                    ButtonState(role: .cancel) {
+                        TextState("Cancel")
+                    }
+                } message: {
+                    TextState("Change check-in interval to \(state.formatInterval(newInterval))?")
+                }
                 return .none
 
             case .cancelIntervalChange:
                 state.pendingIntervalChange = nil
-                state.showIntervalChangeConfirmation = false
+                state.alert = nil
                 state.showIntervalPicker = false
                 return .send(.initializeIntervalPicker)
 
             case let .updateNotificationSettings(enabled, notify30Min, notify2Hours):
                 if var user = state.currentUser {
-                    user = user.withNotificationSettings(
-                        enabled: enabled,
-                        notify30MinBefore: notify30Min,
-                        notify2HoursBefore: notify2Hours
-                    )
-                    state.currentUser = user
+                    user = user.withNotificationSettings(enabled: enabled)
+                    state.$currentUser.withLock { $0 = user }
                 }
 
                 return .run { [user = state.currentUser] send in
@@ -358,25 +377,38 @@ struct HomeFeature {
                 state.showShareSheet = show
                 return .none
 
-            case let .setShowCameraDeniedAlert(show):
-                state.showCameraDeniedAlert = show
-                return .none
+            case .alert(.presented(.resetQRConfirmation)):
+                if var user = state.currentUser {
+                    user = user.withNewQRCodeId()
+                    state.$currentUser.withLock { $0 = user }
+                }
+                state.shareableImage = nil
 
-            case let .setShowContactAddedAlert(show):
-                state.showContactAddedAlert = show
-                return .none
-
-            case let .setShowResetQRConfirmation(show):
-                state.showResetQRConfirmation = show
-                return .run { send in
-                    await haptics.impact(.medium)
+                return .run { [user = state.currentUser] send in
+                    if let user = user {
+                        _ = try? await userRepository.updateProfile(user)
+                        await notificationRepository.sendLocalNotification(
+                            .system,
+                            "QR Code Reset",
+                            "Your QR code has been reset. Previous QR codes are no longer valid."
+                        )
+                        await analytics.track(.featureUsed(feature: "qr_code_reset", context: [:]))
+                        await send(.generateQRCode)
+                    }
                 }
 
-            case let .setShowIntervalChangeConfirmation(show):
-                state.showIntervalChangeConfirmation = show
-                if !show {
-                    state.pendingIntervalChange = nil
-                }
+            case let .alert(.presented(.intervalChangeConfirmation(interval))):
+                state.showIntervalPicker = false
+                return .send(.updateCheckInInterval(interval))
+
+            case .alert(.presented(.cameraDenied)):
+                return .none
+
+            case let .alert(.presented(.contactAdded(contact))):
+                // Handle contact added confirmation if needed
+                return .none
+
+            case .alert:
                 return .none
 
             case let .createContactFromQRCode(qrCodeId):
@@ -386,25 +418,33 @@ struct HomeFeature {
                     name: "New Contact",
                     phoneNumber: "",
                     relationship: .responder,
+                    isResponder: true,
+                    isDependent: false,
                     status: .active,
                     lastUpdated: Date(),
-                    qrCodeId: qrCodeId,
-                    lastCheckIn: Date(),
-                    note: "",
-                    manualAlertActive: false,
-                    isNonResponsive: false,
+                    emergencyNote: "",
+                    lastCheckInTime: Date(),
+                    interval: 24 * 60 * 60,
                     hasIncomingPing: false,
-                    incomingPingTimestamp: nil,
                     hasOutgoingPing: false,
+                    manualAlertActive: false,
+                    incomingPingTimestamp: nil,
                     outgoingPingTimestamp: nil,
-                    checkInInterval: 24 * 60 * 60,
                     manualAlertTimestamp: nil
                 )
                 return .send(.contactCreated(contact))
 
             case let .contactCreated(contact):
                 state.newContact = contact
-                state.showContactAddedAlert = true
+                state.alert = AlertState {
+                    TextState("Contact Added")
+                } actions: {
+                    ButtonState(role: .cancel, action: .contactAdded(contact)) {
+                        TextState("OK")
+                    }
+                } message: {
+                    TextState("\(contact.name) has been added to your contacts.")
+                }
                 return .none
 
             case let .setPendingScannedCode(code):
@@ -433,6 +473,7 @@ struct HomeFeature {
         .ifLet(\.$qrShareSheet, action: \.qrShareSheet) {
             QRCodeShareSheetFeature()
         }
+        .ifLet(\.$alert, action: \.alert)
     }
 }
 

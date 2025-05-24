@@ -2,7 +2,6 @@ import Foundation
 import SwiftUI
 import UIKit
 import ComposableArchitecture
-import Sharing
 
 @Reducer
 struct ProfileFeature {
@@ -36,7 +35,7 @@ struct ProfileFeature {
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.analytics) var analytics
     
-    var body: some Reducer<State, Action> {
+    var body: some ReducerOf<Self> {
         BindingReducer()
 
         Reduce { state, action in
@@ -59,21 +58,23 @@ struct ProfileFeature {
                 
                 // Validate inputs before saving
                 guard validation.validateName(user.name).isValid else {
-                    haptics.notification(.error)
                     state.errorMessage = validation.validateName(user.name).errorMessage
-                    return .none
+                    return .run { _ in
+                        await haptics.notification(.error)
+                    }
                 }
                 
                 guard validation.validatePhoneNumber(user.phoneNumber).isValid else {
-                    haptics.notification(.error)
                     state.errorMessage = validation.validatePhoneNumber(user.phoneNumber).errorMessage
-                    return .none
+                    return .run { _ in
+                        await haptics.notification(.error)
+                    }
                 }
                 
                 state.isLoading = true
                 state.errorMessage = nil
-                haptics.selection()
                 return .run { send in
+                    await haptics.selection()
                     await send(.response(Result {
                         try await userRepository.updateProfile(user)
                     }))
@@ -93,28 +94,32 @@ struct ProfileFeature {
 
             case let .response(.success(user)):
                 state.isLoading = false
-                state.currentUser = user
+                state.$currentUser.withLock { $0 = user }
                 state.editingUser = nil
-                haptics.notification(.success)
-                return .none
+                return .run { _ in
+                    await haptics.notification(.success)
+                }
 
             case let .response(.failure(error)):
                 state.isLoading = false
                 state.errorMessage = error.localizedDescription
-                haptics.notification(.error)
-                return .none
+                return .run { _ in
+                    await haptics.notification(.error)
+                }
 
             case let .uploadResponse(.success(url)):
                 state.isLoading = false
                 state.editingUser?.avatarURL = url.absoluteString
-                haptics.notification(.success)
-                return .none
+                return .run { _ in
+                    await haptics.notification(.success)
+                }
 
             case let .uploadResponse(.failure(error)):
                 state.isLoading = false
                 state.errorMessage = error.localizedDescription
-                haptics.notification(.error)
-                return .none
+                return .run { _ in
+                    await haptics.notification(.error)
+                }
             }
         }
     }

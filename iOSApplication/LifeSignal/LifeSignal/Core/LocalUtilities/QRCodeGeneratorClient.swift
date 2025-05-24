@@ -7,8 +7,8 @@ import ComposableArchitecture
 /// QR Code Generator Client for dependency injection
 @DependencyClient
 struct QRCodeGeneratorClient {
-    var generateQRCode: @Sendable (String, CGFloat) async throws -> UIImage
-    var generateShareableQRCode: @Sendable (UIImage?, String) async throws -> UIImage
+    var generateQRCode: @Sendable (String, CGFloat) async throws -> UIImage = { _, _ in throw AppError.qrCode(.generationFailed) }
+    var generateShareableQRCode: @Sendable (UIImage?, String) async throws -> UIImage = { _, _ in throw AppError.qrCode(.generationFailed) }
 }
 
 extension QRCodeGeneratorClient: DependencyKey {
@@ -18,7 +18,7 @@ extension QRCodeGeneratorClient: DependencyKey {
                 // Create a QR code generator
                 guard let data = string.data(using: .utf8),
                       let qrFilter = CIFilter(name: "CIQRCodeGenerator") else {
-                    throw QRCodeError.generationFailed
+                    throw AppError.qrCode(.generationFailed)
                 }
 
                 qrFilter.setValue(data, forKey: "inputMessage")
@@ -26,7 +26,7 @@ extension QRCodeGeneratorClient: DependencyKey {
 
                 // Get the output image
                 guard let qrImage = qrFilter.outputImage else {
-                    throw QRCodeError.generationFailed
+                    throw AppError.qrCode(.generationFailed)
                 }
 
                 // Scale the image
@@ -36,7 +36,7 @@ extension QRCodeGeneratorClient: DependencyKey {
                 // Convert to UIImage
                 let context = CIContext()
                 guard let cgImage = context.createCGImage(scaledImage, from: scaledImage.extent) else {
-                    throw QRCodeError.generationFailed
+                    throw AppError.qrCode(.generationFailed)
                 }
 
                 return UIImage(cgImage: cgImage)
@@ -44,6 +44,10 @@ extension QRCodeGeneratorClient: DependencyKey {
         },
         generateShareableQRCode: { qrImage, userName in
             try await MainActor.run {
+                guard let qrImage = qrImage else {
+                    throw AppError.qrCode(.generationFailed)
+                }
+                
                 let size = CGSize(width: 400, height: 500)
                 let renderer = UIGraphicsImageRenderer(size: size)
 
@@ -67,7 +71,7 @@ extension QRCodeGeneratorClient: DependencyKey {
                     )
                     titleText.draw(in: titleRect, withAttributes: titleAttributes)
 
-                    // QR Code
+                    // QR Code - now guaranteed to exist
                     let qrSize: CGFloat = 300
                     let qrRect = CGRect(
                         x: (size.width - qrSize) / 2,
@@ -102,19 +106,6 @@ extension QRCodeGeneratorClient: DependencyKey {
     )
 }
 
-enum QRCodeError: Error, LocalizedError {
-    case generationFailed
-    case invalidInput
-    
-    var errorDescription: String? {
-        switch self {
-        case .generationFailed:
-            return "Failed to generate QR code"
-        case .invalidInput:
-            return "Invalid input for QR code generation"
-        }
-    }
-}
 
 extension DependencyValues {
     var qrCodeGenerator: QRCodeGeneratorClient {

@@ -7,7 +7,7 @@ import UIKit
 
 // MARK: - Main Profile View
 struct ProfileView: View {
-    @Perception.Bindable var store: StoreOf<ProfileFeature>
+    @Bindable var store: StoreOf<ProfileFeature>
 
     var body: some View {
         WithPerceptionTracking {
@@ -57,9 +57,9 @@ struct ProfileView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Emergency Note")
                         .font(.headline)
-                    Text(user.profileDescription.isEmpty ? "Add an emergency note that contacts can see." : user.profileDescription)
+                    Text(user.emergencyNote.isEmpty ? "Add an emergency note that contacts can see." : user.emergencyNote)
                         .font(.body)
-                        .foregroundColor(user.profileDescription.isEmpty ? .secondary : .primary)
+                        .foregroundColor(user.emergencyNote.isEmpty ? .secondary : .primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding()
@@ -111,24 +111,18 @@ struct ProfileView: View {
                 if let editingUser = store.editingUser {
                     TextField("Name", text: Binding(
                         get: { editingUser.name },
-                        set: { newName in
-                            store.editingUser = editingUser.withName(newName)
-                        }
+                        set: { store.editingUser = editingUser.withName($0) }
                     ))
                     
                     TextField("Phone Number", text: Binding(
                         get: { editingUser.phoneNumber },
-                        set: { newPhone in
-                            store.editingUser = editingUser.withPhone(newPhone)
-                        }
+                        set: { store.editingUser = editingUser.withPhone($0) }
                     ))
                     .keyboardType(.phonePad)
                     
                     TextField("Emergency Note", text: Binding(
-                        get: { editingUser.profileDescription },
-                        set: { newDescription in
-                            store.editingUser = editingUser.withProfileDescription(newDescription)
-                        }
+                        get: { editingUser.emergencyNote },
+                        set: { store.editingUser = editingUser.withEmergencyNote($0) }
                     ), axis: .vertical)
                     .lineLimit(3...6)
                 }

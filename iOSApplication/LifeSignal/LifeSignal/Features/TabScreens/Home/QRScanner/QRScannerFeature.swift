@@ -3,7 +3,14 @@ import SwiftUI
 import UIKit
 import ComposableArchitecture
 import AVFoundation
-import Sharing
+
+// Define Alert enum outside to avoid circular dependencies
+enum QRScannerAlert: Equatable {
+    case cameraPermissionDenied
+    case invalidCode
+    case contactAdded(Contact)
+    case processingFailed(String)
+}
 
 @Reducer
 struct QRScannerFeature {
@@ -19,8 +26,38 @@ struct QRScannerFeature {
         var manualCode = ""
         var cameraPermissionStatus: AVAuthorizationStatus = .notDetermined
         
-        @Presents var permissionAlert: AlertState<Action.Alert>?
-        @Presents var processingAlert: AlertState<Action.Alert>?
+        // New state properties for view management
+        var isShowingManualEntry = false
+        var isShowingGallery = false
+        var showNoQRCodeAlert = false
+        var showInvalidUUIDAlert = false
+        var showPermissionDeniedAlert = false
+        var showAddContactSheet = false
+        var showErrorAlert = false
+        var manualQRCode = ""
+        var galleryThumbnails: [UIImage] = []
+        
+        // Contact being added
+        var contact = Contact(
+            id: UUID(),
+            name: "",
+            phoneNumber: "",
+            isResponder: true,
+            isDependent: false,
+            lastUpdated: Date(),
+            emergencyNote: "",
+            lastCheckInTime: nil,
+            interval: 24 * 60 * 60,
+            hasIncomingPing: false,
+            hasOutgoingPing: false,
+            manualAlertActive: false,
+            incomingPingTimestamp: nil,
+            outgoingPingTimestamp: nil,
+            manualAlertTimestamp: nil
+        )
+        
+        @Presents var permissionAlert: AlertState<QRScannerAlert>?
+        @Presents var processingAlert: AlertState<QRScannerAlert>?
         
         var canStartScanning: Bool {
             currentUser != nil && cameraPermissionStatus == .authorized
@@ -29,9 +66,32 @@ struct QRScannerFeature {
         var canProcessCode: Bool {
             !manualCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+
+        var isValidManualQRCode: Bool {
+            isValidQRCodeFormat(manualQRCode)
+        }
+
+        var canSubmitManualCode: Bool {
+            !manualQRCode.isEmpty && isValidManualQRCode
+        }
+
+        // Helper method moved to state for consistency
+        private func isValidQRCodeFormat(_ text: String) -> Bool {
+            // Check if it's a valid UUID format
+            if UUID(uuidString: text) != nil {
+                return true
+            }
+
+            // Check if it's a full LifeSignal URL with valid UUID
+            if text.hasPrefix("lifesignal://") {
+                let uuidPart = text.replacingOccurrences(of: "lifesignal://", with: "")
+                return UUID(uuidString: uuidPart) != nil
+            }
+
+            return false
+        }
     }
 
-    @CasePathable
     enum Action: BindableAction {
         case binding(BindingAction<State>)
         case startScanning
@@ -41,21 +101,32 @@ struct QRScannerFeature {
         case processScannedCode(String)
         case processManualCode
         case pasteFromClipboard
-        case permissionAlert(PresentationAction<Alert>)
-        case processingAlert(PresentationAction<Alert>)
+        case permissionAlert(PresentationAction<QRScannerAlert>)
+        case processingAlert(PresentationAction<QRScannerAlert>)
         case permissionResponse(AVAuthorizationStatus)
         case codeProcessingResponse(Result<Contact, Error>)
-        
-        // Missing actions from PhotoPickerView
+        case dismiss
+        case openSettings
+
+        // New actions for proper state management
+        case toggleManualEntry(Bool)
         case toggleGallery(Bool)
         case showNoQRCodeAlert(Bool)
-        
-        enum Alert: Equatable {
-            case cameraPermissionDenied
-            case invalidCode
-            case contactAdded(Contact)
-            case processingFailed(String)
-        }
+        case showInvalidUUIDAlert(Bool)
+        case showPermissionDeniedAlert(Bool)
+        case showAddContactSheet(Bool)
+        case updateManualQRCode(String)
+        case submitManualQRCode
+        case cancelManualEntry
+        case handlePasteButtonTapped
+        case processGalleryImage(Int)
+        case updateIsResponder(Bool)
+        case updateIsDependent(Bool)
+        case closeAddContactSheet
+        case addContact
+        case loadGalleryThumbnails
+        case galleryThumbnailsLoaded([UIImage])
+        case dismissErrorAlert
     }
 
     @Dependency(\.cameraClient) var cameraClient
@@ -64,245 +135,247 @@ struct QRScannerFeature {
     @Dependency(\.contactRepository) var contactRepository
     @Dependency(\.analytics) var analytics
 
-    var body: some Reducer<State, Action> {
+    var body: some ReducerOf<Self> {
         BindingReducer()
-        
-        Reduce { state, action in
+
+        Reduce<State, Action> { state, action in
             switch action {
             case .binding:
                 return .none
-                
+
             case .startScanning:
                 guard state.canStartScanning else {
-                    return .send(.requestCameraPermission)
+                    if state.cameraPermissionStatus == .notDetermined {
+                        return .send(.requestCameraPermission)
+                    } else if state.cameraPermissionStatus == .denied {
+                        state.showPermissionDeniedAlert = true
+                    }
+                    return .none
                 }
-                
+
                 state.isScanning = true
-                state.scannedCode = nil
                 state.errorMessage = nil
-                
-                return .run { _ in
-                    await analytics.track(.featureUsed(feature: "qr_scanner_start", context: [:]))
+
+                return .run { send in
+                    await haptics.impact(.light)
+                    await analytics.track(.featureUsed(feature: "qr_scan_start", context: [:]))
+                    await send(.loadGalleryThumbnails)
                 }
-                
+
             case .stopScanning:
                 state.isScanning = false
-                
-                return .run { _ in
-                    await haptics.selection()
-                }
-                
+                state.torchOn = false
+                state.scannedCode = nil
+                return .none
+
             case .toggleTorch:
-                let newTorchState = !state.torchOn
-                state.torchOn = newTorchState
-                
-                return .run { _ in
-                    await haptics.selection()
-                    await analytics.track(.featureUsed(feature: "torch_toggle", context: ["enabled": "\(newTorchState)"]))
+                state.torchOn.toggle()
+                return .run { [torchOn = state.torchOn] _ in
+                    await haptics.impact(.light)
+                    await analytics.track(.featureUsed(feature: "qr_torch_toggle", context: ["on": "\(torchOn)"]))
                 }
-                
+
             case .requestCameraPermission:
                 return .run { send in
-                    await analytics.track(.featureUsed(feature: "camera_permission_request", context: [:]))
                     let status = await cameraClient.requestPermission()
                     await send(.permissionResponse(status))
                 }
-                
+
             case let .processScannedCode(code):
-                state.scannedCode = code
                 state.isScanning = false
                 state.isLoading = true
-                state.errorMessage = nil
-                
+                state.scannedCode = code
+
                 return .run { send in
                     await haptics.notification(.success)
-                    await analytics.track(.featureUsed(feature: "qr_code_scanned", context: ["method": "camera"]))
+                    await analytics.track(.featureUsed(feature: "qr_code_scanned", context: [:]))
                     await send(.codeProcessingResponse(Result {
-                        try await processQRCode(code)
+                        // Validate QR code format
+                        guard code.hasPrefix("lifesignal://") else {
+                            throw NSError(domain: "QRScanner", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid QR code format"])
+                        }
+
+                        // Extract phone number from QR code
+                        let extractedPhoneNumber = code.replacingOccurrences(of: "lifesignal://", with: "")
+
+                        // Add contact using phone number
+                        let contact = try await contactRepository.addContact(extractedPhoneNumber)
+                        return contact
                     }))
                 }
-                
+
             case .processManualCode:
                 guard state.canProcessCode else { return .none }
-                
                 let code = state.manualCode.trimmingCharacters(in: .whitespacesAndNewlines)
-                state.isLoading = true
-                state.errorMessage = nil
-                
-                return .run { send in
-                    await analytics.track(.featureUsed(feature: "qr_code_scanned", context: ["method": "manual"]))
-                    await send(.codeProcessingResponse(Result {
-                        try await processQRCode(code)
-                    }))
-                }
-                
+                return .send(.processScannedCode(code))
+
             case .pasteFromClipboard:
-                if let clipboardString = UIPasteboard.general.string {
-                    state.manualCode = clipboardString
-                    
-                    return .run { _ in
-                        await haptics.selection()
-                        await analytics.track(.featureUsed(feature: "qr_code_paste", context: [:]))
+                return .run { send in
+                    if let clipboardText = UIPasteboard.general.string {
+                        await send(.binding(.set(\.manualCode, clipboardText)))
+                        await haptics.impact(.light)
                     }
                 }
+
+            case .permissionAlert(.presented(.cameraPermissionDenied)):
+                return .send(.openSettings)
+
+            case .permissionAlert, .processingAlert:
                 return .none
-                
+
             case let .permissionResponse(status):
                 state.cameraPermissionStatus = status
-                
-                if status == .denied || status == .restricted {
-                    state.permissionAlert = AlertState {
-                        TextState("Camera Permission Required")
-                    } actions: {
-                        ButtonState(action: .cameraPermissionDenied) {
-                            TextState("Settings")
-                        }
-                        ButtonState(role: .cancel) {
-                            TextState("Cancel")
-                        }
-                    } message: {
-                        TextState("Camera access is required to scan QR codes. Please enable it in Settings.")
-                    }
-                } else if status == .authorized {
-                    state.isScanning = true
+                if status == .authorized {
+                    return .send(.startScanning)
                 }
-                
                 return .none
-                
+
             case let .codeProcessingResponse(.success(contact)):
                 state.isLoading = false
-                state.manualCode = ""
-                
-                state.processingAlert = AlertState {
-                    TextState("Contact Added")
-                } actions: {
-                    ButtonState(action: .contactAdded(contact)) {
-                        TextState("OK")
-                    }
-                } message: {
-                    TextState("\(contact.name) has been added to your contacts.")
-                }
-                
-                return .run { _ in
-                    await haptics.notification(.success)
-                }
-                
+                state.contact = contact
+                state.showAddContactSheet = true
+                return .none
+
             case let .codeProcessingResponse(.failure(error)):
                 state.isLoading = false
-                
-                if error.localizedDescription.contains("Invalid") {
-                    state.processingAlert = AlertState {
-                        TextState("Invalid QR Code")
-                    } actions: {
-                        ButtonState(action: .invalidCode) {
-                            TextState("OK")
-                        }
-                    } message: {
-                        TextState("The scanned QR code is not a valid LifeSignal contact code.")
-                    }
-                } else {
-                    state.errorMessage = error.localizedDescription
-                    state.processingAlert = AlertState {
-                        TextState("Processing Failed")
-                    } actions: {
-                        ButtonState(action: .processingFailed(error.localizedDescription)) {
-                            TextState("OK")
-                        }
-                    } message: {
-                        TextState(error.localizedDescription)
-                    }
-                }
-                
-                return .run { _ in
-                    await haptics.notification(.error)
-                }
-                
-            case .permissionAlert(.presented(.cameraPermissionDenied)):
-                return .run { _ in
-                    if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
-                        await UIApplication.shared.open(settingsURL)
-                    }
-                }
-                
-            case .permissionAlert:
+                state.errorMessage = error.localizedDescription
+                state.showErrorAlert = true
                 return .none
-                
-            case .processingAlert:
+
+            case .dismiss:
                 return .none
-                
-            // Handle missing actions from PhotoPickerView
-            case let .toggleGallery(isOpen):
-                // Handle gallery toggle
+
+            case .openSettings:
                 return .run { _ in
-                    await analytics.track(.featureUsed(feature: "qr_scanner_gallery_toggle", context: ["is_open": "\(isOpen)"]))
+                    await haptics.impact(.medium)
+                    await MainActor.run {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
                 }
-                
-            case let .showNoQRCodeAlert(show):
+
+            case let .toggleManualEntry(show):
+                state.isShowingManualEntry = show
                 if show {
-                    state.processingAlert = AlertState {
-                        TextState("No QR Code Found")
-                    } actions: {
-                        ButtonState(action: .invalidCode) {
-                            TextState("OK")
-                        }
-                    } message: {
-                        TextState("No QR code was found in the selected image.")
+                    state.manualQRCode = ""
+                }
+                return .none
+
+            case let .toggleGallery(show):
+                state.isShowingGallery = show
+                return .none
+
+            case let .showNoQRCodeAlert(show):
+                state.showNoQRCodeAlert = show
+                return .none
+
+            case let .showInvalidUUIDAlert(show):
+                state.showInvalidUUIDAlert = show
+                return .none
+
+            case let .showPermissionDeniedAlert(show):
+                state.showPermissionDeniedAlert = show
+                return .none
+
+            case let .showAddContactSheet(show):
+                state.showAddContactSheet = show
+                return .none
+
+            case let .updateManualQRCode(code):
+                state.manualQRCode = String(code.prefix(36)) // Limit to UUID length
+                return .none
+
+            case .submitManualQRCode:
+                guard state.canSubmitManualCode else {
+                    state.showInvalidUUIDAlert = true
+                    return .none
+                }
+                state.isShowingManualEntry = false
+
+                // Handle both UUID-only and full URL formats
+                let codeToProcess: String
+                if state.manualQRCode.hasPrefix("lifesignal://") {
+                    codeToProcess = state.manualQRCode
+                } else {
+                    codeToProcess = "lifesignal://\(state.manualQRCode)"
+                }
+
+                return .send(.processScannedCode(codeToProcess))
+
+            case .cancelManualEntry:
+                state.isShowingManualEntry = false
+                state.manualQRCode = ""
+                return .none
+
+            case .handlePasteButtonTapped:
+                return .run { send in
+                    if let clipboardText = UIPasteboard.general.string {
+                        await send(.updateManualQRCode(clipboardText))
+                        await haptics.impact(.light)
                     }
                 }
+
+            case let .processGalleryImage(index):
+                // Process image at index from gallery
+                return .run { send in
+                    // Implementation for processing gallery image
+                    await haptics.impact(.light)
+                    // This would typically involve QR code detection from the image
+                }
+
+            case let .updateIsResponder(isResponder):
+                state.contact.isResponder = isResponder
+                return .none
+
+            case let .updateIsDependent(isDependent):
+                state.contact.isDependent = isDependent
+                return .none
+
+            case .closeAddContactSheet:
+                state.showAddContactSheet = false
+                return .none
+
+            case .addContact:
+                guard state.contact.isResponder || state.contact.isDependent else {
+                    state.errorMessage = "Please select at least one role for the contact"
+                    state.showErrorAlert = true
+                    return .none
+                }
+
+                // The contact already has the correct isResponder/isDependent values
+                let contactToSave = state.contact
+
+                return .run { send in
+                    do {
+                        let savedContact = try await contactRepository.saveContact(contactToSave)
+                        await haptics.notification(.success)
+                        await analytics.track(.featureUsed(feature: "contact_added", context: ["via": "qr_scanner"]))
+                        await send(.closeAddContactSheet)
+                        await send(.dismiss)
+                    } catch {
+                        await send(.codeProcessingResponse(.failure(error)))
+                    }
+                }
+
+            case .loadGalleryThumbnails:
+                return .run { send in
+                    // Load recent photos from gallery
+                    let thumbnails: [UIImage] = [] // Implementation would load actual thumbnails
+                    await send(.galleryThumbnailsLoaded(thumbnails))
+                }
+
+            case let .galleryThumbnailsLoaded(thumbnails):
+                state.galleryThumbnails = thumbnails
+                return .none
+
+            case .dismissErrorAlert:
+                state.showErrorAlert = false
+                state.errorMessage = nil
                 return .none
             }
         }
         .ifLet(\.$permissionAlert, action: \.permissionAlert)
         .ifLet(\.$processingAlert, action: \.processingAlert)
-    }
-    
-    // Helper function to process QR codes and create contacts
-    private func processQRCode(_ code: String) async throws -> Contact {
-        // Validate UUID format
-        guard let uuid = UUID(uuidString: code) else {
-            throw QRCodeError.invalidFormat
-        }
-        
-        // In production, this would fetch contact info from the server using the UUID
-        // For now, simulate contact creation
-        try await Task.sleep(for: .milliseconds(1000))
-        
-        return Contact(
-            id: UUID(),
-            userID: uuid,
-            name: "Scanned Contact",
-            phoneNumber: "+1234567890",
-            relationship: .responder,
-            status: .active,
-            lastUpdated: Date(),
-            qrCodeId: code,
-            lastCheckIn: nil,
-            note: "",
-            manualAlertActive: false,
-            isNonResponsive: false,
-            hasIncomingPing: false,
-            incomingPingTimestamp: nil,
-            hasOutgoingPing: false,
-            outgoingPingTimestamp: nil,
-            checkInInterval: 24 * 60 * 60,
-            manualAlertTimestamp: nil
-        )
-    }
-    
-    enum QRCodeError: LocalizedError {
-        case invalidFormat
-        case networkError
-        case contactNotFound
-        
-        var errorDescription: String? {
-            switch self {
-            case .invalidFormat:
-                return "Invalid QR code format"
-            case .networkError:
-                return "Network error occurred"
-            case .contactNotFound:
-                return "Contact not found"
-            }
-        }
     }
 }

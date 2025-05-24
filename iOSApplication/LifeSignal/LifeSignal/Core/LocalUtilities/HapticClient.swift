@@ -5,9 +5,9 @@ import ComposableArchitecture
 
 @DependencyClient
 struct HapticClient {
-  var impact: @Sendable (UIImpactFeedbackGenerator.FeedbackStyle) async -> Void
-  var notification: @Sendable (UINotificationFeedbackGenerator.FeedbackType) async -> Void
-  var selection: @Sendable () async -> Void
+  var impact: @Sendable (UIImpactFeedbackGenerator.FeedbackStyle) async -> Void = { _ in }
+  var notification: @Sendable (UINotificationFeedbackGenerator.FeedbackType) async -> Void = { _ in }
+  var selection: @Sendable () async -> Void = { }
 }
 
 extension HapticClient: DependencyKey {
@@ -36,6 +36,12 @@ extension HapticClient: DependencyKey {
 }
 
 extension DependencyValues {
+  var hapticClient: HapticClient {
+    get { self[HapticClient.self] }
+    set { self[HapticClient.self] = newValue }
+  }
+  
+  // Backward compatibility
   var haptics: HapticClient {
     get { self[HapticClient.self] }
     set { self[HapticClient.self] = newValue }

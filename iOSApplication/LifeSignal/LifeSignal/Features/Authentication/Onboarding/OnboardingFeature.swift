@@ -68,7 +68,7 @@ struct OnboardingFeature {
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.analytics) var analytics
     
-    var body: some Reducer<State, Action> {
+    var body: some ReducerOf<Self> {
         BindingReducer()
         
         Reduce { state, action in

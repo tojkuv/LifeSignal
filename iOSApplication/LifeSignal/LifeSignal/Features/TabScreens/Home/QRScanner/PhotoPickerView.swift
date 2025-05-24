@@ -44,7 +44,7 @@ struct PhotoPickerView: UIViewControllerRepresentable {
 
             if provider.canLoadObject(ofClass: UIImage.self) {
                 provider.loadObject(ofClass: UIImage.self) { image, error in
-                    if let uiImage = image as? UIImage {
+                    if image as? UIImage != nil {
                         DispatchQueue.main.async {
                             // Process the selected image for QR code scanning
                             // This would need to be implemented in the feature

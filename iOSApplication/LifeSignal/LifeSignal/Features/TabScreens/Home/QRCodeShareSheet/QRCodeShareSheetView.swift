@@ -4,7 +4,7 @@ import Perception
 
 /// A SwiftUI view for displaying and sharing QR codes
 struct QRCodeShareSheetView: View {
-    @Perception.Bindable var store: StoreOf<QRCodeShareSheetFeature>
+    @Bindable var store: StoreOf<QRCodeShareSheetFeature>
 
     var body: some View {
         WithPerceptionTracking {
@@ -15,10 +15,12 @@ struct QRCodeShareSheetView: View {
                 // QR Code Display
                 qrCodeView
 
-                // QR Code ID
-                Text("ID: \(store.qrCodeId)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                // QR Code ID (if available)
+                if let user = store.currentUser {
+                    Text("ID: \(user.qrCodeId)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
 
                 // Share button
                 shareButton
@@ -28,19 +30,12 @@ struct QRCodeShareSheetView: View {
             }
             .padding()
             .background(Color(UIColor.systemGroupedBackground))
-            .sheet(isPresented: $store.showShareSheet) {
-                if let image = store.shareableImage {
-                    ActivityShareSheet(items: [image])
+            .sheet(item: $store.scope(state: \.shareSheet, action: \.shareSheet)) { shareStore in
+                if let shareSheet = store.shareSheet {
+                    ActivityShareSheet(items: [shareSheet.image, shareSheet.text])
                 }
             }
-            .alert("Reset QR Code", isPresented: $store.isRefreshAlertPresented) {
-                Button("Cancel", role: .cancel) { }
-                Button("Reset") {
-                    store.send(.regenerateQRCode)
-                }
-            } message: {
-                Text("Are you sure you want to reset your QR code? This will invalidate any previously shared QR codes.")
-            }
+            .alert($store.scope(state: \.confirmationAlert, action: \.confirmationAlert))
         }
     }
 
@@ -57,7 +52,7 @@ struct QRCodeShareSheetView: View {
 
             // Refresh button
             Button(action: {
-                store.send(.showRefreshAlert)
+                store.send(.regenerateQRCode)
             }) {
                 Image(systemName: "arrow.clockwise")
                     .font(.headline)
@@ -81,6 +76,21 @@ struct QRCodeShareSheetView: View {
                     .background(Color.white)
                     .cornerRadius(12)
                     .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
+            } else if store.isGenerating {
+                VStack {
+                    ProgressView()
+                    Text("Generating QR Code...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(width: 250, height: 250)
+            } else {
+                Button("Generate QR Code") {
+                    store.send(.generateQRCode)
+                }
+                .frame(width: 250, height: 250)
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(12)
             }
         }
     }
@@ -95,16 +105,18 @@ struct QRCodeShareSheetView: View {
                 .foregroundColor(.white)
                 .padding()
                 .frame(maxWidth: .infinity)
-                .background(Color.blue)
+                .background(store.canShare ? Color.blue : Color.gray)
                 .cornerRadius(10)
         }
+        .disabled(!store.canShare)
         .padding(.horizontal)
     }
 
     /// Close button view
     private var closeButton: some View {
         Button(action: {
-            store.send(.dismiss)
+            // Send a presentation dismiss action instead
+            // This should be handled by the parent feature
         }) {
             Text("Close")
                 .foregroundColor(.blue)

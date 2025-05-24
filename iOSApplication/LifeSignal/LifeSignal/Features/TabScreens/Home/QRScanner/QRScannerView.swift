@@ -9,7 +9,7 @@ struct QRScannerView: View {
     // MARK: - Properties
 
     /// The TCA store for the QR scanner
-    @Perception.Bindable var store: StoreOf<QRScannerFeature>
+    @Bindable var store: StoreOf<QRScannerFeature>
 
     // MARK: - Body
 
@@ -37,33 +37,54 @@ struct QRScannerView: View {
             .onAppear {
                 store.send(.startScanning)
             }
-            .sheet(isPresented: $store.isShowingManualEntry.sending(\.toggleManualEntry)) {
+            .sheet(isPresented: Binding(
+                get: { store.isShowingManualEntry },
+                set: { store.send(.toggleManualEntry($0)) }
+            )) {
                 manualEntryView
             }
-            .sheet(isPresented: $store.isShowingGallery.sending(\.toggleGallery)) {
+            .sheet(isPresented: Binding(
+                get: { store.isShowingGallery },
+                set: { store.send(.toggleGallery($0)) }
+            )) {
                 PhotoPickerView(store: store)
             }
-            .alert("No QR Code Found", isPresented: $store.showNoQRCodeAlert.sending(\.showNoQRCodeAlert)) {
+            .alert("No QR Code Found", isPresented: Binding(
+                get: { store.showNoQRCodeAlert },
+                set: { store.send(.showNoQRCodeAlert($0)) }
+            )) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("The selected image does not contain a valid QR code. Please try another image.")
             }
-            .alert("Invalid UUID Format", isPresented: $store.showInvalidUUIDAlert.sending(\.showInvalidUUIDAlert)) {
+            .alert("Invalid UUID Format", isPresented: Binding(
+                get: { store.showInvalidUUIDAlert },
+                set: { store.send(.showInvalidUUIDAlert($0)) }
+            )) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("The clipboard content is not a valid UUID format.")
             }
-            .alert("Camera Permission Denied", isPresented: $store.showPermissionDeniedAlert.sending(\.showPermissionDeniedAlert)) {
+            .alert("Camera Permission Denied", isPresented: Binding(
+                get: { store.showPermissionDeniedAlert },
+                set: { store.send(.showPermissionDeniedAlert($0)) }
+            )) {
+                Button("Open Settings") {
+                    store.send(.openSettings)
+                }
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("Camera access is required to scan QR codes. Please enable camera access in Settings.")
             }
-            .sheet(isPresented: $store.showAddContactSheet.sending(\.showAddContactSheet)) {
+            .sheet(isPresented: Binding(
+                get: { store.showAddContactSheet },
+                set: { store.send(.showAddContactSheet($0)) }
+            )) {
                 addContactSheetView
             }
         }
     }
-
+    
     // MARK: - Subviews
 
     /// The add contact sheet view
@@ -89,14 +110,14 @@ struct QRScannerView: View {
 
                             // Name field - now non-editable
                             Text(store.contact.name.isEmpty ? "Unknown" : store.contact.name)
-                            .font(.title3)
-                            .multilineTextAlignment(.center)
+                                .font(.title3)
+                                .multilineTextAlignment(.center)
 
                             // Phone field - now non-editable
-                            Text(store.contact.phone.isEmpty ? "No phone number" : store.contact.phone)
-                            .font(.subheadline)
-                            .multilineTextAlignment(.center)
-                            .foregroundColor(.secondary)
+                            Text(store.contact.phoneNumber.isEmpty ? "No phone number" : store.contact.phoneNumber)
+                                .font(.subheadline)
+                                .multilineTextAlignment(.center)
+                                .foregroundColor(.secondary)
                         }
                         .padding(.top)
 
@@ -106,7 +127,10 @@ struct QRScannerView: View {
                                 .font(.headline)
 
                             // Responder toggle
-                            Toggle(isOn: $store.contact.isResponder.sending(\.updateIsResponder)) {
+                            Toggle(isOn: Binding(
+                                get: { store.contact.isResponder },
+                                set: { store.send(.updateIsResponder($0)) }
+                            )) {
                                 HStack {
                                     Image(systemName: "person.2.fill")
                                         .foregroundColor(.blue)
@@ -128,7 +152,10 @@ struct QRScannerView: View {
                             .cornerRadius(10)
 
                             // Dependent toggle
-                            Toggle(isOn: $store.contact.isDependent.sending(\.updateIsDependent)) {
+                            Toggle(isOn: Binding(
+                                get: { store.contact.isDependent },
+                                set: { store.send(.updateIsDependent($0)) }
+                            )) {
                                 HStack {
                                     Image(systemName: "person.3.fill")
                                         .foregroundColor(.blue)
@@ -151,20 +178,20 @@ struct QRScannerView: View {
                         }
                         .padding(.horizontal)
 
-                        // Note section - styled to match profile tab
+                        // Emergency note section
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Emergency Note")
                                 .font(.headline)
 
-                            Text("This is the contact managed emergency note")
+                            Text("This is the contact's emergency information")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
 
-                            Text(store.contact.note.isEmpty ? "No emergency note provided" : store.contact.note)
-                            .frame(maxWidth: .infinity, minHeight: 100, alignment: .leading)
-                            .padding(12)
-                            .background(Color(UIColor.secondarySystemGroupedBackground))
-                            .cornerRadius(10)
+                            Text(store.contact.emergencyNote.isEmpty ? "No emergency note provided" : store.contact.emergencyNote)
+                                .frame(maxWidth: .infinity, minHeight: 100, alignment: .leading)
+                                .padding(12)
+                                .background(Color(UIColor.secondarySystemGroupedBackground))
+                                .cornerRadius(10)
                         }
                         .padding(.horizontal)
                     }
@@ -182,13 +209,15 @@ struct QRScannerView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Add") {
-
                         store.send(.addContact)
                     }
                     .disabled(store.contact.name.isEmpty || (!store.contact.isResponder && !store.contact.isDependent))
                 }
             }
-            .alert(isPresented: $store.showErrorAlert) {
+            .alert(isPresented: Binding(
+                get: { store.showErrorAlert },
+                set: { _ in store.send(.dismissErrorAlert) }
+            )) {
                 Alert(
                     title: Text("Error"),
                     message: Text(store.errorMessage ?? "An unknown error occurred"),
@@ -235,7 +264,6 @@ struct QRScannerView: View {
                     // Gallery thumbnails
                     ForEach(0..<store.galleryThumbnails.count, id: \.self) { index in
                         Button(action: {
-
                             store.send(.processGalleryImage(index))
                         }) {
                             Image(uiImage: store.galleryThumbnails[index])
@@ -254,7 +282,6 @@ struct QRScannerView: View {
             HStack {
                 // Manual Entry button
                 Button(action: {
-
                     store.send(.toggleManualEntry(true))
                 }) {
                     Text("By QR Code ID")
@@ -269,7 +296,6 @@ struct QRScannerView: View {
 
                 // Gallery button
                 Button(action: {
-
                     store.send(.toggleGallery(true))
                 }) {
                     Image(systemName: "photo.on.rectangle")
@@ -312,10 +338,7 @@ struct QRScannerView: View {
                     .padding(.horizontal)
 
                 Button(action: {
-
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url)
-                    }
+                    store.send(.openSettings)
                 }) {
                     Text("Open Settings")
                         .font(.headline)
@@ -326,7 +349,6 @@ struct QRScannerView: View {
                 }
 
                 Button(action: {
-
                     store.send(.toggleGallery(true))
                 }) {
                     Text("Select from Gallery")
@@ -352,23 +374,20 @@ struct QRScannerView: View {
 
                 // Verification code style text field with paste button
                 ZStack(alignment: .trailing) {
-                    TextField("QR Code ID", text: $store.manualQRCode.sending(\.updateManualQRCode))
-                        .keyboardType(.default)
-                        .font(.body)
-                        .padding(.vertical, 12)
-                        .padding(.horizontal)
-                        .background(Color(UIColor.secondarySystemGroupedBackground))
-                        .cornerRadius(12)
-                        .foregroundColor(.primary)
-                        .multilineTextAlignment(.center)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                        .onChange(of: store.manualQRCode) { oldValue, newValue in
-                            // Limit to 36 characters (UUID format)
-                            if newValue.count > 36 {
-                                store.manualQRCode = String(newValue.prefix(36))
-                            }
-                        }
+                    TextField("QR Code ID", text: Binding(
+                        get: { store.manualQRCode },
+                        set: { store.send(.updateManualQRCode($0)) }
+                    ))
+                    .keyboardType(.default)
+                    .font(.body)
+                    .padding(.vertical, 12)
+                    .padding(.horizontal)
+                    .background(Color(UIColor.secondarySystemGroupedBackground))
+                    .cornerRadius(12)
+                    .foregroundColor(.primary)
+                    .multilineTextAlignment(.center)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
 
                     // Paste button that only shows when text field is empty
                     if store.manualQRCode.isEmpty {
@@ -384,7 +403,7 @@ struct QRScannerView: View {
                 .padding(.horizontal)
 
                 // Add validation for QR code format
-                let isValidFormat = isValidQRCodeFormat(store.manualQRCode)
+                let isValidFormat = store.isValidManualQRCode
 
                 // Verify button style
                 Button(action: {
@@ -396,10 +415,10 @@ struct QRScannerView: View {
                         .frame(maxWidth: .infinity)
                         .padding()
                 }
-                .background(store.manualQRCode.isEmpty || !isValidFormat ? Color.gray : Color.blue)
+                .background(store.canSubmitManualCode ? Color.blue : Color.gray)
                 .cornerRadius(12)
                 .padding(.horizontal)
-                .disabled(store.manualQRCode.isEmpty || !isValidFormat)
+                .disabled(!store.canSubmitManualCode)
 
                 Spacer()
             }
@@ -410,23 +429,5 @@ struct QRScannerView: View {
                 store.send(.cancelManualEntry)
             })
         }
-    }
-}
-
-/// Preview provider for QRScannerView
-struct QRScannerView_Previews: PreviewProvider {
-    static var previews: some View {
-        QRScannerView(store: Store(initialState: QRScannerFeature.State()) {
-            QRScannerFeature()
-        })
-    }
-}
-
-// MARK: - Helper Functions
-extension QRScannerView {
-    /// Helper function to validate QR code format
-    private func isValidQRCodeFormat(_ code: String) -> Bool {
-        // Basic UUID validation
-        return UUID(uuidString: code) != nil
     }
 }

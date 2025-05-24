@@ -6,7 +6,7 @@ struct AuthenticationView: View {
     // MARK: - Properties
 
     /// Store for the authentication process
-    @Perception.Bindable var store: StoreOf<AuthenticationFeature>
+    @Bindable var store: StoreOf<AuthenticationFeature>
 
     // MARK: - Body
 

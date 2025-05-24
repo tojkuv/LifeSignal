@@ -3,7 +3,7 @@ import ComposableArchitecture
 import Perception
 
 struct OnboardingView: View {
-    @Perception.Bindable var store: StoreOf<OnboardingFeature>
+    @Bindable var store: StoreOf<OnboardingFeature>
     
     var body: some View {
         WithPerceptionTracking {
@@ -15,14 +15,15 @@ struct OnboardingView: View {
                     // Content based on current step
                     Group {
                         switch store.currentStep {
-                        case 0:
+                        case .welcome:
                             welcomeView
-                        case 1:
+                        case .permissions:
                             permissionsView
-                        case 2:
+                        case .profile:
+                            // Profile step is handled in AuthenticationView
+                            EmptyView()
+                        case .complete:
                             completionView
-                        default:
-                            welcomeView
                         }
                     }
                 }

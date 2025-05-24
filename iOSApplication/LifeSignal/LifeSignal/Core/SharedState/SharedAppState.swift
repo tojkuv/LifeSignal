@@ -4,76 +4,76 @@ import ComposableArchitecture
 
 // MARK: - Core Shared State
 
-extension PersistenceKey where Self == PersistenceKeyDefault<InMemoryKey<User?>> {
+extension SharedReaderKey where Self == InMemoryKey<User?>.Default {
     static var currentUser: Self {
-        PersistenceKeyDefault(.inMemory("currentUser"), nil)
+        Self[.inMemory("currentUser"), default: nil]
     }
 }
 
-extension PersistenceKey where Self == PersistenceKeyDefault<InMemoryKey<[Contact]>> {
+extension SharedReaderKey where Self == InMemoryKey<[Contact]>.Default {
     static var contacts: Self {
-        PersistenceKeyDefault(.inMemory("contacts"), [])
+        Self[.inMemory("contacts"), default: []]
     }
 }
 
-extension PersistenceKey where Self == PersistenceKeyDefault<InMemoryKey<Bool>> {
+extension SharedReaderKey where Self == InMemoryKey<Bool>.Default {
     static var isOnline: Self {
-        PersistenceKeyDefault(.inMemory("isOnline"), true)
+        Self[.inMemory("isOnline"), default: true]
     }
 }
 
-extension PersistenceKey where Self == PersistenceKeyDefault<InMemoryKey<[OfflineAction]>> {
+extension SharedReaderKey where Self == InMemoryKey<[OfflineAction]>.Default {
     static var offlineQueue: Self {
-        PersistenceKeyDefault(.inMemory("offlineQueue"), [])
+        Self[.inMemory("offlineQueue"), default: []]
     }
 }
 
 // MARK: - Authentication State
 
-extension PersistenceKey where Self == PersistenceKeyDefault<InMemoryKey<Bool>> {
+extension SharedReaderKey where Self == InMemoryKey<Bool>.Default {
     static var isAuthenticated: Self {
-        PersistenceKeyDefault(.inMemory("isAuthenticated"), false)
+        Self[.inMemory("isAuthenticated"), default: false]
     }
 }
 
-extension PersistenceKey where Self == PersistenceKeyDefault<InMemoryKey<Bool>> {
+extension SharedReaderKey where Self == InMemoryKey<Bool>.Default {
     static var needsOnboarding: Self {
-        PersistenceKeyDefault(.inMemory("needsOnboarding"), false)
+        Self[.inMemory("needsOnboarding"), default: false]
     }
 }
 
 // MARK: - Notifications State
 
-extension PersistenceKey where Self == PersistenceKeyDefault<InMemoryKey<[NotificationItem]>> {
+extension SharedReaderKey where Self == InMemoryKey<[NotificationItem]>.Default {
     static var notifications: Self {
-        PersistenceKeyDefault(.inMemory("notifications"), [])
+        Self[.inMemory("notifications"), default: []]
     }
 }
 
-extension PersistenceKey where Self == PersistenceKeyDefault<InMemoryKey<Int>> {
+extension SharedReaderKey where Self == InMemoryKey<Int>.Default {
     static var unreadNotificationCount: Self {
-        PersistenceKeyDefault(.inMemory("unreadNotificationCount"), 0)
+        Self[.inMemory("unreadNotificationCount"), default: 0]
     }
 }
 
 // MARK: - App State
 
-extension PersistenceKey where Self == PersistenceKeyDefault<InMemoryKey<Date?>> {
+extension SharedReaderKey where Self == InMemoryKey<Date?>.Default {
     static var lastCheckInDate: Self {
-        PersistenceKeyDefault(.inMemory("lastCheckInDate"), nil)
+        Self[.inMemory("lastCheckInDate"), default: nil]
     }
 }
 
-extension PersistenceKey where Self == PersistenceKeyDefault<InMemoryKey<Bool>> {
+extension SharedReaderKey where Self == InMemoryKey<Bool>.Default {
     static var hasActiveAlert: Self {
-        PersistenceKeyDefault(.inMemory("hasActiveAlert"), false)
+        Self[.inMemory("hasActiveAlert"), default: false]
     }
 }
 
 // MARK: - Feature Flags
 
-extension PersistenceKey where Self == PersistenceKeyDefault<InMemoryKey<[String: Bool]>> {
+extension SharedReaderKey where Self == InMemoryKey<[String: Bool]>.Default {
     static var featureFlags: Self {
-        PersistenceKeyDefault(.inMemory("featureFlags"), [:])
+        Self[.inMemory("featureFlags"), default: [:]]
     }
 }

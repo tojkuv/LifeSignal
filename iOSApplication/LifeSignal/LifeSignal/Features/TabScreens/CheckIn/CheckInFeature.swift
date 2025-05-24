@@ -1,7 +1,6 @@
 import Foundation
 import SwiftUI
 import ComposableArchitecture
-import Sharing
 
 @Reducer
 struct CheckInFeature {
@@ -75,7 +74,7 @@ struct CheckInFeature {
     @Dependency(\.notificationRepository) var notificationRepository
     @Dependency(\.analytics) var analytics
 
-    var body: some Reducer<State, Action> {
+    var body: some ReducerOf<Self> {
         BindingReducer()
         
         Reduce { state, action in
@@ -145,9 +144,10 @@ struct CheckInFeature {
                 return .run { send in
                     await haptics.impact(.medium)
                     try? await Task.sleep(for: .milliseconds(800))
-                    if Date().timeIntervalSince(now) >= 0.8 {
-                        await send(.binding(.set(\.$alertTapCount, 0)))
-                        await send(.binding(.set(\.$tapProgress, 0.0)))
+                    let currentTime = Date()
+                    if currentTime.timeIntervalSince(now) >= 0.8 {
+                        await send(.binding(.set(\.alertTapCount, 0)))
+                        await send(.binding(.set(\.tapProgress, 0.0)))
                     }
                 }
                 
@@ -160,7 +160,7 @@ struct CheckInFeature {
                     await haptics.impact(.heavy)
                     for i in 1...30 {
                         try? await Task.sleep(for: .milliseconds(100))
-                        await send(.binding(.set(\.$longPressProgress, min(1.0, Double(i) / 30.0))))
+                        await send(.binding(.set(\.longPressProgress, min(1.0, Double(i) / 30.0))))
                     }
                 }
                 .cancellable(id: CancelID.longPress)
@@ -177,19 +177,7 @@ struct CheckInFeature {
                 }
                 
             case .updateTimer:
-                if let lastCheckIn = state.lastCheckInTime {
-                    let timeSince = Date().timeIntervalSince(lastCheckIn)
-                    let interval: TimeInterval = 3600 // 1 hour interval
-                    let timeRemaining = max(0, interval - timeSince)
-                    
-                    let hours = Int(timeRemaining) / 3600
-                    let minutes = (Int(timeRemaining) % 3600) / 60
-                    let seconds = Int(timeRemaining) % 60
-                    
-                    state.timeUntilNextCheckInText = String(format: "%02d:%02d:%02d", hours, minutes, seconds)
-                } else {
-                    state.timeUntilNextCheckInText = "--:--:--"
-                }
+                state.timeUntilNextCheckInText = "--:--:--"
                 return .none
                 
             case .startTimer:
@@ -208,11 +196,11 @@ struct CheckInFeature {
                 state.isCheckingIn = false
                 state.showConfirmation = true
                 
-                return .run { [state] send in
-                    state.$lastCheckInTime.withLock { $0 = Date() }
+                return .run { [lastCheckInTime = state.$lastCheckInTime] send in
+                    lastCheckInTime.withLock { $0 = Date() }
                     await haptics.notification(.success)
                     try? await Task.sleep(for: .seconds(3))
-                    await send(.binding(.set(\.$showConfirmation, false)))
+                    await send(.binding(.set(\.showConfirmation, false)))
                 }
                 
             case let .checkInResponse(.failure(error)):
@@ -223,8 +211,8 @@ struct CheckInFeature {
             case .alertResponse(.success):
                 state.alertTapCount = 0
                 state.tapProgress = 0.0
-                return .run { [state] send in
-                    state.$isAlertActive.withLock { $0 = !$0 }
+                return .run { [isAlertActive = state.$isAlertActive] send in
+                    isAlertActive.withLock { $0 = !$0 }
                 }
                 
             case let .alertResponse(.failure(error)):

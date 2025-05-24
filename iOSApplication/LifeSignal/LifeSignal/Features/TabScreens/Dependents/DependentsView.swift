@@ -6,7 +6,7 @@ import PhotosUI
 import ComposableArchitecture
 import Perception
 struct DependentsView: View {
-    @Perception.Bindable var store: StoreOf<DependentsFeature>
+    @Bindable var store: StoreOf<DependentsFeature>
     @Environment(\.colorScheme) private var colorScheme
 
     // MARK: - Computed Properties

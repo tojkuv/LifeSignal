@@ -4,7 +4,7 @@ import ComposableArchitecture
 import Perception
 
 struct CheckInView: View {
-    @Perception.Bindable var store: StoreOf<CheckInFeature>
+    @Bindable var store: StoreOf<CheckInFeature>
 
     var body: some View {
         WithPerceptionTracking {

@@ -7,7 +7,7 @@ import ComposableArchitecture
 import Perception
 
 struct HomeView: View {
-    @Perception.Bindable var store: StoreOf<HomeFeature>
+    @Bindable var store: StoreOf<HomeFeature>
 
     var body: some View {
         WithPerceptionTracking {

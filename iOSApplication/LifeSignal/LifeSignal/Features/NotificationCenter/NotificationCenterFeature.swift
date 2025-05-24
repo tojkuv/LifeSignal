@@ -1,18 +1,24 @@
-import Foundation
+import SwiftUI
 import ComposableArchitecture
+import Perception
+
+// Define Alert enum outside to avoid circular dependencies
+enum NotificationCenterAlert: Equatable {
+    case confirmClearAll
+}
 
 @Reducer
 struct NotificationCenterFeature {
     @ObservableState
     struct State: Equatable {
         @Shared(.notifications) var allNotifications: [NotificationItem] = []
-        @Shared(.unreadNotificationCount) var unreadCount: Int = 0
+        @Shared(.unreadNotificationCount) var unreadNotificationCount: Int = 0
         @Shared(.currentUser) var currentUser: User? = nil
         
-        var selectedFilter: Notification? = nil
+        var selectedFilter: NotificationType? = nil
         var isLoading = false
         var errorMessage: String?
-        @Presents var confirmationAlert: AlertState<Action.Alert>?
+        @Presents var confirmationAlert: AlertState<NotificationCenterAlert>?
         
         var filteredNotifications: [NotificationItem] {
             if let filter = selectedFilter {
@@ -30,7 +36,6 @@ struct NotificationCenterFeature {
         }
     }
 
-    @CasePathable
     enum Action: BindableAction {
         case binding(BindingAction<State>)
         case loadNotifications
@@ -39,25 +44,21 @@ struct NotificationCenterFeature {
         case markAllAsRead
         case delete(NotificationItem)
         case clearAll
-        case setFilter(Notification?)
+        case setFilter(NotificationType?)
         case dismiss
-        case confirmationAlert(PresentationAction<Alert>)
+        case confirmationAlert(PresentationAction<NotificationCenterAlert>)
         case refreshComplete
         case refreshFailed(String)
         case markAsReadResponse(Result<Void, Error>)
         case deleteResponse(Result<Void, Error>)
         case clearAllResponse(Result<Void, Error>)
-        
-        enum Alert: Equatable {
-            case confirmClearAll
-        }
     }
 
     @Dependency(\.notificationRepository) var notificationRepository
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.analytics) var analytics
 
-    var body: some Reducer<State, Action> {
+    var body: some ReducerOf<Self> {
         BindingReducer()
         
         Reduce { state, action in
@@ -68,20 +69,14 @@ struct NotificationCenterFeature {
             case .loadNotifications:
                 return .send(.refreshNotifications)
                 
-            case .dismiss:
-                return .none
-                
             case .refreshNotifications:
-                guard let currentUser = state.currentUser else { return .none }
                 state.isLoading = true
                 state.errorMessage = nil
                 
-                return .run { [state] send in
-                    await analytics.track(.featureUsed(feature: "notifications_refresh", context: [:]))
+                return .run { send in
+                    await analytics.track(.featureUsed(feature: "notification_center_refresh", context: [:]))
                     do {
-                        let notifications = try await notificationRepository.getNotifications()
-                        state.$allNotifications.withLock { $0 = notifications }
-                        state.$unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
+                        _ = try await notificationRepository.getNotifications()
                         await send(.refreshComplete)
                     } catch {
                         await send(.refreshFailed(error.localizedDescription))
@@ -90,20 +85,9 @@ struct NotificationCenterFeature {
                 
             case let .markAsRead(notification):
                 guard !notification.isRead else { return .none }
-                state.errorMessage = nil
                 
-                // Optimistically update the UI
-                return .run { [state] send in
-                    state.$allNotifications.withLock { notifications in
-                        if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
-                            notifications[index].isRead = true
-                        }
-                    }
-                    state.$unreadCount.withLock { count in
-                        count = max(0, count - 1)
-                    }
-                    
-                    await haptics.impact(.medium)
+                return .run { send in
+                    await haptics.impact(.light)
                     await analytics.track(.featureUsed(feature: "notification_mark_read", context: ["notification_id": notification.id.uuidString]))
                     await send(.markAsReadResponse(Result {
                         try await notificationRepository.markAsRead(notification.id)
@@ -111,44 +95,22 @@ struct NotificationCenterFeature {
                 }
                 
             case .markAllAsRead:
-                guard !state.unreadNotifications.isEmpty else { return .none }
-                state.errorMessage = nil
-                
                 let unreadIds = state.unreadNotifications.map { $0.id }
+                guard !unreadIds.isEmpty else { return .none }
                 
-                // Optimistically update the UI
-                return .run { [state] send in
-                    state.$allNotifications.withLock { notifications in
-                        for index in notifications.indices {
-                            notifications[index].isRead = true
-                        }
-                    }
-                    state.$unreadCount.withLock { $0 = 0 }
-                    
+                return .run { send in
                     await haptics.notification(.success)
-                    await analytics.track(.featureUsed(feature: "notifications_mark_all_read", context: ["count": "\(unreadIds.count)"]))
-                    await send(.markAsReadResponse(Result {
-                        for id in unreadIds {
-                            try await notificationRepository.markAsRead(id)
-                        }
-                    }))
+                    await analytics.track(.featureUsed(feature: "notification_mark_all_read", context: ["count": "\(unreadIds.count)"]))
+                    
+                    for id in unreadIds {
+                        _ = try? await notificationRepository.markAsRead(id)
+                    }
+                    await send(.refreshComplete)
                 }
                 
             case let .delete(notification):
-                state.errorMessage = nil
-                
-                // Optimistically remove from UI
-                return .run { [state] send in
-                    state.$allNotifications.withLock { notifications in
-                        notifications.removeAll { $0.id == notification.id }
-                    }
-                    if !notification.isRead {
-                        state.$unreadCount.withLock { count in
-                            count = max(0, count - 1)
-                        }
-                    }
-                    
-                    await haptics.notification(.success)
+                return .run { send in
+                    await haptics.impact(.medium)
                     await analytics.track(.featureUsed(feature: "notification_delete", context: ["notification_id": notification.id.uuidString]))
                     await send(.deleteResponse(Result {
                         try await notificationRepository.deleteNotification(notification.id)
@@ -168,27 +130,27 @@ struct NotificationCenterFeature {
                         TextState("Cancel")
                     }
                 } message: {
-                    TextState("This will permanently delete all notifications. This action cannot be undone.")
+                    TextState("Are you sure you want to clear all notifications? This action cannot be undone.")
                 }
                 return .none
                 
             case let .setFilter(filter):
                 state.selectedFilter = filter
                 return .run { _ in
-                    await haptics.selection()
-                    await analytics.track(.featureUsed(feature: "notifications_filter", context: ["filter": filter?.rawValue ?? "all"]))
+                    await haptics.impact(.light)
+                    let filterName = filter?.rawValue ?? "all"
+                    await analytics.track(.featureUsed(feature: "notification_filter", context: ["filter": filterName]))
                 }
                 
-            case .confirmationAlert(.presented(.confirmClearAll)):
-                state.errorMessage = nil
+            case .dismiss:
+                return .none
                 
-                // Optimistically clear all notifications
-                return .run { [state] send in
-                    state.$allNotifications.withLock { $0.removeAll() }
-                    state.$unreadCount.withLock { $0 = 0 }
-                    
-                    await haptics.notification(.success)
-                    await analytics.track(.featureUsed(feature: "notifications_clear_all", context: [:]))
+            case .confirmationAlert(.presented(.confirmClearAll)):
+                state.isLoading = true
+                
+                return .run { send in
+                    await haptics.notification(.warning)
+                    await analytics.track(.featureUsed(feature: "notification_clear_all", context: [:]))
                     await send(.clearAllResponse(Result {
                         try await notificationRepository.clearAll()
                     }))
@@ -199,6 +161,10 @@ struct NotificationCenterFeature {
                 
             case .refreshComplete:
                 state.isLoading = false
+                // Update unread count
+                state.$unreadNotificationCount.withLock { count in
+                    count = state.unreadNotifications.count
+                }
                 return .none
                 
             case let .refreshFailed(error):
@@ -207,33 +173,146 @@ struct NotificationCenterFeature {
                 return .none
                 
             case .markAsReadResponse(.success):
-                // UI was already updated optimistically
-                return .none
+                return .send(.refreshNotifications)
                 
             case let .markAsReadResponse(.failure(error)):
                 state.errorMessage = error.localizedDescription
-                // In production, you might want to revert the optimistic update
                 return .none
                 
             case .deleteResponse(.success):
-                // UI was already updated optimistically
-                return .none
+                return .send(.refreshNotifications)
                 
             case let .deleteResponse(.failure(error)):
                 state.errorMessage = error.localizedDescription
-                // In production, you might want to revert the optimistic update
                 return .none
                 
             case .clearAllResponse(.success):
-                // UI was already updated optimistically
+                state.isLoading = false
+                state.$allNotifications.withLock { $0.removeAll() }
+                state.$unreadNotificationCount.withLock { $0 = 0 }
                 return .none
                 
             case let .clearAllResponse(.failure(error)):
+                state.isLoading = false
                 state.errorMessage = error.localizedDescription
-                // In production, you might want to revert the optimistic update
                 return .none
             }
         }
         .ifLet(\.$confirmationAlert, action: \.confirmationAlert)
+    }
+}
+
+/// A view for the unified notification center
+struct NotificationCenterView: View {
+    @Bindable var store: StoreOf<NotificationCenterFeature>
+
+    private var filteredNotifications: [NotificationItem] {
+        store.sortedNotifications
+    }
+
+    var body: some View {
+        WithPerceptionTracking {
+            NavigationStack {
+                VStack {
+                    // Filter picker
+                    filterPicker
+                    
+                    // Notifications list
+                    notificationsList
+                }
+                .navigationTitle("Notifications")
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Close") {
+                            store.send(.dismiss)
+                        }
+                    }
+
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Clear All") {
+                            store.send(.clearAll)
+                        }
+                        .disabled(store.allNotifications.isEmpty)
+                    }
+                }
+            }
+            .onAppear {
+                store.send(.loadNotifications)
+            }
+            .alert($store.scope(state: \.confirmationAlert, action: \.confirmationAlert))
+        }
+    }
+    
+    // Break up complex expressions to avoid compiler issues
+    private var filterPicker: some View {
+        Picker("Filter", selection: $store.selectedFilter) {
+            Text("All").tag(NotificationType?.none)
+            ForEach(NotificationType.allCases, id: \.self) { type in
+                Text(type.title).tag(type as NotificationType?)
+            }
+        }
+        .pickerStyle(SegmentedPickerStyle())
+        .padding()
+    }
+    
+    private var notificationsList: some View {
+        Group {
+            if store.isLoading {
+                ProgressView("Loading notifications...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if filteredNotifications.isEmpty {
+                Text("No notifications")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(filteredNotifications, id: \.id) { notification in
+                    NotificationRowView(notification: notification) {
+                        store.send(.markAsRead(notification))
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button("Delete", role: .destructive) {
+                            store.send(.delete(notification))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A row view for displaying individual notifications
+struct NotificationRowView: View {
+    let notification: NotificationItem
+    let onMarkAsRead: () -> Void
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(notification.title)
+                    .font(.headline)
+                    .foregroundColor(notification.isRead ? .secondary : .primary)
+
+                Text(notification.message)
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+
+                Text(notification.timestamp, style: .relative)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            if !notification.isRead {
+                Button("Mark as Read") {
+                    onMarkAsRead()
+                }
+                .font(.caption)
+                .foregroundColor(.blue)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }

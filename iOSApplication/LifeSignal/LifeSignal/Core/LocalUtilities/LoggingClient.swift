@@ -5,10 +5,10 @@ import os.log
 
 @DependencyClient
 struct LoggingClient {
-  var debug: @Sendable (String, [String: Any]) -> Void
-  var info: @Sendable (String, [String: Any]) -> Void
-  var warning: @Sendable (String, [String: Any]) -> Void
-  var error: @Sendable (String, Error?, [String: Any]) -> Void
+  var debug: @Sendable (String, [String: Any]) -> Void = { _, _ in }
+  var info: @Sendable (String, [String: Any]) -> Void = { _, _ in }
+  var warning: @Sendable (String, [String: Any]) -> Void = { _, _ in }
+  var error: @Sendable (String, Error?, [String: Any]) -> Void = { _, _, _ in }
 }
 
 extension LoggingClient: DependencyKey {

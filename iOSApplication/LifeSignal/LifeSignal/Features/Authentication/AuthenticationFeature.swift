@@ -2,7 +2,6 @@ import Foundation
 import SwiftUI
 import ComposableArchitecture
 import DependenciesMacros
-import Sharing
 
 @Reducer
 struct AuthenticationFeature {
@@ -49,7 +48,7 @@ struct AuthenticationFeature {
     @Dependency(\.analytics) var analytics
     @Dependency(\.loggingClient) var logging
     
-    var body: some Reducer<State, Action> {
+    var body: some ReducerOf<Self> {
         BindingReducer()
 
         Reduce { state, action in
@@ -61,17 +60,18 @@ struct AuthenticationFeature {
             case .sendVerificationCode:
                 let phoneValidation = validation.validatePhoneNumber(state.phoneNumber)
                 guard phoneValidation.isValid else {
-                    haptics.notification(.error)
                     state.errorMessage = phoneValidation.errorMessage
-                    logging.warning("Invalid phone number format", ["phoneNumber": state.phoneNumber])
-                    return .none
+                    return .run { [phoneNumber = state.phoneNumber] _ in
+                        await haptics.notification(.error)
+                        logging.warning("Invalid phone number format", ["phoneNumber": phoneNumber])
+                    }
                 }
                 
                 state.isLoading = true
                 state.errorMessage = nil
-                haptics.selection()
                 
                 return .run { [phoneNumber = state.phoneNumber] send in
+                    await haptics.selection()
                     await send(.sendCodeResponse(Result {
                         try await userRepository.sendVerificationCode(phoneNumber)
                     }))
@@ -80,42 +80,45 @@ struct AuthenticationFeature {
             case .verifyCode:
                 guard let verificationID = state.verificationID,
                       !state.verificationCode.isEmpty else {
-                    haptics.notification(.error)
                     state.errorMessage = "Verification code is required"
-                    return .none
+                    return .run { _ in
+                        await haptics.notification(.error)
+                    }
                 }
                 
                 let codeValidation = validation.validateVerificationCode(state.verificationCode)
                 guard codeValidation.isValid else {
-                    haptics.notification(.error)
                     state.errorMessage = codeValidation.errorMessage
-                    return .none
+                    return .run { _ in
+                        await haptics.notification(.error)
+                    }
                 }
                 
                 state.isLoading = true
                 state.errorMessage = nil
-                haptics.selection()
                 
                 return .run { [verificationID, code = state.verificationCode] send in
+                    await haptics.selection()
                     await send(.verificationResponse(Result {
-                        try await userRepository.verifyPhoneNumber(verificationID: verificationID, code: code)
+                        try await userRepository.verifyPhoneNumber(verificationID, code)
                     }))
                 }
                 
             case .createAccount:
                 guard validation.validateName(state.name).isValid else {
-                    haptics.notification(.error)
                     state.errorMessage = validation.validateName(state.name).errorMessage
-                    return .none
+                    return .run { _ in
+                        await haptics.notification(.error)
+                    }
                 }
                 
                 state.isCreatingAccount = true
                 state.errorMessage = nil
-                haptics.selection()
                 
                 return .run { [name = state.name, phoneNumber = state.phoneNumber] send in
+                    await haptics.selection()
                     await send(.verificationResponse(Result {
-                        try await userRepository.createAccountWithPhone(name: name, phoneNumber: phoneNumber)
+                        try await userRepository.createAccountWithPhone(name, phoneNumber)
                     }))
                 }
 
@@ -129,42 +132,47 @@ struct AuthenticationFeature {
                 state.isLoading = false
                 state.verificationID = verificationID
                 state.isCodeSent = true
-                haptics.notification(.success)
-                logging.info("Verification code sent successfully")
-                return .none
+                return .run { _ in
+                    await haptics.notification(.success)
+                    logging.info("Verification code sent successfully", [:])
+                }
                 
             case let .sendCodeResponse(.failure(error)):
                 state.isLoading = false
                 state.errorMessage = error.localizedDescription
-                haptics.notification(.error)
-                logging.error("Failed to send verification code", error, ["phoneNumber": state.phoneNumber])
-                return .none
+                return .run { [phoneNumber = state.phoneNumber] _ in
+                    await haptics.notification(.error)
+                    logging.error("Failed to send verification code", error, ["phoneNumber": phoneNumber])
+                }
                 
             case let .verificationResponse(.success(user)):
                 state.isLoading = false
                 state.isCreatingAccount = false
-                state.currentUser = user.firebaseUID.isEmpty ? nil : user
+                state.$currentUser.withLock { $0 = user.firebaseUID.isEmpty ? nil : user }
                 if !user.firebaseUID.isEmpty {
                     state.phoneNumber = ""
                     state.verificationCode = ""
                     state.verificationID = nil
                     state.name = ""
                     state.isCodeSent = false
-                    haptics.notification(.success)
-                    logging.info("Phone verification successful", ["uid": user.firebaseUID])
                 }
-                return .none
+                guard !user.firebaseUID.isEmpty else { return .none }
+                return .run { [uid = user.firebaseUID] _ in
+                    await haptics.notification(.success)
+                    logging.info("Phone verification successful", ["uid": uid])
+                }
 
             case let .verificationResponse(.failure(error)):
                 state.isLoading = false
                 state.isCreatingAccount = false
                 state.errorMessage = error.localizedDescription
-                haptics.notification(.error)
-                logging.error("Phone verification failed", error, ["phoneNumber": state.phoneNumber])
-                return .none
+                return .run { [phoneNumber = state.phoneNumber] _ in
+                    await haptics.notification(.error)
+                    logging.error("Phone verification failed", error, ["phoneNumber": phoneNumber])
+                }
                 
             case let .setCurrentUser(user):
-                state.currentUser = user
+                state.$currentUser.withLock { $0 = user }
                 return .none
             }
         }

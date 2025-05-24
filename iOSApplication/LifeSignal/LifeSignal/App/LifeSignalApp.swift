@@ -1,18 +1,20 @@
 import SwiftUI
-import UserNotifications
 import ComposableArchitecture
+import Firebase
+import UserNotifications
 
 @main
-struct ApplicationView: App {
+struct LifeSignalApp: App {
     let store = Store(initialState: ApplicationFeature.State()) {
         ApplicationFeature()
     }
-
+    
     init() {
+        FirebaseApp.configure()
         // Set up notification delegate
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
     }
-
+    
     var body: some Scene {
         WindowGroup {
             AppRootView(store: store)
@@ -69,9 +71,12 @@ struct AppRootView: View {
 }
 
 // MARK: - Notification Delegate
-
-class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     static let shared = NotificationDelegate()
+    
+    private override init() {
+        super.init()
+    }
     
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,

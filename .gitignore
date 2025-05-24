@@ -1,7 +1,7 @@
 # Project Modules (exclude full directories)
-Backend/
-AndroidMockApplication/
-AndroidApplication/
+/Backend
+/AndroidMockApplication
+/AndroidApplication
 
 # Node.js dependencies
 node_modules/

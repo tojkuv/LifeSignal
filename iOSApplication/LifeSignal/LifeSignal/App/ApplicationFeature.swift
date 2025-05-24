@@ -1,6 +1,5 @@
 import ComposableArchitecture
 import Foundation
-import Sharing
 
 /// Application Feature - Global app state management using TCA
 @Reducer
@@ -51,6 +50,7 @@ struct ApplicationFeature {
     }
 
     /// Application actions representing events that can occur
+    @CasePathable
     enum Action {
         /// App lifecycle actions
         case onAppear
@@ -79,8 +79,11 @@ struct ApplicationFeature {
     @Dependency(\.userRepository) var userRepository
     @Dependency(\.analytics) var analytics
 
+    // Add explicit initializer
+    init() {}
+
     /// Application reducer body implementing business logic
-    var body: some Reducer<State, Action> {
+    var body: some ReducerOf<Self> {
         Scope(state: \.mainTabs, action: \.mainTabs) {
             MainTabsFeature()
         }
@@ -97,15 +100,15 @@ struct ApplicationFeature {
             ConnectivityFeature()
         }
         
-        Reduce { state, action in
+        Reduce<State, Action> { state, action in
             switch action {
             case .onAppear:
-                return .run { send in
+                return .run { [currentUser = state.$currentUser] send in
                     await analytics.track(.featureUsed(feature: "app_launch", context: [:]))
                     
                     if let user = await userRepository.getCurrentUser() {
                         // User is already logged in, update shared state
-                        state.currentUser = user
+                        currentUser.withLock { $0 = user }
                     }
                     
                     // Start connectivity monitoring
@@ -144,9 +147,6 @@ struct ApplicationFeature {
             case .hideNotificationCenter:
                 state.notificationCenter = nil
                 return .none
-
-            case .contactDetails(.presented(.dismiss)):
-                return .send(.hideContactDetails)
 
             case .contactDetails:
                 return .none

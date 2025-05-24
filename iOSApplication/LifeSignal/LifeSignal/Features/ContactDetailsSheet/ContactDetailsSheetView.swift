@@ -37,7 +37,7 @@ enum ActionButtonType: CaseIterable {
 }
 struct ContactDetailsSheetView: View {
     @Environment(\.colorScheme) private var colorScheme
-    @Perception.Bindable var store: StoreOf<ContactDetailsSheetFeature>
+    @Bindable var store: StoreOf<ContactDetailsSheetFeature>
 
     // Initialize with a contact
     init(store: StoreOf<ContactDetailsSheetFeature>) {
