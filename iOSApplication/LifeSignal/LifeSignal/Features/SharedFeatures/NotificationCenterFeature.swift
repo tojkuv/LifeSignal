@@ -226,25 +226,26 @@ struct NotificationCenterView: View {
                 .toolbar {
                     ToolbarItem(placement: .navigationBarLeading) {
                         Button("Close") {
-                            store.send(.dismiss)
+                            store.send(.dismiss, animation: .default)
                         }
                     }
 
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Clear All") {
-                            store.send(.clearAll)
+                            store.send(.clearAll, animation: .default)
                         }
                         .disabled(store.allNotifications.isEmpty)
                     }
                 }
             }
             .onAppear {
-                store.send(.loadNotifications)
+                store.send(.loadNotifications, animation: .default)
             }
             .alert($store.scope(state: \.confirmationAlert, action: \.alert))
         }
     }
 
+    @ViewBuilder
     private var filterPicker: some View {
         Picker("Filter", selection: $store.selectedFilter) {
             Text("All").tag(NotificationType?.none)
@@ -256,6 +257,7 @@ struct NotificationCenterView: View {
         .padding()
     }
 
+    @ViewBuilder
     private var notificationsList: some View {
         Group {
             if store.isLoading {
@@ -268,11 +270,11 @@ struct NotificationCenterView: View {
             } else {
                 List(filteredNotifications, id: \.id) { notification in
                     NotificationRowView(notification: notification) {
-                        store.send(.markAsRead(notification))
+                        store.send(.markAsRead(notification), animation: .default)
                     }
                     .swipeActions(edge: .trailing) {
                         Button("Delete", role: .destructive) {
-                            store.send(.delete(notification))
+                            store.send(.delete(notification), animation: .default)
                         }
                     }
                 }

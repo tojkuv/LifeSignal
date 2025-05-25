@@ -49,7 +49,6 @@ struct ApplicationFeature {
     }
 
     @Dependency(\.userRepository) var userRepository
-    @Dependency(\.analytics) var analytics
     @Dependency(\.offlineQueue) var offlineQueue
     @Dependency(\.sessionClient) var sessionClient
 
@@ -79,9 +78,7 @@ struct ApplicationFeature {
         Reduce { state, action in
             switch action {
             case .onAppear:
-                return .run { send in
-                    await analytics.track(.featureUsed(feature: "app_launch", context: [:]))
-                }
+                return .none
 
             case .appDidBecomeActive:
                 state.isActive = true
@@ -101,7 +98,7 @@ struct ApplicationFeature {
             case .performBackgroundSync:
                 return .none
 
-            case .backgroundSyncCompleted(.success(let count)):
+            case .backgroundSyncCompleted(.success( _)):
                 return .none
 
             case .backgroundSyncCompleted(.failure(let error)):
@@ -120,8 +117,30 @@ struct ApplicationFeature {
     }
 }
 
+// MARK: - AppDelegate
+
+class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+        FirebaseApp.configure()
+        return true
+    }
+    
+    // Handle Firebase Messaging registration
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        // Firebase Messaging will handle this automatically due to swizzling
+    }
+    
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        print("Failed to register for remote notifications: \(error)")
+    }
+}
+
+// MARK: - Main App
+
 @main
 struct LifeSignalApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    
     let store = Store(initialState: ApplicationFeature.State()) {
         ApplicationFeature()
     } withDependencies: { dependencies in
@@ -129,14 +148,7 @@ struct LifeSignalApp: App {
         dependencies.sessionClient = .mockValue
         dependencies.userRepository = .mockValue
         dependencies.contactRepository = .mockValue
-        dependencies.qrCodeGenerator = .mockValue
-        dependencies.analytics = .mockValue
-        dependencies.logging = .testValue  // Use testValue for better console output
         dependencies.haptics = .mockValue
-    }
-
-    init() {
-        FirebaseApp.configure()
     }
 
     var body: some Scene {
@@ -169,78 +181,3 @@ struct AppRootView: View {
     }
 }
 
-struct AuthenticationView: View {
-    @Bindable var store: StoreOf<AuthenticationFeature>
-    
-    var body: some View {
-        WithPerceptionTracking {
-            VStack(spacing: 30) {
-            // App Title
-            VStack(spacing: 8) {
-                Text("LifeSignal")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                
-                Text("Emergency Response Network")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-            .padding(.top, 60)
-            
-            Spacer()
-            
-            // Login Form
-            VStack(spacing: 20) {
-                Text("Please log in to continue")
-                    .font(.title2)
-                    .multilineTextAlignment(.center)
-                
-                // Regular authentication buttons would go here
-                Button("Sign In") {
-                    // TODO: Implement actual authentication
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(true) // Disabled until proper auth is implemented
-            }
-            
-            Spacer()
-            
-            // Debug Section
-            VStack(spacing: 16) {
-                Divider()
-                
-                Text("Debug Mode")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
-                Button("🚀 Skip to Home Screen") {
-                    let debugUser = User(
-                        id: UUID(),
-                        name: "Debug User",
-                        phoneNumber: "+1234567890",
-                        phoneRegion: "US",
-                        emergencyNote: "",
-                        checkInInterval: 86400,
-                        lastCheckedIn: Date(),
-                        isNotificationsEnabled: true,
-                        notify30MinBefore: true,
-                        notify2HoursBefore: false,
-                        qrCodeId: UUID(),
-                        avatarURL: nil,
-                        avatarImageData: nil,
-                        lastModified: Date()
-                    )
-                    store.currentUser = debugUser
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .tint(.orange)
-            }
-            .padding(.bottom, 50)
-        }
-        .padding(.horizontal, 30)
-        .background(Color(.systemBackground))
-        }
-    }
-}

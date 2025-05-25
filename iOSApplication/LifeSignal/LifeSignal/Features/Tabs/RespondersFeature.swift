@@ -180,51 +180,49 @@ struct RespondersFeature {
     }
 
     enum Action {
+        // Data management
         case refreshResponders
+        
+        // Contact interactions
         case selectContact(Contact)
         case pingContact(Contact)
         case removeContact(Contact)
         case respondToAllPings
         case showRemoveConfirmation(Contact)
-        case pingResponse(Result<Void, Error>)
-        case removeResponse(Result<Void, Error>)
+        
+        // UI presentations
         case contactDetails(PresentationAction<ContactDetailsSheetFeature.Action>)
         case confirmationAlert(PresentationAction<RespondersAlert>)
-
-        // Streaming integration
-        case startContactStreaming
-        case stopContactStreaming
-        case contactUpdated(Contact)
+        
+        // Network responses
+        case pingResponse(Result<Void, Error>)
+        case removeResponse(Result<Void, Error>)
+        case refreshResponse(Result<[Contact], Error>)
     }
 
-    @Dependency(\.contactRepository) var contactRepository
+    @Dependency(\.contactsClient) var contactsClient
     @Dependency(\.hapticClient) var haptics
-    @Dependency(\.analytics) var analytics
-    @Dependency(\.logging) var logging
-
-    private enum StreamingID { case contactUpdates }
 
     var body: some ReducerOf<Self> {
         Reduce { state, action in
             switch action {
+            // Data management
             case .refreshResponders:
                 guard state.currentUser != nil else { return .none }
                 state.isLoading = true
                 state.errorMessage = nil
 
                 return .run { send in
-                    await analytics.track(.featureUsed(feature: "responders_refresh", context: [:]))
-                    // In production, this would refresh contacts from the repository
-                    // The shared contacts will automatically update the responders list
-                    try? await Task.sleep(for: .milliseconds(500))
-                    await send(.pingResponse(.success(())))
+                    let result = await Result {
+                        try await contactsClient.getContacts()
+                    }
+                    await send(.refreshResponse(result))
                 }
 
+            // Contact interactions
             case let .selectContact(contact):
                 state.contactDetails = ContactDetailsSheetFeature.State(contact: contact)
-                return .run { _ in
-                    await analytics.track(.featureUsed(feature: "responder_details_view", context: ["contact_id": contact.id.uuidString]))
-                }
+                return .none
 
             case let .pingContact(contact):
                 state.isLoading = true
@@ -232,7 +230,6 @@ struct RespondersFeature {
 
                 return .run { send in
                     await haptics.notification(.warning)
-                    await analytics.track(.featureUsed(feature: "ping_responder", context: ["contact_id": contact.id.uuidString]))
                     await send(.pingResponse(Result {
                         // In production, this would send a ping/notification to the responder
                         try await Task.sleep(for: .milliseconds(1000))
@@ -274,15 +271,18 @@ struct RespondersFeature {
             case let .showRemoveConfirmation(contact):
                 return .send(.removeContact(contact))
 
+            // UI presentations
+            case .contactDetails:
+                return .none
+
             case .confirmationAlert(.presented(.confirmRemove(let contact))):
                 state.isLoading = true
                 state.errorMessage = nil
 
                 return .run { send in
                     await haptics.notification(.success)
-                    await analytics.track(.featureUsed(feature: "remove_responder", context: ["contact_id": contact.id.uuidString]))
                     await send(.removeResponse(Result {
-                        try await contactRepository.removeContact(contact.id)
+                        try await contactsClient.removeContact(contact.id)
                     }))
                 }
 
@@ -292,7 +292,6 @@ struct RespondersFeature {
 
                 return .run { [pendingPingsCount = state.pendingPingsCount] send in
                     await haptics.notification(.success)
-                    await analytics.track(.featureUsed(feature: "respond_to_all_pings", context: ["ping_count": "\(pendingPingsCount)"]))
                     await send(.pingResponse(Result {
                         // In production, this would respond to all pending pings
                         try await Task.sleep(for: .milliseconds(1500))
@@ -302,6 +301,7 @@ struct RespondersFeature {
             case .confirmationAlert:
                 return .none
 
+            // Network responses
             case .pingResponse(.success):
                 state.isLoading = false
                 return .run { _ in
@@ -324,50 +324,15 @@ struct RespondersFeature {
                 state.errorMessage = error.localizedDescription
                 return .none
 
-            case .contactDetails:
+            case let .refreshResponse(.success(contacts)):
+                state.isLoading = false
+                state.errorMessage = nil
+                state.$allContacts.withLock { $0 = contacts }
                 return .none
 
-            // Streaming integration
-            case .startContactStreaming:
-                return .run { send in
-                    try await contactRepository.startStreaming()
-
-                    // Listen for contact updates
-                    let updates = contactRepository.contactUpdates()
-                    for await contact in updates {
-                        await send(.contactUpdated(contact))
-                    }
-                } catch: { error, _ in
-                    // Handle streaming errors
-                    print("Streaming error: \(error)")
-                }
-                .cancellable(id: StreamingID.contactUpdates, cancelInFlight: true)
-
-            case .stopContactStreaming:
-                return .run { _ in
-                    await contactRepository.stopStreaming()
-                }
-                .cancellable(id: StreamingID.contactUpdates)
-
-            case let .contactUpdated(updatedContact):
-                // Handle real-time contact updates from streaming
-                if updatedContact.isResponder {
-                    state.$allContacts.withLock { contacts in
-                        if let index = contacts.firstIndex(where: { $0.id == updatedContact.id }) {
-                            contacts[index] = updatedContact
-                        } else {
-                            contacts.append(updatedContact)
-                        }
-                    }
-
-                    return .run { _ in
-                        await analytics.track(.featureUsed(feature: "responder_updated_realtime", context: [
-                            "contact_id": updatedContact.id.uuidString,
-                            "has_incoming_ping": "\(updatedContact.hasIncomingPing)",
-                            "has_outgoing_ping": "\(updatedContact.hasOutgoingPing)"
-                        ]))
-                    }
-                }
+            case let .refreshResponse(.failure(error)):
+                state.isLoading = false
+                state.errorMessage = error.localizedDescription
                 return .none
             }
         }
@@ -410,19 +375,13 @@ struct RespondersView: View {
             .background(Color(UIColor.systemGroupedBackground))
             .edgesIgnoringSafeArea(.bottom) // Extend background to bottom edge
             .onAppear {
-                store.send(.refreshResponders)
-                // Start streaming for real-time updates
-                store.send(.startContactStreaming)
-            }
-            .onDisappear {
-                // Stop streaming when view disappears
-                store.send(.stopContactStreaming)
+                store.send(.refreshResponders, animation: .default)
             }
             .toolbar {
                 // Respond to All button (grayed out when there are no pending pings)
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(action: {
-                        store.send(.respondToAllPings)
+                        store.send(.respondToAllPings, animation: .default)
                     }) {
                         Image(systemName: store.pendingPingsCount > 0 ? "bell.badge.slash.fill" : "bell.fill")
                             .foregroundColor(store.pendingPingsCount > 0 ? .blue : Color.blue.opacity(0.5))
@@ -476,7 +435,7 @@ struct ResponderCardView: View {
                 if !statusText.isEmpty {
                     Text(statusText)
                         .font(.footnote)
-                        .foregroundColor(Color.secondary)
+                        .foregroundColor(contact.hasIncomingPing ? Color.blue : Color.secondary)
                 }
             }
             .frame(maxHeight: .infinity, alignment: .center)
@@ -499,12 +458,12 @@ struct ResponderCardView: View {
         }
         .padding() // This padding is inside the card
         .background(
-            Color(UIColor.secondarySystemGroupedBackground)
+            contact.hasIncomingPing ? Color.blue.opacity(0.1) : Color(UIColor.secondarySystemGroupedBackground)
         )
         .cornerRadius(12)
         .onTapGesture {
             // Haptic feedback handled by TCA action
-            store.send(.selectContact(contact))
+            store.send(.selectContact(contact), animation: .default)
         }
     }
 }

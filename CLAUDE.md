@@ -4,80 +4,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-LifeSignal is a multi-platform emergency response application with iOS production app, iOS mock app, Android app, and backend components.
+LifeSignal is an iOS emergency response application built as a mock MVP using The Composable Architecture (TCA).
 
-## Architecture Patterns
+## Architecture Pattern
 
-**iOS Production App** (`iOSApplication/`): Uses The Composable Architecture (TCA)
+**iOS Application** (`iOSApplication/`): Uses The Composable Architecture (TCA) v1.19.1
 - Features use `@Reducer` with `@ObservableState` for state management
-- Dependencies injected via `@DependencyClient` from swift-dependencies
-- Navigation handled by swift-navigation
-- Testing with TCA's testing tools
+- Dependencies are injected via `@DependencyClient` from swift-dependencies
+- Navigation is handled using `@Presents` and `PresentationAction` from swift-navigation
+- Shared state is managed with `@Shared` and persistence keys from swift-sharing
+- Repositories handle data persistence and caching
+- Clients provide abstracted interfaces for external services and device capabilities
 
-**iOS Mock App** (`iOSMockApplication/`): Uses vanilla SwiftUI MVVM
-- View models use `@StateObject` and `@ObservableObject`
-- Simpler state management for learning/prototyping
+## Build Commands
 
-**Android App** (`AndroidApplication/`): Uses Jetpack Compose with MVVM
-- Firebase integration for authentication and backend services
-- CameraX and ML Kit for QR code scanning
-
-## Common Commands
-
-### iOS Development
 ```bash
-# Build iOS production app
-cd iOSApplication/LifeSignal && xcodebuild -scheme LifeSignal build
+# Build the app and review errors, if any
+xcodebuild -scheme LifeSignal -destination 'platform=iOS Simulator,name=iPhone 15' build 2>&1 | tail -100
 
-# Build iOS mock app  
-cd iOSMockApplication && xcodebuild -scheme MockApplication build
+# Run tests
+xcodebuild test -scheme LifeSignal -destination 'platform=iOS Simulator,name=iPhone 15'
 
-# Run iOS tests
-cd iOSApplication/LifeSignal && xcodebuild test -scheme LifeSignal -destination 'platform=iOS Simulator,name=iPhone 15'
-```
+# Build for specific configuration
+xcodebuild -scheme LifeSignal -configuration Debug
+xcodebuild -scheme LifeSignal -configuration Release
 
-### Android Development
-```bash
-# Build Android app
-cd AndroidApplication/LifeSignal && ./gradlew build
-
-# Run Android tests
-cd AndroidApplication/LifeSignal && ./gradlew test
-
-# Generate debug APK
-cd AndroidApplication/LifeSignal && ./gradlew assembleDebug
-```
-
-### Backend/MCP Server
-```bash
-# Build TypeScript MCP server
-cd vertex-ai-mcp-server-main && bun run build
-
-# Development mode with watch
-cd vertex-ai-mcp-server-main && bun run watch
-
-# Test MCP server with inspector
-cd vertex-ai-mcp-server-main && bunx @modelcontextprotocol/inspector build/index.js
+# Clean build folder
+xcodebuild -scheme LifeSignal clean
 ```
 
 ## Key Dependencies
 
-**iOS Production**: SwiftUI, TCA, swift-dependencies, swift-navigation, Firebase SDK
-**iOS Mock**: SwiftUI, Firebase SDK  
-**Android**: Jetpack Compose, Firebase SDK, CameraX, ML Kit, kotlinx.serialization
-**Backend**: TypeScript, Vertex AI SDK, Model Context Protocol SDK
+- **ComposableArchitecture** (v1.19.1) - Core TCA framework
+- **swift-dependencies** (v1.9.2) - Dependency injection
+- **swift-navigation** (v2.3.0) - Navigation helpers
+- **swift-sharing** (v2.5.2) - Shared state management
+- **Firebase** (v11.12.0) - Auth, Firestore, Messaging, Functions, AppCheck
 
-## Architecture Documentation
+## Development Guidelines
 
-Comprehensive architecture documentation exists in `Architecture/` following strict formatting guidelines:
-- `Architecture/Backend/` - Firebase auth, Supabase database/storage, Fly.io APIs
-- `Architecture/iOS/MockApplication/` - MVVM patterns and simple state management
-- `Architecture/iOS/ProductionApplication/` - TCA patterns, features, and dependency clients
+Ensure that our views UI do not deviate from our reference views in the ReferenceViews folder.
 
-## Code Conventions
+## Project Configuration
 
-- Follow existing patterns within each application
-- iOS Production: Use TCA's `@Reducer` and dependency injection patterns
-- iOS Mock: Keep state management simple with basic view models
-- Android: Follow modern Android architecture with Compose
-- All apps use Firebase for authentication and backend services
+- **Bundle ID:** com.tojkuv.LifeSignal
+- **Deployment Target:** iOS 17.6
+- **Swift Version:** 6.0
+- **Team ID:** 5WK7M4ZSVR
+- **Firebase Config:** GoogleService-Info.plist

@@ -92,7 +92,6 @@ struct MainTabsFeature: Sendable {
 
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.contactRepository) var contactRepository
-    @Dependency(\.analytics) var analytics
 
     init() {}
 
@@ -126,10 +125,6 @@ struct MainTabsFeature: Sendable {
 
             case .onAppear:
                 return .run { send in
-                    await analytics.track(.featureUsed(feature: "main_tabs_appeared", context: [
-                        "initial_tab": "home"
-                    ]))
-
                     // Refresh contacts on app appear
                     await send(.refreshContacts)
                 }
@@ -141,10 +136,6 @@ struct MainTabsFeature: Sendable {
 
                     return .run { _ in
                         await haptics.selection()
-                        await analytics.track(.featureUsed(feature: "tab_selected", context: [
-                            "from_tab": previousTab.title.lowercased(),
-                            "to_tab": tab.title.lowercased()
-                        ]))
                     }
                 }
                 return .none
@@ -171,18 +162,10 @@ struct MainTabsFeature: Sendable {
                 }
 
             case let .contactsRefreshed(.success(contacts)):
-                return .run { _ in
-                    await analytics.track(.featureUsed(feature: "contacts_refreshed", context: [
-                        "count": "\(contacts.count)"
-                    ]))
-                }
+                return .none
 
             case let .contactsRefreshed(.failure(error)):
-                return .run { _ in
-                    await analytics.track(.featureUsed(feature: "contacts_refresh_failed", context: [
-                        "error": error.localizedDescription
-                    ]))
-                }
+                return .none
 
             case .home, .responders, .checkIn, .dependents, .profile:
                 return .none

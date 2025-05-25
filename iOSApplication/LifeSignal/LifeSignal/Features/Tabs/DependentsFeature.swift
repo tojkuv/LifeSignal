@@ -21,7 +21,7 @@ struct DependentsFeature {
         
         var isLoading = false
         var errorMessage: String?
-        var sortMode: SortMode = .lastUpdated
+        var sortMode: SortMode = .timeLeft
         @Presents var contactDetails: ContactDetailsSheetFeature.State?
         @Presents var confirmationAlert: AlertState<DependentsAlert>?
         
@@ -32,43 +32,36 @@ struct DependentsFeature {
             }
             
             switch sortMode {
+            case .timeLeft:
+                return filtered.sorted { (contact1, contact2) in
+                    // Sort by time remaining until next check-in is due
+                    let now = Date()
+                    
+                    func timeRemaining(for contact: Contact) -> TimeInterval {
+                        guard let lastCheckIn = contact.lastCheckInTime else {
+                            return -Double.infinity // No check-in means expired
+                        }
+                        let timeSince = now.timeIntervalSince(lastCheckIn)
+                        return contact.interval - timeSince
+                    }
+                    
+                    let remaining1 = timeRemaining(for: contact1)
+                    let remaining2 = timeRemaining(for: contact2)
+                    
+                    // Sort by time remaining (ascending - least time remaining first)
+                    return remaining1 < remaining2
+                }
             case .name:
                 return filtered.sorted { $0.name < $1.name }
-            case .activity:
-                return filtered.sorted { (contact1, contact2) in
-                    // Sort by most recent activity (check-in, ping, or manual alert)
-                    let date1 = [contact1.lastCheckInTime, contact1.incomingPingTimestamp, contact1.outgoingPingTimestamp, contact1.manualAlertTimestamp]
-                        .compactMap { $0 }
-                        .max() ?? contact1.lastUpdated
-                    let date2 = [contact2.lastCheckInTime, contact2.incomingPingTimestamp, contact2.outgoingPingTimestamp, contact2.manualAlertTimestamp]
-                        .compactMap { $0 }
-                        .max() ?? contact2.lastUpdated
-                    return date1 > date2
-                }
-            case .lastUpdated:
+            case .dateAdded:
                 return filtered.sorted { $0.lastUpdated > $1.lastUpdated }
-            case .alertStatus:
-                return filtered.sorted { (contact1, contact2) in
-                    // Sort by alert priority: manual alerts first, then ping status, then by name
-                    if contact1.manualAlertActive != contact2.manualAlertActive {
-                        return contact1.manualAlertActive && !contact2.manualAlertActive
-                    }
-                    if contact1.hasIncomingPing != contact2.hasIncomingPing {
-                        return contact1.hasIncomingPing && !contact2.hasIncomingPing
-                    }
-                    if contact1.hasOutgoingPing != contact2.hasOutgoingPing {
-                        return contact1.hasOutgoingPing && !contact2.hasOutgoingPing
-                    }
-                    return contact1.name < contact2.name
-                }
             }
         }
         
         enum SortMode: String, CaseIterable, Equatable {
+            case timeLeft = "Time Left"
             case name = "Name"
-            case activity = "Recent Activity"
-            case lastUpdated = "Last Updated"
-            case alertStatus = "Alert Status"
+            case dateAdded = "Date Added"
         }
         
         var dependentCount: Int {
@@ -264,31 +257,31 @@ struct DependentsFeature {
 
     enum Action: BindableAction {
         case binding(BindingAction<State>)
+        
+        // Data management
         case refreshDependents
+        case setSortMode(State.SortMode)
+        
+        // Contact interactions
         case selectContact(Contact)
         case pingContact(Contact)
         case removeContact(Contact)
         case toggleDependentStatus(Contact)
-        case setSortMode(State.SortMode)
         case showRemoveConfirmation(Contact)
+        
+        // UI presentations
         case contactDetails(PresentationAction<ContactDetailsSheetFeature.Action>)
         case confirmationAlert(PresentationAction<DependentsAlert>)
+        
+        // Network responses
         case pingResponse(Result<Void, Error>)
         case removeResponse(Result<Void, Error>)
         case dependentStatusResponse(Result<Contact, Error>)
-
-        // Streaming integration
-        case startContactStreaming
-        case stopContactStreaming
-        case contactUpdated(Contact)
+        case refreshResponse(Result<[Contact], Error>)
     }
 
-    @Dependency(\.contactRepository) var contactRepository
+    @Dependency(\.contactsClient) var contactsClient
     @Dependency(\.hapticClient) var haptics
-    @Dependency(\.analytics) var analytics
-    @Dependency(\.logging) var logging
-
-    private enum StreamingID { case contactUpdates }
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -298,31 +291,28 @@ struct DependentsFeature {
             case .binding:
                 return .none
 
+            // Data management
             case .refreshDependents:
-                // Check if current user exists instead of storing unused variable
                 guard state.currentUser != nil else { return .none }
                 state.isLoading = true
                 state.errorMessage = nil
 
                 let dependentCount = state.dependents.count
 
-                return .run { [allContacts = state.$allContacts] send in
-                    await analytics.track(.featureUsed(feature: "dependents_refresh", context: [
-                        "dependent_count": "\(dependentCount)"
-                    ]))
-
-                    // Refresh contacts from the repository
-                    do {
-                        let contacts = try await contactRepository.getContacts()
-                        // Update shared contacts directly
-                        allContacts.withLock { $0 = contacts }
-                        await send(.binding(.set(\.isLoading, false)))
-                    } catch {
-                        await send(.binding(.set(\.isLoading, false)))
-                        await send(.binding(.set(\.errorMessage, error.localizedDescription)))
+                return .run { send in
+                    let result = await Result {
+                        try await contactsClient.getContacts()
                     }
+                    await send(.refreshResponse(result))
                 }
 
+            case let .setSortMode(mode):
+                state.sortMode = mode
+                return .run { _ in
+                    await haptics.impact(.light)
+                }
+
+            // Contact interactions
             case let .selectContact(contact):
                 state.contactDetails = ContactDetailsSheetFeature.State(contact: contact)
                 return .run { _ in
@@ -371,20 +361,14 @@ struct DependentsFeature {
                 return .run { send in
                     await analytics.track(.contactDependentStatusChanged(contactId: contact.id, isDependent: !contact.isDependent))
                     await send(.dependentStatusResponse(Result {
-                        try await contactRepository.updateContactDependent(contact.id, !contact.isDependent)
+                        try await contactsClient.updateContact(contact.id, !contact.isDependent)
                     }))
-                }
-
-            case let .setSortMode(mode):
-                state.sortMode = mode
-                return .run { _ in
-                    await haptics.impact(.light)
-                    await analytics.track(.featureUsed(feature: "dependents_sort", context: ["mode": mode.rawValue]))
                 }
 
             case let .showRemoveConfirmation(contact):
                 return .send(.removeContact(contact))
 
+            // UI presentations
             case .contactDetails:
                 return .none
 
@@ -400,7 +384,7 @@ struct DependentsFeature {
                     ]))
                     await send(.pingResponse(Result {
                         // Update ping status for the contact
-                        _ = try await contactRepository.updateContactPingStatus(contact.id, true, false)
+                        _ = try await contactsClient.updatePingStatus(contact.id, true, false)
                         // In production, this would also send a notification to the dependent
                         try await Task.sleep(for: .milliseconds(1000))
                     }))
@@ -418,13 +402,14 @@ struct DependentsFeature {
                     ]))
                     await send(.dependentStatusResponse(Result {
                         // Remove dependent status rather than deleting the contact entirely
-                        try await contactRepository.updateContactDependent(contact.id, false)
+                        try await contactsClient.updateContact(contact.id, false)
                     }))
                 }
 
             case .confirmationAlert:
                 return .none
 
+            // Network responses
             case .pingResponse(.success):
                 state.isLoading = false
                 return .run { _ in
@@ -449,7 +434,6 @@ struct DependentsFeature {
 
             case let .dependentStatusResponse(.success(updatedContact)):
                 state.isLoading = false
-                // Update the contact in the shared state
                 state.$allContacts.withLock { contacts in
                     if let index = contacts.firstIndex(where: { $0.id == updatedContact.id }) {
                         contacts[index] = updatedContact
@@ -464,47 +448,15 @@ struct DependentsFeature {
                 state.errorMessage = error.localizedDescription
                 return .none
 
-            // Streaming integration
-            case .startContactStreaming:
-                return .run { send in
-                    try await contactRepository.startStreaming()
+            case let .refreshResponse(.success(contacts)):
+                state.isLoading = false
+                state.errorMessage = nil
+                state.$allContacts.withLock { $0 = contacts }
+                return .none
 
-                    // Listen for contact updates
-                    let updates = contactRepository.contactUpdates()
-                    for await contact in updates {
-                        await send(.contactUpdated(contact))
-                    }
-                } catch: { error, _ in
-                    // Handle streaming errors
-                    print("Streaming error: \(error)")
-                }
-                .cancellable(id: StreamingID.contactUpdates, cancelInFlight: true)
-
-            case .stopContactStreaming:
-                return .run { _ in
-                    await contactRepository.stopStreaming()
-                }
-                .cancellable(id: StreamingID.contactUpdates)
-
-            case let .contactUpdated(updatedContact):
-                // Handle real-time contact updates from streaming
-                if updatedContact.isDependent {
-                    state.$allContacts.withLock { contacts in
-                        if let index = contacts.firstIndex(where: { $0.id == updatedContact.id }) {
-                            contacts[index] = updatedContact
-                        } else {
-                            contacts.append(updatedContact)
-                        }
-                    }
-
-                    return .run { _ in
-                        await analytics.track(.featureUsed(feature: "dependent_updated_realtime", context: [
-                            "contact_id": updatedContact.id.uuidString,
-                            "has_alert": "\(updatedContact.manualAlertActive)",
-                            "has_ping": "\(updatedContact.hasIncomingPing || updatedContact.hasOutgoingPing)"
-                        ]))
-                    }
-                }
+            case let .refreshResponse(.failure(error)):
+                state.isLoading = false
+                state.errorMessage = error.localizedDescription
                 return .none
             }
         }
@@ -554,29 +506,14 @@ struct DependentsView: View {
             .background(Color(UIColor.systemGroupedBackground))
             .edgesIgnoringSafeArea(.bottom) // Extend background to bottom edge
             .onAppear {
-                // Force refresh when view appears to ensure sort is applied
-                store.send(.refreshDependents)
-                // Start streaming for real-time updates
-                store.send(.startContactStreaming)
-
-                print("DependentsView appeared with sort mode: \("Default")")
-                print("DependentsView has \(store.dependents.count) dependents")
-
-                // Debug: print all dependents
-                for (index, dependent) in store.dependents.enumerated() {
-                    print("Dependent \(index+1): \(dependent.name) (isDependent: \(dependent.isDependent))")
-                }
-            }
-            .onDisappear {
-                // Stop streaming when view disappears
-                store.send(.stopContactStreaming)
+                store.send(.refreshDependents, animation: .default)
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Menu {
                         ForEach(DependentsFeature.State.SortMode.allCases, id: \.self) { sortMode in
                             Button(action: {
-                                store.send(.setSortMode(sortMode))
+                                store.send(.setSortMode(sortMode), animation: .default)
                             }) {
                                 Label(sortMode.rawValue, systemImage: store.sortMode == sortMode ? "checkmark" : "")
                             }
@@ -616,7 +553,7 @@ struct DependentsView: View {
             .cornerRadius(12)
             .modifier(CardFlashingAnimation(isActive: contact.manualAlertActive))
             .onTapGesture {
-                store.send(.selectContact(contact))
+                store.send(.selectContact(contact), animation: .default)
             }
     }
 

@@ -63,9 +63,8 @@ struct QRCodeShareSheetFeature {
         case dismiss
     }
 
-    @Dependency(\.qrCodeGenerator) var qrCodeGenerator
+    @Dependency(\.userClient) var userClient
     @Dependency(\.hapticClient) var haptics
-    @Dependency(\.analytics) var analytics
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -76,14 +75,13 @@ struct QRCodeShareSheetFeature {
                 return .none
                 
             case .generateQRCode:
-                guard let user = state.currentUser, let qrImage = state.qrCodeImage else { return .none }
+                guard let user = state.currentUser else { return .none }
                 state.isGenerating = true
                 state.errorMessage = nil
                 
-                return .run { [name = user.name] send in
-                    await analytics.track(.featureUsed(feature: "qr_share_generate", context: [:]))
+                return .run { send in
                     await send(.shareableGenerationResponse(Result {
-                        return try await qrCodeGenerator.generateShareableQRCode(qrImage, name)
+                        return try await userClient.getShareableQRCodeImage()
                     }))
                 }
                 
@@ -97,7 +95,6 @@ struct QRCodeShareSheetFeature {
                 
                 return .run { _ in
                     await haptics.impact(.medium)
-                    await analytics.track(.featureUsed(feature: "qr_share_initiated", context: [:]))
                 }
                 
             case .regenerateQRCode:
@@ -120,10 +117,10 @@ struct QRCodeShareSheetFeature {
                 state.isGenerating = true
                 return .run { send in
                     await haptics.notification(.warning)
-                    await analytics.track(.featureUsed(feature: "qr_regenerate_confirmed", context: [:]))
-                    // In production, this would regenerate the QR code
                     await send(.qrGenerationResponse(Result {
-                        throw NSError(domain: "QRCodeShareSheet", code: 2, userInfo: [NSLocalizedDescriptionKey: "QR code regeneration not implemented"])
+                        let updatedUser = try await userClient.regenerateQRCode()
+                        _ = try await userClient.refreshQRCodeImage()
+                        return try await userClient.getQRCodeImage(300)
                     }))
                 }
                 
@@ -134,7 +131,7 @@ struct QRCodeShareSheetFeature {
                 state.isGenerating = false
                 state.qrCodeImage = image
                 state.shareableImage = nil
-                return .send(.generateQRCode)
+                return .send(.generateQRCode, animation: .default)
                 
             case let .qrGenerationResponse(.failure(error)):
                 state.isGenerating = false
@@ -226,7 +223,7 @@ struct QRCodeShareSheetView: View {
 
             // Refresh button
             Button(action: {
-                store.send(.regenerateQRCode)
+                store.send(.regenerateQRCode, animation: .default)
             }) {
                 Image(systemName: "arrow.clockwise")
                     .font(.headline)
@@ -261,7 +258,7 @@ struct QRCodeShareSheetView: View {
                 .frame(width: 250, height: 250)
             } else {
                 Button("Generate QR Code") {
-                    store.send(.generateQRCode)
+                    store.send(.generateQRCode, animation: .default)
                 }
                 .frame(width: 250, height: 250)
                 .background(Color.gray.opacity(0.1))
@@ -274,7 +271,7 @@ struct QRCodeShareSheetView: View {
     @ViewBuilder
     private func shareButton() -> some View {
         Button(action: {
-            store.send(.share)
+            store.send(.share, animation: .default)
         }) {
             Label("Share QR Code", systemImage: "square.and.arrow.up")
                 .font(.headline)

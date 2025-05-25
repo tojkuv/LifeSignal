@@ -11,67 +11,67 @@ struct OnboardingFeature {
         @Shared(.needsOnboarding) var needsOnboarding: Bool = false
         @Shared(.currentUser) var currentUser: User? = nil
 
-        var currentStep: OnboardingStep = .welcome
+        var currentStep = 0
         var isLoading = false
         var errorMessage: String?
-        var permissionsGranted: [Permission: Bool] = [:]
+        var showError = false
+        var showInstructions = false
+        
+        // Name entry fields
+        var firstName = ""
+        var lastName = ""
+        var emergencyNote = ""
+        
+        // Focus state management
+        var firstNameFieldFocused = false
+        var lastNameFieldFocused = false
+        var noteFieldFocused = false
 
         var progress: Double {
-            Double(currentStep.rawValue) / Double(OnboardingStep.allCases.count - 1)
+            Double(currentStep) / 1.0  // 2 steps total (0 and 1)
         }
 
-        var canProceed: Bool {
-            switch currentStep {
-            case .welcome:
-                return true
-            case .permissions:
-                return permissionsGranted[.notifications] == true
-            case .profile:
-                return currentUser != nil
-            case .complete:
-                return true
-            }
+        var areBothNamesFilled: Bool {
+            !firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-
-        enum OnboardingStep: Int, CaseIterable, Equatable {
-            case welcome = 0
-            case permissions = 1
-            case profile = 2
-            case complete = 3
-
-            var title: String {
-                switch self {
-                case .welcome: return "Welcome to LifeSignal"
-                case .permissions: return "Enable Notifications"
-                case .profile: return "Complete Your Profile"
-                case .complete: return "You're All Set!"
-                }
-            }
-        }
-
-        enum Permission: String, CaseIterable {
-            case notifications
-            case location
+        
+        // Format name as user types (capitalize first letter)
+        func formatNameAsTyped(_ input: String) -> String {
+            guard !input.isEmpty else { return input }
+            let cleaned = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            return cleaned.prefix(1).capitalized + cleaned.dropFirst().lowercased()
         }
     }
 
     @CasePathable
     enum Action: BindableAction {
         case binding(BindingAction<State>)
+        
+        // Onboarding flow
+        case startOnboarding
         case nextStep
         case previousStep
-        case skipOnboarding
-        case completeOnboarding
-        case requestPermission(State.Permission)
-        case permissionResponse(State.Permission, Result<Bool, Error>)
+        case completeOnboarding(completion: (Bool) -> Void)
         case onboardingCompleted
-        case startOnboarding
+        
+        // User profile creation
+        case createUserProfile
+        case userProfileCreated(Result<User, Error>)
+        
+        // Instructions
+        case handleInstructionsDismissal
+        case handleGotItButtonTap
+        
+        // Focus management
+        case setFirstNameFieldFocused(Bool)
+        case setLastNameFieldFocused(Bool)
+        case setNoteFieldFocused(Bool)
     }
 
     @Dependency(\.hapticClient) var haptics
-    @Dependency(\.analytics) var analytics
     @Dependency(\.notificationClient) var notificationClient
-    @Dependency(\.sessionClient) var sessionClient
+    @Dependency(\.userClient) var userClient
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -82,172 +82,103 @@ struct OnboardingFeature {
                 return .none
 
             case .startOnboarding:
-                state.currentStep = .welcome
+                state.currentStep = 0
                 state.isLoading = false
                 state.errorMessage = nil
-                state.permissionsGranted = [:]
+                state.showError = false
+                state.firstName = ""
+                state.lastName = ""
+                state.emergencyNote = ""
 
                 return .run { _ in
-                    await analytics.track(.onboardingStarted)
                     await haptics.impact(.light)
                 }
 
             case .nextStep:
-                guard state.canProceed else { return .none }
+                guard state.areBothNamesFilled else { return .none }
+                
+                state.currentStep = 1
+                state.errorMessage = nil
 
-                let currentStepTitle = state.currentStep.title
-                let nextStepIndex = state.currentStep.rawValue + 1
-
-                if let nextStep = State.OnboardingStep(rawValue: nextStepIndex) {
-                    state.currentStep = nextStep
-                    state.errorMessage = nil
-
-                    return .run { _ in
-                        await haptics.impact(.medium)
-                        await analytics.track(.onboardingCompleted(step: currentStepTitle))
-                        await analytics.track(.featureUsed(feature: "onboarding_step", context: [
-                            "from_step": currentStepTitle,
-                            "to_step": nextStep.title,
-                            "step_number": "\(nextStep.rawValue)"
-                        ]))
-                    }
-                } else {
-                    return .send(.completeOnboarding)
+                return .run { _ in
+                    await haptics.impact(.medium)
                 }
 
             case .previousStep:
-                let currentStepTitle = state.currentStep.title
-                let previousStepIndex = state.currentStep.rawValue - 1
+                state.currentStep = 0
+                state.errorMessage = nil
 
-                if let previousStep = State.OnboardingStep(rawValue: previousStepIndex) {
-                    state.currentStep = previousStep
-                    state.errorMessage = nil
-
-                    return .run { _ in
-                        await haptics.impact(.medium)
-                        await analytics.track(.featureUsed(feature: "onboarding_back", context: [
-                            "from_step": currentStepTitle,
-                            "to_step": previousStep.title
-                        ]))
-                    }
+                return .run { _ in
+                    await haptics.impact(.medium)
                 }
-                return .none
 
-            case .skipOnboarding:
-                let currentStepTitle = state.currentStep.title
-                let currentStepNumber = state.currentStep.rawValue
+            case .completeOnboarding:
+                state.isLoading = true
+                state.errorMessage = nil
+                
+                return .run { send in
+                    await send(.createUserProfile)
+                }
 
-                // Update shared state immediately  
+            case .createUserProfile:
+                return .run { [firstName = state.firstName, lastName = state.lastName, emergencyNote = state.emergencyNote] send in
+                    let result = await Result {
+                        // Create user profile with name from onboarding
+                        let fullName = "\(firstName) \(lastName)"
+                        return try await userClient.updateProfile(fullName, emergencyNote)
+                    }
+                    await send(.userProfileCreated(result))
+                }
+
+            case let .userProfileCreated(.success(user)):
+                state.isLoading = false
+                state.$currentUser.withLock { $0 = user }
+                state.showInstructions = true
+                
+                return .run { _ in
+                    await haptics.notification(.success)
+                }
+
+            case let .userProfileCreated(.failure(error)):
+                state.isLoading = false
+                state.errorMessage = error.localizedDescription
+                state.showError = true
+                
+                return .run { _ in
+                    await haptics.notification(.error)
+                }
+
+            case .handleInstructionsDismissal:
+                state.showInstructions = false
+                state.$needsOnboarding.withLock { $0 = false }
+                
+                return .run { send in
+                    await send(.onboardingCompleted)
+                }
+
+            case .handleGotItButtonTap:
+                state.showInstructions = false
                 state.$needsOnboarding.withLock { $0 = false }
                 
                 return .run { send in
                     await haptics.impact(.medium)
-                    await analytics.track(.onboardingSkipped(step: currentStepTitle))
-                    await analytics.track(.featureUsed(feature: "onboarding_skipped", context: [
-                        "step": currentStepTitle,
-                        "step_number": "\(currentStepNumber)"
-                    ]))
-
                     await send(.onboardingCompleted)
                 }
 
-            case .completeOnboarding:
-                state.currentStep = .complete
-                
-                // Update shared state immediately
-                state.$needsOnboarding.withLock { $0 = false }
+            case let .setFirstNameFieldFocused(focused):
+                state.firstNameFieldFocused = focused
+                return .none
 
-                return .run { [permissionsCount = state.permissionsGranted.count] send in
-                    await haptics.notification(.success)
-                    await analytics.track(.onboardingCompleted(step: "complete"))
-                    await analytics.track(.featureUsed(feature: "onboarding_completed", context: [
-                        "total_steps": "\(State.OnboardingStep.allCases.count)",
-                        "permissions_granted": "\(permissionsCount)"
-                    ]))
+            case let .setLastNameFieldFocused(focused):
+                state.lastNameFieldFocused = focused
+                return .none
 
-                    // Show notifications about successful onboarding
-                    let notification = NotificationItem(
-                        type: .system,
-                        title: "Welcome to LifeSignal!",
-                        message: "You're all set up and ready to go."
-                    )
-                    try? await notificationClient.sendNotification(notification)
-
-                    // Small delay to show completion step
-                    try? await Task.sleep(for: .seconds(1.5))
-                    await send(.onboardingCompleted)
-                }
-
-            case let .requestPermission(permission):
-                state.isLoading = true
-                state.errorMessage = nil
-
-                return .run { send in
-                    await analytics.track(.permissionRequested(permission: permission.rawValue))
-                    await analytics.track(.featureUsed(feature: "permission_request", context: [
-                        "permission": permission.rawValue,
-                        "step": "onboarding"
-                    ]))
-
-                    await send(.permissionResponse(permission, Result {
-                        switch permission {
-                        case .notifications:
-                            return try await notificationClient.requestPermission()
-                        case .location:
-                            // Location permission would be handled here
-                            // For now, return true as placeholder
-                            try await Task.sleep(for: .milliseconds(500))
-                            return true
-                        }
-                    }))
-                }
-
-            case let .permissionResponse(permission, .success(granted)):
-                state.isLoading = false
-                state.permissionsGranted[permission] = granted
-
-                if granted {
-                    return .run { _ in
-                        await haptics.notification(.success)
-                        await analytics.track(.permissionGranted(permission: permission.rawValue))
-                        await analytics.track(.featureUsed(feature: "permission_granted", context: [
-                            "permission": permission.rawValue,
-                            "step": "onboarding"
-                        ]))
-                    }
-                } else {
-                    state.errorMessage = "Permission denied for \(permission.rawValue.capitalized)"
-                    return .run { _ in
-                        await haptics.notification(.error)
-                        await analytics.track(.permissionDenied(permission: permission.rawValue))
-                        await analytics.track(.featureUsed(feature: "permission_denied", context: [
-                            "permission": permission.rawValue,
-                            "step": "onboarding"
-                        ]))
-                    }
-                }
-
-            case let .permissionResponse(permission, .failure(error)):
-                state.isLoading = false
-                state.errorMessage = "Failed to request \(permission.rawValue.capitalized) permission: \(error.localizedDescription)"
-
-                return .run { _ in
-                    await haptics.notification(.error)
-                    await analytics.trackError(
-                        domain: "onboarding",
-                        code: "permission_error",
-                        description: "Failed to request \(permission.rawValue) permission: \(error.localizedDescription)"
-                    )
-                }
+            case let .setNoteFieldFocused(focused):
+                state.noteFieldFocused = focused
+                return .none
 
             case .onboardingCompleted:
-                // This action is handled by the parent reducer
-                // Additional cleanup can be done here if needed
-                return .run { _ in
-                    await analytics.track(.featureUsed(feature: "onboarding_flow_completed", context: [
-                        "completion_time": "\(Date().timeIntervalSince1970)"
-                    ]))
-                }
+                return .none
             }
         }
     }
@@ -255,6 +186,9 @@ struct OnboardingFeature {
 
 struct OnboardingView: View {
     @Bindable var store: StoreOf<OnboardingFeature>
+    @FocusState private var firstNameFieldFocused: Bool
+    @FocusState private var lastNameFieldFocused: Bool
+    @FocusState private var noteFieldFocused: Bool
 
     var body: some View {
         WithPerceptionTracking {
@@ -264,33 +198,44 @@ struct OnboardingView: View {
                     progressIndicator()
 
                     // Content based on current step
-                    Group {
-                        switch store.currentStep {
-                        case .welcome:
-                            welcomeView()
-                        case .permissions:
-                            permissionsView()
-                        case .profile:
-                            // Profile step is handled in AuthenticationView
-                            EmptyView()
-                        case .complete:
-                            completionView()
-                        }
+                    if store.currentStep == 0 {
+                        nameEntryView()
+                    } else {
+                        emergencyNoteView()
                     }
                 }
                 .padding()
                 .navigationTitle("Welcome to LifeSignal")
                 .navigationBarTitleDisplayMode(.inline)
                 .background(Color(UIColor.systemGroupedBackground))
-                .alert("Permission Error", isPresented: .constant(store.errorMessage != nil)) {
-                    Button("OK") {
-                        store.send(.binding(.set(\.errorMessage, nil)))
-                    }
+                .alert("Error", isPresented: $store.showError) {
+                    Button("OK") { }
                 } message: {
                     Text(store.errorMessage ?? "")
                 }
-                .onAppear {
-                    store.send(.startOnboarding)
+                .disabled(store.isLoading)
+                .onChange(of: store.firstNameFieldFocused) { _, newValue in
+                    firstNameFieldFocused = newValue
+                }
+                .onChange(of: store.lastNameFieldFocused) { _, newValue in
+                    lastNameFieldFocused = newValue
+                }
+                .onChange(of: store.noteFieldFocused) { _, newValue in
+                    noteFieldFocused = newValue
+                }
+                .onChange(of: firstNameFieldFocused) { _, newValue in
+                    store.send(.setFirstNameFieldFocused(newValue))
+                }
+                .onChange(of: lastNameFieldFocused) { _, newValue in
+                    store.send(.setLastNameFieldFocused(newValue))
+                }
+                .onChange(of: noteFieldFocused) { _, newValue in
+                    store.send(.setNoteFieldFocused(newValue))
+                }
+                .sheet(isPresented: $store.showInstructions, onDismiss: {
+                    store.send(.handleInstructionsDismissal)
+                }) {
+                    instructionsView()
                 }
             }
         }
@@ -298,140 +243,223 @@ struct OnboardingView: View {
 
     @ViewBuilder
     private func progressIndicator() -> some View {
-        ProgressView(value: store.progress)
-            .progressViewStyle(LinearProgressViewStyle())
-            .padding(.vertical)
+        HStack(spacing: 8) {
+            ForEach(0..<2) { step in
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(step == store.currentStep ? Color.blue : Color.gray.opacity(0.3))
+                    .frame(width: 30, height: 6)
+            }
+        }
+        .padding(.top, 16)
+        .padding(.bottom, 16)
     }
 
     @ViewBuilder
-    private func welcomeView() -> some View {
+    private func nameEntryView() -> some View {
         VStack(spacing: 24) {
-            Spacer()
-
-            Image(systemName: "shield.checkered")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 100, height: 100)
-                .foregroundColor(.blue)
-
-            Text("Welcome to LifeSignal")
-                .font(.largeTitle)
+            Text("What's your name?")
+                .font(.title2)
                 .fontWeight(.bold)
 
-            Text("Stay connected with your loved ones and ensure their safety with real-time check-ins and emergency alerts.")
-                .font(.body)
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
+            // First Name Field
+            VStack(alignment: .leading, spacing: 8) {
+                Text("First Name")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.leading, 4)
 
-            Spacer()
+                TextField("First Name", text: Binding(
+                    get: { store.firstName },
+                    set: { newValue in
+                        store.send(.binding(.set(\.firstName, store.state.formatNameAsTyped(newValue))))
+                    }
+                ))
+                    .padding(.vertical, 12)
+                    .padding(.horizontal)
+                    .background(Color(UIColor.secondarySystemGroupedBackground))
+                    .cornerRadius(12)
+                    .disableAutocorrection(true)
+                    .focused($firstNameFieldFocused)
+                    .submitLabel(.next)
+                    .onSubmit {
+                        lastNameFieldFocused = true
+                    }
+            }
+            .padding(.horizontal)
+
+            // Last Name Field
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Last Name")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.leading, 4)
+
+                TextField("Last Name", text: Binding(
+                    get: { store.lastName },
+                    set: { newValue in
+                        store.send(.binding(.set(\.lastName, store.state.formatNameAsTyped(newValue))))
+                    }
+                ))
+                    .padding(.vertical, 12)
+                    .padding(.horizontal)
+                    .background(Color(UIColor.secondarySystemGroupedBackground))
+                    .cornerRadius(12)
+                    .disableAutocorrection(true)
+                    .focused($lastNameFieldFocused)
+                    .submitLabel(.done)
+            }
+            .padding(.horizontal)
 
             Button(action: {
-                store.send(.nextStep)
+                if store.areBothNamesFilled {
+                    store.send(.nextStep, animation: .default)
+                }
             }) {
-                Text("Get Started")
-                    .font(.headline)
+                Text("Continue")
+                    .fontWeight(.semibold)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(Color.blue)
-                    .cornerRadius(10)
+                    .background(store.areBothNamesFilled ? Color.blue : Color.gray)
+                    .cornerRadius(12)
             }
+            .disabled(!store.areBothNamesFilled)
+            .padding(.horizontal)
+
+            Spacer()
         }
     }
 
     @ViewBuilder
-    private func permissionsView() -> some View {
+    private func emergencyNoteView() -> some View {
         VStack(spacing: 24) {
-            Spacer()
-
-            Image(systemName: "bell.badge")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 100, height: 100)
-                .foregroundColor(.blue)
-
-            Text("Enable Notifications")
-                .font(.largeTitle)
+            Text("Your emergency note")
+                .font(.title2)
                 .fontWeight(.bold)
 
-            Text("We'll send you important alerts about check-ins and emergency situations.")
-                .font(.body)
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $store.emergencyNote)
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .frame(height: 120)
+                    .padding(.vertical, 12)
+                    .padding(.horizontal)
+                    .scrollContentBackground(.hidden)
+                    .background(Color(UIColor.secondarySystemGroupedBackground))
+                    .cornerRadius(12)
+                    .focused($noteFieldFocused)
+            }
+            .padding(.horizontal)
 
-            Spacer()
-
-            VStack(spacing: 12) {
+            HStack {
                 Button(action: {
-                    store.send(.requestPermission(.notifications))
+                    store.send(.previousStep, animation: .default)
                 }) {
                     HStack {
-                        if store.isLoading {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text("Requesting Permission...")
-                        } else {
-                            Text("Enable Notifications")
-                        }
+                        Image(systemName: "arrow.left")
+                        Text("Back")
                     }
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(store.isLoading ? Color.gray : Color.blue)
-                    .cornerRadius(10)
+                    .foregroundColor(.blue)
                 }
-                .disabled(store.isLoading)
+
+                Spacer()
 
                 Button(action: {
-                    store.send(.nextStep)
+                    store.send(.completeOnboarding { success in
+                        if !success {
+                            // Error handled by reducer
+                        }
+                    }, animation: .default)
                 }) {
-                    Text("Maybe Later")
-                        .font(.body)
-                        .foregroundColor(.blue)
+                    Text("Complete")
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .frame(width: 120)
+                        .padding()
                 }
+                .background(store.isLoading ? Color.gray : Color.blue)
+                .cornerRadius(12)
                 .disabled(store.isLoading)
             }
+            .padding(.horizontal)
+
+            Spacer()
         }
     }
 
     @ViewBuilder
-    private func completionView() -> some View {
-        VStack(spacing: 24) {
-            Spacer()
-
-            Image(systemName: "checkmark.circle.fill")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 100, height: 100)
-                .foregroundColor(.green)
-
-            Text("You're All Set!")
-                .font(.largeTitle)
+    private func instructionsView() -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("How to use LifeSignal")
+                .font(.title)
                 .fontWeight(.bold)
+                .padding(.bottom, 10)
 
-            Text("Welcome to LifeSignal. Let's keep you and your loved ones safe.")
-                .font(.body)
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
+            VStack(alignment: .leading, spacing: 15) {
+                instructionItem(
+                    number: "1",
+                    title: "Set your interval",
+                    description: "Choose how often you need to check in. This is the maximum time before your contacts are alerted if you don't check in."
+                )
+
+                instructionItem(
+                    number: "2",
+                    title: "Add responders",
+                    description: "Share your QR code with trusted contacts who will respond if you need help. They'll be notified if you miss a check-in."
+                )
+
+                instructionItem(
+                    number: "3",
+                    title: "Check in regularly",
+                    description: "Tap the check-in button before your timer expires. This resets your countdown and lets your contacts know you're safe."
+                )
+
+                instructionItem(
+                    number: "4",
+                    title: "Emergency alert",
+                    description: "If you need immediate help, activate the alert to notify all your responders instantly."
+                )
+            }
 
             Spacer()
 
             Button(action: {
-                store.send(.completeOnboarding)
+                store.send(.handleGotItButtonTap, animation: .default)
             }) {
-                Text("Start Using LifeSignal")
-                    .font(.headline)
-                    .foregroundColor(.white)
+                Text("Got it")
+                    .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
                     .padding()
                     .background(Color.blue)
+                    .foregroundColor(.white)
                     .cornerRadius(10)
             }
+            .padding(.top)
         }
+        .padding()
+        .background(Color(UIColor.systemGroupedBackground))
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func instructionItem(number: String, title: String, description: String) -> some View {
+        HStack(alignment: .top, spacing: 15) {
+            Text(number)
+                .font(.headline)
+                .foregroundColor(.white)
+                .frame(width: 30, height: 30)
+                .background(Color.blue)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title)
+                    .font(.headline)
+                Text(description)
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.bottom, 10)
     }
 }
 

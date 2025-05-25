@@ -70,7 +70,7 @@ enum AnalyticsEvent: Equatable {
     case permissionDenied(permission: String)
 }
 
-// MARK: - Analytics Client
+// MARK: - Analytics Client (MVP Mock Implementation)
 
 @DependencyClient
 struct AnalyticsClient {
@@ -84,57 +84,42 @@ struct AnalyticsClient {
 }
 
 extension AnalyticsClient: DependencyKey {
-    static let liveValue = AnalyticsClient(
+    static let liveValue = AnalyticsClient.mockValue
+    static let testValue = AnalyticsClient.mockValue
+    
+    static let mockValue = AnalyticsClient(
         track: { event in
-            // In production, this would send to Firebase Analytics, Mixpanel, etc.
-            print("📊 Analytics: \(event.eventName)")
-            let params: [String: String] = event.parameters
+            // Mock implementation for MVP - simple console logging
+            print("📊 [MOCK] Analytics: \(event.eventName)")
+            let params = event.parameters
             if !params.isEmpty {
                 print("   Parameters: \(params)")
             }
         },
 
         setUserProperties: { properties in
-            // In production, this would set user properties in your analytics service
-            print("👤 User Properties: \(properties)")
+            print("👤 [MOCK] User Properties: \(properties)")
         },
 
         setUserId: { userId in
-            // In production, this would set the user ID in your analytics service
-            print("🆔 User ID: \(userId)")
+            print("🆔 [MOCK] User ID: \(userId)")
         },
 
         clearUserData: {
-            // In production, this would clear user data from analytics
-            print("🧹 Analytics: Cleared user data")
+            print("🧹 [MOCK] Analytics: Cleared user data")
         },
 
         incrementCounter: { counterName in
-            // In production, this would increment a counter metric
-            print("🔢 Analytics: Incremented \(counterName)")
+            print("🔢 [MOCK] Analytics: Incremented \(counterName)")
         },
 
         recordTiming: { eventName, duration in
-            // In production, this would record timing information
-            print("⏱️ Analytics: \(eventName) took \(duration)s")
+            print("⏱️ [MOCK] Analytics: \(eventName) took \(String(format: "%.2f", duration))s")
         },
 
         setCustomDimension: { key, value in
-            // In production, this would set custom dimensions
-            print("🏷️ Custom Dimension: \(key) = \(value)")
+            print("🏷️ [MOCK] Custom Dimension: \(key) = \(value)")
         }
-    )
-
-    static let mockValue = AnalyticsClient()
-    
-    static let testValue = AnalyticsClient(
-        track: { _ in },
-        setUserProperties: { _ in },
-        setUserId: { _ in },
-        clearUserData: { },
-        incrementCounter: { _ in },
-        recordTiming: { _, _ in },
-        setCustomDimension: { _, _ in }
     )
 }
 

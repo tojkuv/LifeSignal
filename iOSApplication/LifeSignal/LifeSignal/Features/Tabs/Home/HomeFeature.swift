@@ -69,24 +69,30 @@ struct HomeFeature {
     @CasePathable
     enum Action: BindableAction {
         case binding(BindingAction<State>)
-        // Lifecycle actions
+        
+        // Lifecycle
         case onAppear
         case loadUser
         case userLoaded(User)
 
-        // QR Code actions
+        // QR Code core functionality
         case generateQRCode
         case qrCodeGenerated(UIImage?)
         case resetQRCode
+        case copyQRCodeId
         case generateShareableQRCode
         case shareableQRCodeGenerated(UIImage?)
         case shareQRCode
+
+        // QR Code UI navigation
         case showQRScanner
         case hideQRScanner
         case showQRShareSheet
         case hideQRShareSheet
+        case qrScanner(PresentationAction<QRScannerFeature.Action>)
+        case qrShareSheet(PresentationAction<QRCodeShareSheetFeature.Action>)
 
-        // Check-in interval actions
+        // Check-in interval management
         case updateCheckInInterval(TimeInterval)
         case initializeIntervalPicker
         case updateIntervalPickerUnit(String)
@@ -94,29 +100,26 @@ struct HomeFeature {
         case confirmIntervalChange
         case cancelIntervalChange
 
-        // Notification actions
+        // Notification settings
         case updateNotificationSettings(enabled: Bool, notify30Min: Bool, notify2Hours: Bool)
 
-        // UI State actions
-        case qrScanner(PresentationAction<QRScannerFeature.Action>)
+        // Contact management
+        case createContactFromQRCode(String)
+        case contactCreated(Contact)
+        case setPendingScannedCode(String?)
+
+        // UI state management
         case setShowIntervalPicker(Bool)
         case setShowInstructions(Bool)
-        case qrShareSheet(PresentationAction<QRCodeShareSheetFeature.Action>)
-        case alert(PresentationAction<HomeAlert>)
         case setShowShareSheet(Bool)
         case setShowQRScanner(Bool)
         case setShowResetQRConfirmation(Bool)
         case setPendingIntervalChange(TimeInterval)
         case setShowIntervalChangeConfirmation(Bool)
         case setShowCameraDeniedAlert(Bool)
+        case alert(PresentationAction<HomeAlert>)
 
-        // Contact actions
-        case createContactFromQRCode(String)
-        case contactCreated(Contact)
-        case setPendingScannedCode(String?)
-        case copyQRCodeId
-
-        // Internal actions
+        // Internal/private actions
         case _qrCodeGenerationStarted
         case _qrCodeGenerationCompleted
         case _shareableQRCodeGenerationStarted
@@ -124,12 +127,9 @@ struct HomeFeature {
     }
 
     /// Dependencies for the Home feature
-    @Dependency(\.userRepository) var userRepository
-    @Dependency(\.qrCodeGenerator) var qrCodeGenerator
+    @Dependency(\.userClient) var userClient
     @Dependency(\.notificationClient) var notificationClient
     @Dependency(\.hapticClient) var haptics
-    @Dependency(\.analytics) var analytics
-    @Dependency(\.logging) var logging
 
     /// Home reducer body implementing business logic
     var body: some ReducerOf<Self> {
@@ -145,7 +145,7 @@ struct HomeFeature {
 
             case .loadUser:
                 return .run { send in
-                    if let user = await userRepository.getCurrentUser() {
+                    if let user = await userClient.getCurrentUser() {
                         await send(.userLoaded(user))
                     }
                 }
@@ -159,10 +159,10 @@ struct HomeFeature {
 
             case .generateQRCode:
                 state.isQRCodeReady = false
-                return .run { [qrCodeId = state.currentUser?.qrCodeId.uuidString ?? ""] send in
+                return .run { send in
                     await send(._qrCodeGenerationStarted)
                     do {
-                        let image = try await qrCodeGenerator.generateQRCode(qrCodeId, 300)
+                        let image = try await userClient.getQRCodeImage(300)
                         await send(.qrCodeGenerated(image))
                     } catch {
                         // Handle QR code generation error
@@ -196,14 +196,14 @@ struct HomeFeature {
                 return .none
 
             case .generateShareableQRCode:
-                guard !state.isGeneratingQRCode, let qrCodeImage = state.qrCodeImage else { 
+                guard !state.isGeneratingQRCode else { 
                     return .send(.shareableQRCodeGenerated(nil))
                 }
 
-                return .run { [userName = state.currentUser?.name ?? ""] send in
+                return .run { send in
                     await send(._shareableQRCodeGenerationStarted)
                     do {
-                        let shareableImage = try await qrCodeGenerator.generateShareableQRCode(qrCodeImage, userName)
+                        let shareableImage = try await userClient.getShareableQRCodeImage()
                         await send(.shareableQRCodeGenerated(shareableImage))
                     } catch {
                         // Handle shareable QR code generation error
@@ -235,17 +235,12 @@ struct HomeFeature {
                 }
 
             case let .updateCheckInInterval(interval):
-                if var user = state.currentUser {
-                    user.checkInInterval = interval
-                    user.lastModified = Date()
-                    state.$currentUser.withLock { $0 = user }
-                }
-
-                return .run { [user = state.currentUser] send in
-                    if let user = user {
-                        _ = try? await userRepository.updateProfile(user)
-                        await analytics.track(.featureUsed(feature: "check_in_interval_update", context: ["interval": "\(interval)"]))
+                return .run { send in
+                    do {
+                        let updatedUser = try await userClient.updateCheckInInterval(interval)
                         await send(.initializeIntervalPicker)
+                    } catch {
+                        // Error handling if needed
                     }
                 }
 
@@ -314,29 +309,17 @@ struct HomeFeature {
                 return .send(.initializeIntervalPicker)
 
             case let .updateNotificationSettings(enabled, notify30Min, notify2Hours):
-                if var user = state.currentUser {
-                    user = user.withNotificationSettings(
-                        enabled: enabled,
-                        notify30Min: notify30Min,
-                        notify2Hours: notify2Hours
-                    )
-                    state.$currentUser.withLock { $0 = user }
-                }
-
-                return .run { [user = state.currentUser] send in
-                    if let user = user {
-                        _ = try? await userRepository.updateProfile(user)
+                return .run { send in
+                    do {
+                        let updatedUser = try await userClient.updateNotificationSettings(enabled, notify30Min, notify2Hours)
                         let notification = NotificationItem(
                             type: .system,
                             title: "Notification Settings Updated",
                             message: "Your notification settings have been successfully updated."
                         )
                         try? await notificationClient.sendNotification(notification)
-                        await analytics.track(.featureUsed(feature: "notification_settings", context: [
-                            "enabled": "\(enabled)",
-                            "notify_30min": "\(notify30Min)",
-                            "notify_2hours": "\(notify2Hours)"
-                        ]))
+                    } catch {
+                        // Error handling if needed
                     }
                 }
 
@@ -431,24 +414,22 @@ struct HomeFeature {
                 return .none
 
             case .alert(.presented(.resetQRConfirmation)):
-                if var user = state.currentUser {
-                    user.qrCodeId = UUID()
-                    user.lastModified = Date()
-                    state.$currentUser.withLock { $0 = user }
-                }
                 state.shareableImage = nil
 
-                return .run { [user = state.currentUser] send in
-                    if let user = user {
-                        _ = try? await userRepository.updateProfile(user)
+                return .run { send in
+                    do {
+                        let updatedUser = try await userClient.regenerateQRCode()
+                        // Clear cached QR image to force regeneration
+                        _ = try await userClient.refreshQRCodeImage()
                         let notification = NotificationItem(
                             type: .system,
                             title: "QR Code Reset",
                             message: "Your QR code has been reset. Previous QR codes are no longer valid."
                         )
                         try? await notificationClient.sendNotification(notification)
-                        await analytics.track(.featureUsed(feature: "qr_code_reset", context: [:]))
                         await send(.generateQRCode)
+                    } catch {
+                        // Error handling if needed
                     }
                 }
 
@@ -513,7 +494,6 @@ struct HomeFeature {
                         message: "Your QR code ID has been copied to the clipboard."
                     )
                     try? await notificationClient.sendNotification(notification)
-                    await analytics.track(.featureUsed(feature: "qr_code_copy", context: [:]))
                 }
 
             case ._qrCodeGenerationCompleted, ._shareableQRCodeGenerationCompleted:

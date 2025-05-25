@@ -134,9 +134,7 @@ struct QRScannerFeature {
 
     @Dependency(\.cameraClient) var cameraClient
     @Dependency(\.hapticClient) var haptics
-    @Dependency(\.qrCodeGenerator) var qrCodeGenerator
-    @Dependency(\.contactRepository) var contactRepository
-    @Dependency(\.analytics) var analytics
+    @Dependency(\.contactsClient) var contactsClient
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -161,7 +159,6 @@ struct QRScannerFeature {
 
                 return .run { send in
                     await haptics.impact(.light)
-                    await analytics.track(.featureUsed(feature: "qr_scan_start", context: [:]))
                     await send(.loadGalleryThumbnails)
                 }
 
@@ -175,7 +172,6 @@ struct QRScannerFeature {
                 state.torchOn.toggle()
                 return .run { [torchOn = state.torchOn] _ in
                     await haptics.impact(.light)
-                    await analytics.track(.featureUsed(feature: "qr_torch_toggle", context: ["on": "\(torchOn)"]))
                 }
 
             case .requestCameraPermission:
@@ -191,7 +187,6 @@ struct QRScannerFeature {
 
                 return .run { send in
                     await haptics.notification(.success)
-                    await analytics.track(.featureUsed(feature: "qr_code_scanned", context: [:]))
                     await send(.codeProcessingResponse(Result {
                         // Validate QR code format
                         guard code.hasPrefix("lifesignal://") else {
@@ -353,7 +348,6 @@ struct QRScannerFeature {
                     do {
                         let _ = try await contactRepository.updateContact(contactToSave)
                         await haptics.notification(.success)
-                        await analytics.track(.featureUsed(feature: "contact_added", context: ["via": "qr_scanner"]))
                         await send(.closeAddContactSheet)
                         await send(.dismiss)
                     } catch {
@@ -925,7 +919,7 @@ struct QRScannerView: View {
                     // Paste button that only shows when text field is empty
                     if store.manualQRCode.isEmpty {
                         Button(action: {
-                            store.send(.handlePasteButtonTapped)
+                            store.send(.handlePasteButtonTapped, animation: .default)
                         }) {
                             Image(systemName: "doc.on.clipboard")
                                 .foregroundColor(.blue)

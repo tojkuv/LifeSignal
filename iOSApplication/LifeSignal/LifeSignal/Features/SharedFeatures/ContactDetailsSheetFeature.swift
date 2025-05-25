@@ -16,12 +16,17 @@ struct ContactDetailsSheetFeature {
     }
 
     enum Action {
+        // Contact interactions
         case pingContact
-        case dismiss
+        case removeContact
+        
+        // Status updates
         case updateResponderStatus(Bool)
         case updateDependentStatus(Bool)
-        case removeContact
         case contactUpdated(Contact)
+        
+        // UI navigation
+        case dismiss
     }
 
     var body: some ReducerOf<Self> {
@@ -72,7 +77,7 @@ struct ContactDetailsSheetView: View {
                 }
                 
                 Button("Ping Contact") {
-                    store.send(.pingContact)
+                    store.send(.pingContact, animation: .default)
                 }
                 .buttonStyle(.borderedProminent)
                 
@@ -84,7 +89,7 @@ struct ContactDetailsSheetView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
-                        store.send(.dismiss)
+                        store.send(.dismiss, animation: .default)
                     }
                 }
             }
