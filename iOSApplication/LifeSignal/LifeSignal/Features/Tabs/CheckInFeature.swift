@@ -84,6 +84,9 @@ struct CheckInFeature {
         
         // Tap progress reset
         case resetTapProgress
+        
+        // Debug actions
+        case debugCycleCheckInState
     }
 
     @Dependency(\.userClient) var userClient
@@ -111,17 +114,18 @@ struct CheckInFeature {
                 
                 return .run { [currentUser = state.currentUser] send in
                     do {
-                        guard var user = currentUser else {
+                        guard let user = currentUser else {
                             await send(.checkInResponse(.failure(UserClientError.userNotFound)))
                             return
                         }
                         
-                        // Update lastCheckedIn timestamp
-                        user.lastCheckedIn = Date()
-                        user.lastModified = Date()
+                        // Update user with new check-in timestamp
+                        var updatedUser = user
+                        updatedUser.lastCheckedIn = Date()
+                        updatedUser.lastModified = Date()
                         
                         // Call updateUser to persist the check-in
-                        try await userClient.updateUser(user)
+                        try await userClient.updateUser(updatedUser)
                         
                         // Send success notification
                         let notification = NotificationItem(
@@ -398,15 +402,47 @@ struct CheckInFeature {
                 if let lastCheckIn = state.currentUser?.lastCheckedIn,
                    let interval = state.currentUser?.checkInInterval {
                     let timeSince = Date().timeIntervalSince(lastCheckIn)
-                    let timeRemaining = max(0, interval - timeSince)
+                    let timeRemaining = interval - timeSince
                     
-                    let hours = Int(timeRemaining) / 3600
-                    let minutes = Int(timeRemaining) % 3600 / 60
-                    let seconds = Int(timeRemaining) % 60
-                    
-                    state.timeUntilNextCheckInText = String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+                    if timeRemaining > 0 {
+                        // Still have time remaining - show countdown
+                        let days = Int(timeRemaining) / 86400
+                        let hours = Int(timeRemaining) % 86400 / 3600
+                        let minutes = Int(timeRemaining) % 3600 / 60
+                        
+                        if days > 0 {
+                            // Show days and hours: "2d 5h"
+                            state.timeUntilNextCheckInText = "\(days)d \(hours)h"
+                        } else if hours > 0 {
+                            // Show hours and minutes: "5h 23m"
+                            state.timeUntilNextCheckInText = "\(hours)h \(minutes)m"
+                        } else {
+                            // Show just minutes: "23m"
+                            state.timeUntilNextCheckInText = "\(minutes)m"
+                        }
+                    } else {
+                        // Overdue - show how long expired
+                        let expiredTime = abs(timeRemaining)
+                        let days = Int(expiredTime) / 86400
+                        let hours = Int(expiredTime) % 86400 / 3600
+                        let minutes = Int(expiredTime) % 3600 / 60
+                        
+                        if days > 30 {
+                            // Show generic message for very old: "Expired long ago"
+                            state.timeUntilNextCheckInText = "Expired long ago"
+                        } else if days > 0 {
+                            // Show only days: "Expired 2d ago"
+                            state.timeUntilNextCheckInText = "Expired \(days)d ago"
+                        } else if hours > 0 {
+                            // Show only hours: "Expired 5h ago"
+                            state.timeUntilNextCheckInText = "Expired \(hours)h ago"
+                        } else {
+                            // Show only minutes: "Expired 23m ago"
+                            state.timeUntilNextCheckInText = "Expired \(minutes)m ago"
+                        }
+                    }
                 } else {
-                    state.timeUntilNextCheckInText = "--:--:--"
+                    state.timeUntilNextCheckInText = "--"
                 }
                 return .none
                 
@@ -415,6 +451,44 @@ struct CheckInFeature {
                 state.tapProgress = 0.0
                 state.lastAlertTapTime = nil
                 return .none
+                
+            case .debugCycleCheckInState:
+                return .run { [currentUser = state.currentUser] _ in
+                    guard var user = currentUser else { return }
+                    
+                    let now = Date()
+                    let interval = user.checkInInterval
+                    
+                    // Cycle through different check-in states for testing button colors
+                    if let lastCheckIn = user.lastCheckedIn {
+                        let timeSince = now.timeIntervalSince(lastCheckIn)
+                        let timeRemaining = interval - timeSince
+                        
+                        if timeRemaining > interval * 0.5 {
+                            // Currently green -> set to yellow (between 50% and 20%)
+                            user.lastCheckedIn = now.addingTimeInterval(-(interval * 0.6))
+                        } else if timeRemaining > interval * 0.2 {
+                            // Currently yellow -> set to orange (between 20% and 0%)
+                            user.lastCheckedIn = now.addingTimeInterval(-(interval * 0.9))
+                        } else if timeRemaining > 0 {
+                            // Currently orange -> set to red (overdue)
+                            user.lastCheckedIn = now.addingTimeInterval(-interval - 3600) // 1 hour overdue
+                        } else if timeRemaining > -2678400 { // More than 31 days overdue (-31 * 24 * 60 * 60)
+                            // Currently red (recent overdue) -> set to very overdue (31+ days)
+                            user.lastCheckedIn = now.addingTimeInterval(-2678400 - interval) // 31 days + interval overdue
+                        } else {
+                            // Currently very overdue -> set back to green (just checked in)
+                            user.lastCheckedIn = now
+                        }
+                    } else {
+                        // No check-in yet -> set to recent check-in (green)
+                        user.lastCheckedIn = now
+                    }
+                    
+                    // Update shared state directly for debug purposes
+                    @Shared(.currentUser) var sharedCurrentUser
+                    $sharedCurrentUser.withLock { $0 = user }
+                }
             }
         }
     }
@@ -444,6 +518,11 @@ struct CheckInView: View {
 
                     // Check-in button
                     checkInButtonView()
+
+                    // Debug button (only in debug builds)
+                    #if DEBUG
+                    debugButtonView()
+                    #endif
 
                     // Add extra padding at the bottom to ensure content doesn't overlap with tab bar
                     Spacer()
@@ -591,6 +670,23 @@ struct CheckInView: View {
         }
         .disabled(store.isCheckInButtonCoolingDown)
     }
+    
+    #if DEBUG
+    @ViewBuilder
+    private func debugButtonView() -> some View {
+        Button(action: {
+            store.send(.debugCycleCheckInState)
+        }) {
+            Text("DEBUG: Cycle Check-in State")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 40)
+                .background(Color.purple)
+                .cornerRadius(8)
+        }
+    }
+    #endif
 }
 
 #Preview {

@@ -42,6 +42,7 @@ struct UpdateUserRequest: Sendable {
     let phoneRegion: String
     let emergencyNote: String
     let checkInInterval: TimeInterval
+    let lastCheckedIn: Date?
     let notificationPreference: NotificationPreference
     let isEmergencyAlertEnabled: Bool
     let qrCodeId: UUID
@@ -130,14 +131,19 @@ struct User_Proto: Sendable {
 final class MockUserService: UserServiceProtocol {
     func getUser(_ request: GetUserRequest) async throws -> User_Proto {
         try await Task.sleep(for: .milliseconds(500))
+        
+        // Create a mock user with recent check-in for testing
+        let now = Date()
+        let recentCheckIn = now.addingTimeInterval(-3600) // 1 hour ago
+        
         return User_Proto(
             id: request.uid,
             name: "Mock User",
             phoneNumber: "+1234567890",
             phoneRegion: "US",
             emergencyNote: "",
-            checkInInterval: 86400,
-            lastCheckedIn: nil,
+            checkInInterval: 28800, // 8 hours (minimum interval)
+            lastCheckedIn: Int64(recentCheckIn.timeIntervalSince1970),
             notificationPreference: .thirtyMinutes,
             isEmergencyAlertEnabled: false,
             emergencyAlertTimestamp: nil,
@@ -155,7 +161,7 @@ final class MockUserService: UserServiceProtocol {
             phoneNumber: "+1234567890",
             phoneRegion: "US",
             emergencyNote: "",
-            checkInInterval: 86400,
+            checkInInterval: 28800, // 8 hours (minimum interval)
             lastCheckedIn: request.timestamp,
             notificationPreference: .thirtyMinutes,
             isEmergencyAlertEnabled: false,
@@ -174,7 +180,7 @@ final class MockUserService: UserServiceProtocol {
             phoneNumber: request.phoneNumber,
             phoneRegion: request.phoneRegion,
             emergencyNote: "",
-            checkInInterval: 86400,
+            checkInInterval: 28800, // 8 hours (minimum interval) (instead of 24 hours)
             lastCheckedIn: Int64(Date().timeIntervalSince1970),
             notificationPreference: request.notificationPreference,
             isEmergencyAlertEnabled: request.isEmergencyAlertEnabled,
@@ -187,6 +193,7 @@ final class MockUserService: UserServiceProtocol {
 
     func updateUser(_ request: UpdateUserRequest) async throws -> User_Proto {
         try await Task.sleep(for: .milliseconds(600))
+        
         return User_Proto(
             id: request.id.uuidString,
             name: request.name,
@@ -194,7 +201,7 @@ final class MockUserService: UserServiceProtocol {
             phoneRegion: request.phoneRegion,
             emergencyNote: request.emergencyNote,
             checkInInterval: Int64(request.checkInInterval),
-            lastCheckedIn: nil,
+            lastCheckedIn: request.lastCheckedIn.map { Int64($0.timeIntervalSince1970) },
             notificationPreference: request.notificationPreference,
             isEmergencyAlertEnabled: request.isEmergencyAlertEnabled,
             emergencyAlertTimestamp: request.isEmergencyAlertEnabled ? Int64(Date().timeIntervalSince1970) : nil,
@@ -222,7 +229,7 @@ final class MockUserService: UserServiceProtocol {
             phoneNumber: "+1234567890",
             phoneRegion: "US",
             emergencyNote: "",
-            checkInInterval: 86400,
+            checkInInterval: 28800, // 8 hours (minimum interval)
             lastCheckedIn: nil,
             notificationPreference: .thirtyMinutes,
             isEmergencyAlertEnabled: true,
@@ -248,7 +255,7 @@ final class MockUserService: UserServiceProtocol {
             phoneNumber: "+1234567890",
             phoneRegion: "US",
             emergencyNote: "",
-            checkInInterval: 86400,
+            checkInInterval: 28800, // 8 hours (minimum interval)
             lastCheckedIn: nil,
             notificationPreference: .thirtyMinutes,
             isEmergencyAlertEnabled: true,
@@ -721,6 +728,7 @@ extension UserClient: DependencyKey {
                 phoneRegion: user.phoneRegion,
                 emergencyNote: user.emergencyNote,
                 checkInInterval: user.checkInInterval,
+                lastCheckedIn: user.lastCheckedIn,
                 notificationPreference: user.notificationPreference,
                 isEmergencyAlertEnabled: user.isEmergencyAlertEnabled,
                 qrCodeId: user.qrCodeId,
@@ -825,6 +833,7 @@ extension UserClient: DependencyKey {
                 phoneRegion: user.phoneRegion,
                 emergencyNote: user.emergencyNote,
                 checkInInterval: user.checkInInterval,
+                lastCheckedIn: user.lastCheckedIn,
                 notificationPreference: user.notificationPreference,
                 isEmergencyAlertEnabled: user.isEmergencyAlertEnabled,
                 qrCodeId: newQRCodeId,
