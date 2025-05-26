@@ -15,7 +15,6 @@ struct ApplicationFeature {
         @Shared(.needsOnboarding) var needsOnboarding: Bool = false
         @Shared(.contacts) var contacts: [Contact] = []
         @Shared(.isNetworkConnected) var isNetworkConnected: Bool = true
-        @Shared(.offlineQueue) var offlineQueue: [OfflineAction] = []
         @Shared(.authenticationToken) var authenticationToken: String? = nil
 
         var isActive: Bool = true
@@ -24,13 +23,12 @@ struct ApplicationFeature {
         var mainTabs = MainTabsFeature.State()
         var signIn = SignInFeature.State()
         var onboarding = OnboardingFeature.State()
-        var connectivity = ConnectivityFeature.State()
+        // Network connectivity handled via SessionClient
         var notifications = NotificationCenterFeature.State()
 
         var isLoggedIn: Bool { sessionState.isAuthenticated && currentUser != nil }
         var shouldShowOnboarding: Bool { sessionState.isAuthenticated && needsOnboarding }
         var shouldShowMainTabs: Bool { sessionState.isAuthenticated && !needsOnboarding && currentUser != nil }
-        var offlineQueueCount: Int { offlineQueue.count }
         var hasValidSession: Bool { sessionState.isAuthenticated && authenticationToken != nil && currentUser != nil }
         var isOnline: Bool { isNetworkConnected }
 
@@ -60,7 +58,7 @@ struct ApplicationFeature {
         case mainTabs(MainTabsFeature.Action)
         case signIn(SignInFeature.Action)
         case onboarding(OnboardingFeature.Action)
-        case connectivity(ConnectivityFeature.Action)
+        // Network connectivity handled via SessionClient
         case notifications(NotificationCenterFeature.Action)
         
         case performBackgroundSync
@@ -68,9 +66,10 @@ struct ApplicationFeature {
         case handleNotificationNavigation(String)
     }
 
-    @Dependency(\.userRepository) var userRepository
-    @Dependency(\.offlineQueue) var offlineQueue
+    @Dependency(\.userClient) var userClient
     @Dependency(\.sessionClient) var sessionClient
+    @Dependency(\.notificationClient) var notificationClient
+    @Dependency(\.logging) var logging
 
     init() {}
 
@@ -87,9 +86,7 @@ struct ApplicationFeature {
             OnboardingFeature()
         }
 
-        Scope(state: \.connectivity, action: \.connectivity) {
-            ConnectivityFeature()
-        }
+        // Network connectivity handled via SessionClient
 
         Scope(state: \.notifications, action: \.notifications) {
             NotificationCenterFeature()
@@ -98,6 +95,7 @@ struct ApplicationFeature {
         Reduce { state, action in
             switch action {
             case .onAppear:
+                logging.info("Application appeared", [:])
                 return .run { send in
                     await send(.startNetworkMonitoring)
                     await send(.validateExistingSession)
@@ -105,6 +103,7 @@ struct ApplicationFeature {
 
             case .appDidBecomeActive:
                 state.isActive = true
+                logging.info("Application became active", ["hasSession": "\(sessionClient.isAuthenticated())"])
                 return .run { send in
                     // Validate session if we have one
                     if sessionClient.isAuthenticated() {
@@ -163,7 +162,7 @@ struct ApplicationFeature {
                     do {
                         try await sessionClient.endSession()
                     } catch {
-                        // Log error but continue with cleanup
+                        logging.error("Failed to end session during expiration", error, ["action": "sessionExpired"])
                     }
                 }
                 
@@ -183,6 +182,7 @@ struct ApplicationFeature {
                 
             case .tokenRefreshFailed(let error):
                 state.error = error.localizedDescription
+                logging.error("Token refresh failed", error, ["sessionState": "\(state.sessionState)"])
                 return .run { send in
                     await send(.sessionExpired)
                 }
@@ -196,8 +196,22 @@ struct ApplicationFeature {
                 }
                 
             case .networkStatusChanged(let isConnected):
-                return .run { send in
+                let wasConnected = state.isNetworkConnected
+                return .run { [wasConnected, sessionClient, notificationClient] send in
                     await sessionClient.updateNetworkStatus(isConnected)
+                    
+                    // Show notification if connection state changed
+                    if wasConnected != isConnected {
+                        let notification = NotificationItem(
+                            title: isConnected ? "Connection Restored" : "No Internet Connection",
+                            message: isConnected ? 
+                                "Your internet connection has been restored." : 
+                                "Please check your network settings and try again.",
+                            type: .receiveSystemNotification
+                        )
+                        
+                        try? await notificationClient.sendNotification(notification)
+                    }
                 }
 
             case .performBackgroundSync:
@@ -213,7 +227,7 @@ struct ApplicationFeature {
             case .handleNotificationNavigation:
                 return .none
 
-            case .mainTabs, .signIn, .onboarding, .connectivity, .notifications:
+            case .mainTabs, .signIn, .onboarding, .notifications:
                 return .none
             }
         }
@@ -249,12 +263,11 @@ struct LifeSignalApp: App {
     } withDependencies: { dependencies in
         // Use mock implementations for MVP
         dependencies.sessionClient = .mockValue
-        dependencies.userRepository = .mockValue
-        dependencies.contactRepository = .mockValue
-        dependencies.haptics = .mockValue
         dependencies.userClient = .mockValue
-        dependencies.notificationClient = .mockValue
         dependencies.contactsClient = .mockValue
+        dependencies.haptics = .mockValue
+        dependencies.notificationClient = .mockValue
+        dependencies.logging = .mockValue
     }
 
     var body: some Scene {
@@ -291,21 +304,21 @@ struct AppRootView: View {
         }
         .overlay(alignment: .top) {
             if !store.isOnline {
-                HStack {
+                HStack(spacing: 6) {
                     Image(systemName: "wifi.slash")
+                        .font(.system(size: 14, weight: .medium))
                     Text("No Internet Connection")
-                    if store.offlineQueueCount > 0 {
-                        Text("(\(store.offlineQueueCount) pending)")
-                            .opacity(0.8)
-                    }
+                        .font(.system(size: 14, weight: .medium))
                 }
-                .font(.caption)
-                .foregroundColor(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.red)
-                .cornerRadius(8)
-                .padding(.top)
+                .foregroundColor(.primary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(
+                    .regularMaterial,
+                    in: RoundedRectangle(cornerRadius: 12)
+                )
+                .padding(.top, 4)
+                .padding(.horizontal, 16)
             }
         }
     }

@@ -17,10 +17,11 @@ struct CheckInFeature {
         var tapProgress: Double = 0.0
         var longPressProgress: Double = 0.0
         var isLongPressing = false
+        var isActivating = false
+        var lastDeactivationTime: Date? = nil
         var timeUntilNextCheckInText = "--:--:--"
         var alertTapCount = 0
         var lastAlertTapTime: Date? = nil
-        var errorMessage: String?
         
         var canActivateAlert: Bool { !isAlertActive && currentUser != nil }
         var canDeactivateAlert: Bool { isAlertActive && currentUser != nil }
@@ -68,15 +69,21 @@ struct CheckInFeature {
         
         // Alert button interactions
         case alertButtonTapped
+        case startActivationAnimation
         
         // Long press gestures
         case longPressStarted
         case longPressEnded
+        case dragGestureChanged
+        case dragGestureEnded
         
         // Timer management
         case startTimer
         case stopTimer
         case updateTimer
+        
+        // Tap progress reset
+        case resetTapProgress
     }
 
     @Dependency(\.userClient) var userClient
@@ -101,7 +108,6 @@ struct CheckInFeature {
             case .checkIn:
                 guard state.canCheckIn else { return .none }
                 state.isCheckingIn = true
-                state.errorMessage = nil
                 
                 return .run { [currentUser = state.currentUser] send in
                     do {
@@ -119,9 +125,9 @@ struct CheckInFeature {
                         
                         // Send success notification
                         let notification = NotificationItem(
-                            type: .checkInReminder,
                             title: "Check-in Complete",
-                            message: "You've successfully checked in"
+                            message: "You've successfully checked in",
+                            type: .receiveSystemNotification
                         )
                         try await notificationClient.sendNotification(notification)
                         
@@ -140,16 +146,21 @@ struct CheckInFeature {
 
             case let .checkInResponse(.failure(error)):
                 state.isCheckingIn = false
-                state.errorMessage = error.localizedDescription
                 
                 return .run { _ in
+                    // Silent handling - send notification for business logic errors
+                    let notification = NotificationItem(
+                        title: "Check-in Issue",
+                        message: "Unable to complete check-in. Will retry automatically.",
+                        type: .receiveSystemNotification
+                    )
+                    try? await notificationClient.sendNotification(notification)
                     await haptics.notification(.error)
                 }
                 
             // Alert system
             case .activateAlert:
                 guard state.canActivateAlert else { return .none }
-                state.errorMessage = nil
                 
                 return .run { [currentUser = state.currentUser] send in
                     do {
@@ -170,9 +181,9 @@ struct CheckInFeature {
                         
                         // Send local notification
                         let notification = NotificationItem(
-                            type: .emergencyAlert,
                             title: "Emergency Alert Activated",
-                            message: "Your contacts have been notified"
+                            message: "Your contacts have been notified",
+                            type: .sendManualAlertActive
                         )
                         try await notificationClient.sendNotification(notification)
                         
@@ -185,7 +196,6 @@ struct CheckInFeature {
                 
             case .deactivateAlert:
                 guard state.canDeactivateAlert else { return .none }
-                state.errorMessage = nil
                 
                 return .run { [currentUser = state.currentUser] send in
                     do {
@@ -205,9 +215,9 @@ struct CheckInFeature {
                         
                         // Send local notification
                         let notification = NotificationItem(
-                            type: .system,
                             title: "Emergency Alert Cancelled",
-                            message: "The emergency alert has been cancelled"
+                            message: "The emergency alert has been cancelled",
+                            type: .sendManualAlertInactive
                         )
                         try await notificationClient.sendNotification(notification)
                         
@@ -221,67 +231,155 @@ struct CheckInFeature {
             case .alertResponse(.success):
                 state.alertTapCount = 0
                 state.tapProgress = 0.0
+                state.isActivating = false
+                state.isLongPressing = false
+                state.longPressProgress = 0.0
                 return .none
 
             case let .alertResponse(.failure(error)):
-                state.errorMessage = error.localizedDescription
-                return .none
+                // Silent handling - send notification for business logic errors
+                return .run { _ in
+                    let notification = NotificationItem(
+                        title: "Emergency Alert Issue",
+                        message: "Unable to update emergency alert status. Please try again.",
+                        type: .receiveSystemNotification
+                    )
+                    try? await notificationClient.sendNotification(notification)
+                }
                 
             // Alert button interactions
             case .alertButtonTapped:
+                if state.isAlertActive || state.isLongPressing || state.isActivating {
+                    return .none
+                }
+                
+                // Prevent taps shortly after deactivation
+                if let lastDeactivation = state.lastDeactivationTime,
+                   Date().timeIntervalSince(lastDeactivation) < 0.5 {
+                    return .none
+                }
+                
                 guard state.canActivateAlert else { return .none }
                 
                 let now = Date()
                 if let lastTap = state.lastAlertTapTime,
-                   now.timeIntervalSince(lastTap) < 0.8 {
+                   now.timeIntervalSince(lastTap) < 1.0 { // Increased window to 1 second
                     state.alertTapCount += 1
-                    state.tapProgress = Double(state.alertTapCount) / 5.0
                     
                     if state.alertTapCount >= 5 {
-                        return .send(.activateAlert)
+                        // Don't update tapProgress, go straight to animation
+                        state.alertTapCount = 0 // Reset tap count
+                        state.lastAlertTapTime = nil
+                        return .merge(
+                            .cancel(id: CancelID.tapReset),
+                            .run { _ in await haptics.impact(.heavy) },
+                            .send(.startActivationAnimation)
+                        )
+                    } else {
+                        // Update progress for taps 1-4: each tap fills 15% (60% total)
+                        state.tapProgress = Double(state.alertTapCount) * 0.15
                     }
                 } else {
                     state.alertTapCount = 1
-                    state.tapProgress = 0.2
+                    state.tapProgress = 0.15 // First tap fills 15%
                 }
                 
                 state.lastAlertTapTime = now
                 
+                return .merge(
+                    .cancel(id: CancelID.tapReset),
+                    .run { _ in await haptics.impact(.medium) },
+                    .run { send in
+                        try? await Task.sleep(for: .seconds(2)) // Longer reset window
+                        await send(.resetTapProgress)
+                    }
+                    .cancellable(id: CancelID.tapReset)
+                )
+                
+            case .startActivationAnimation:
+                guard state.canActivateAlert else { return .none }
+                state.isActivating = true
+                // Animation starts from 60% and fills remaining 40%
+                let startProgress = 0.6
+                state.tapProgress = startProgress
+                
                 return .run { send in
-                    await haptics.impact(.medium)
-                    try? await Task.sleep(for: .milliseconds(800))
-                    let currentTime = Date()
-                    if currentTime.timeIntervalSince(now) >= 0.8 {
-                        await send(.binding(.set(\.alertTapCount, 0)))
-                        await send(.binding(.set(\.tapProgress, 0.0)))
+                    let totalDuration: Double = 0.6 // Slower animation for the final 40%
+                    let updateInterval: Double = 0.016 // ~60fps for smooth animation
+                    let totalSteps = Int(totalDuration / updateInterval)
+                    let progressRange = 0.4 // Fill the remaining 40%
+                    
+                    for i in 1...totalSteps {
+                        guard Task.isCancelled == false else { break }
+                        try? await Task.sleep(for: .milliseconds(Int(updateInterval * 1000)))
+                        let progress = startProgress + (progressRange * Double(i) / Double(totalSteps))
+                        await send(.binding(.set(\.tapProgress, min(1.0, progress))))
+                        
+                        // If we completed the animation, activate the alert
+                        if i == totalSteps {
+                            await send(.activateAlert)
+                        }
                     }
                 }
+                .cancellable(id: CancelID.activationAnimation)
                 
             // Long press gestures
             case .longPressStarted:
-                guard state.canDeactivateAlert else { return .none }
+                guard state.isAlertActive && state.canDeactivateAlert else { return .none }
                 state.isLongPressing = true
                 state.longPressProgress = 0.0
                 
                 return .run { send in
                     await haptics.impact(.heavy)
-                    for i in 1...30 {
-                        try? await Task.sleep(for: .milliseconds(100))
-                        await send(.binding(.set(\.longPressProgress, min(1.0, Double(i) / 30.0))))
+                    
+                    // Instantly jump to 80%
+                    await send(.binding(.set(\.longPressProgress, 0.8)))
+                    
+                    let totalDuration: Double = 3.0
+                    let updateInterval: Double = 0.016 // ~60fps for smooth animation
+                    let totalSteps = Int(totalDuration / updateInterval)
+                    
+                    for i in 1...totalSteps {
+                        guard Task.isCancelled == false else { break }
+                        
+                        let linearProgress = Double(i) / Double(totalSteps)
+                        // Only animate the last 20% (from 0.8 to 1.0)
+                        let progress = 0.8 + (linearProgress * 0.2)
+                        
+                        try? await Task.sleep(for: .milliseconds(Int(updateInterval * 1000)))
+                        await send(.binding(.set(\.longPressProgress, min(1.0, progress))))
+                        
+                        // If we completed the animation, deactivate the alert
+                        if i == totalSteps {
+                            await send(.binding(.set(\.lastDeactivationTime, Date())))
+                            await send(.deactivateAlert)
+                        }
                     }
                 }
-                .cancellable(id: CancelID.longPress)
+                .cancellable(id: CancelID.longPress, cancelInFlight: true)
                 
             case .longPressEnded:
-                if state.isLongPressing && state.longPressProgress >= 1.0 {
-                    state.isLongPressing = false
-                    state.longPressProgress = 0.0
-                    return .send(.deactivateAlert)
-                } else {
+                state.isLongPressing = false
+                state.longPressProgress = 0.0
+                return .cancel(id: CancelID.longPress)
+                
+            case .dragGestureChanged:
+                // Cancel long press if user drags finger while pressing
+                if state.isLongPressing {
                     state.isLongPressing = false
                     state.longPressProgress = 0.0
                     return .cancel(id: CancelID.longPress)
                 }
+                return .none
+                
+            case .dragGestureEnded:
+                // Handle drag gesture end, similar to long press end
+                if state.isLongPressing {
+                    state.isLongPressing = false
+                    state.longPressProgress = 0.0
+                    return .cancel(id: CancelID.longPress)
+                }
+                return .none
                 
             // Timer management
             case .startTimer:
@@ -311,6 +409,12 @@ struct CheckInFeature {
                     state.timeUntilNextCheckInText = "--:--:--"
                 }
                 return .none
+                
+            case .resetTapProgress:
+                state.alertTapCount = 0
+                state.tapProgress = 0.0
+                state.lastAlertTapTime = nil
+                return .none
             }
         }
     }
@@ -318,6 +422,8 @@ struct CheckInFeature {
     private enum CancelID {
         case timer
         case longPress
+        case tapReset
+        case activationAnimation
     }
 }
 
@@ -361,7 +467,9 @@ struct CheckInView: View {
     private func alertButtonView() -> some View {
         ZStack(alignment: .center) {
             Button(action: {
-                store.send(.alertButtonTapped, animation: .default)
+                if !store.isAlertActive && !store.isLongPressing && !store.isActivating {
+                    store.send(.alertButtonTapped, animation: .default)
+                }
             }) {
                 ZStack {
                     // Background
@@ -380,7 +488,7 @@ struct CheckInView: View {
                                 .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                                 .opacity(0.7) // Reduce opacity to ensure text remains visible in light mode
                         }
-                        .animation(.linear(duration: 0.3), value: store.tapProgress)
+                        .animation(.easeInOut(duration: 0.2), value: store.tapProgress)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
 
@@ -393,7 +501,7 @@ struct CheckInView: View {
                                 .frame(width: geometry.size.width * store.longPressProgress, height: geometry.size.height)
                                 .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                         }
-                        .animation(.linear, value: store.longPressProgress)
+                        .animation(.easeInOut(duration: 0.1), value: store.longPressProgress)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
 
@@ -426,18 +534,18 @@ struct CheckInView: View {
             .buttonStyle(PlainButtonStyle())
             // Disable the default button highlight effect
             .buttonStyle(BorderlessButtonStyle())
-            // Use a gesture for handling the long press
-            .gesture(
-                LongPressGesture(minimumDuration: 3.0)
-                    .onChanged { _ in
-                        if store.isAlertActive && store.canDeactivateAlert {
-                            store.send(.longPressStarted)
-                        }
-                    }
-                    .onEnded { _ in
+            // Use a gesture for handling the long press (match reference: 3.0 seconds)
+            .onLongPressGesture(minimumDuration: 0.1, pressing: { isPressing in
+                if store.isAlertActive && store.canDeactivateAlert && !store.isActivating {
+                    if isPressing {
+                        store.send(.longPressStarted)
+                    } else {
                         store.send(.longPressEnded)
                     }
-            )
+                }
+            }, perform: {
+                // Do nothing - deactivation is handled in the animation loop
+            })
         }
     }
 

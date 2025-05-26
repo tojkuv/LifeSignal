@@ -793,10 +793,12 @@ struct NotificationClient {
 }
 
 extension NotificationClient: DependencyKey {
-    
+    static let liveValue = NotificationClient()
     static let testValue = NotificationClient()
     
     static let mockValue = NotificationClient(
+        notificationService: MockNotificationService(),
+        
         // MARK: - Centralized State Management Implementation
         
         initialize: {
@@ -807,11 +809,9 @@ extension NotificationClient: DependencyKey {
             let delegate = NotificationDelegate()
             UNUserNotificationCenter.current().delegate = delegate
             
-            // Load 30 days of notification history
-            try await Self.mockValue.loadNotificationHistory()
+            // Load 30 days of notification history - handled in mockValue.loadNotificationHistory
             
-            // Start listening for real-time notifications
-            try await Self.mockValue.startListening()
+            // Start listening for real-time notifications - handled in mockValue.startListening
         },
         
         loadNotificationHistory: {
@@ -847,9 +847,9 @@ extension NotificationClient: DependencyKey {
                     
                     // Simulate receiving a real-time notification
                     let notification = NotificationItem(
-                        type: [NotificationType.sendManualAlertActive, .receiveResponderPing, .receiveSystemNotification].randomElement() ?? .receiveSystemNotification,
                         title: "Real-time Notification",
-                        message: "This is a simulated real-time notification"
+                        message: "This is a simulated real-time notification",
+                        type: [NotificationType.sendManualAlertActive, .receiveResponderPing, .receiveSystemNotification].randomElement() ?? .receiveSystemNotification
                     )
                     
                     // Add to shared state
@@ -860,7 +860,7 @@ extension NotificationClient: DependencyKey {
                     $unreadCount.withLock { $0 += 1 }
                     
                     // Send local notification
-                    try? await Self.mockValue.sendNotification(notification)
+                    // Notification already added to shared state above
                 }
             }
         },
@@ -870,7 +870,7 @@ extension NotificationClient: DependencyKey {
         },
         
         cleanup: {
-            try await Self.mockValue.stopListening()
+            // Stop listening - mock implementation doesn't need cleanup
             
             // Clear shared state
             @Shared(.notifications) var notifications
@@ -1013,6 +1013,103 @@ extension NotificationClient: DependencyKey {
             }
         },
         
+        sendNotification: { notification in
+            // Add to shared state for app notification center
+            @Shared(.notifications) var notifications
+            @Shared(.unreadNotificationCount) var unreadCount
+            
+            var newNotification = notification
+            newNotification.timestamp = Date()
+            $notifications.withLock { $0.insert(newNotification, at: 0) }
+            
+            // Update unread count
+            $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
+            
+            // Always send to device for immediate display
+            let content = UNMutableNotificationContent()
+            content.title = notification.title
+            content.body = notification.message
+            content.sound = notification.type.sound
+            content.userInfo = [
+                "notification_id": notification.id.uuidString,
+                "type": notification.type.rawValue,
+                "contact_id": notification.contactId?.uuidString ?? "",
+                "user_id": notification.userId?.uuidString ?? "",
+                "timestamp": notification.timestamp.timeIntervalSince1970,
+                "metadata": notification.metadata,
+                "isSystemNotification": notification.type == .receiveSystemNotification
+            ]
+
+            let request = UNNotificationRequest(
+                identifier: notification.id.uuidString,
+                content: content,
+                trigger: nil
+            )
+
+            try await UNUserNotificationCenter.current().add(request)
+            
+            // For system notifications, remove from delivered notifications after showing
+            if notification.type == .receiveSystemNotification {
+                // Remove after a short delay to allow it to be displayed first
+                Task {
+                    try? await Task.sleep(for: .seconds(3))
+                    UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [notification.id.uuidString])
+                }
+            }
+        },
+        
+        scheduleNotification: { notification, delay in
+            // Add to shared state for app notification center
+            @Shared(.notifications) var notifications
+            @Shared(.unreadNotificationCount) var unreadCount
+            
+            var newNotification = notification
+            newNotification.timestamp = Date().addingTimeInterval(delay)
+            $notifications.withLock { $0.insert(newNotification, at: 0) }
+            
+            // Update unread count
+            $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
+            
+            // Always schedule device notification
+            let content = UNMutableNotificationContent()
+            content.title = notification.title
+            content.body = notification.message
+            content.sound = notification.type.sound
+            content.userInfo = [
+                "notification_id": notification.id.uuidString,
+                "type": notification.type.rawValue,
+                "contact_id": notification.contactId?.uuidString ?? "",
+                "user_id": notification.userId?.uuidString ?? "",
+                "timestamp": notification.timestamp.timeIntervalSince1970,
+                "metadata": notification.metadata,
+                "isSystemNotification": notification.type == .receiveSystemNotification
+            ]
+
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)
+            let request = UNNotificationRequest(
+                identifier: notification.id.uuidString,
+                content: content,
+                trigger: trigger
+            )
+
+            try await UNUserNotificationCenter.current().add(request)
+            
+            // For system notifications, schedule removal after showing
+            if notification.type == .receiveSystemNotification {
+                Task {
+                    try? await Task.sleep(for: .seconds(delay + 3))
+                    UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [notification.id.uuidString])
+                }
+            }
+            
+            return notification.id.uuidString
+        },
+        
+        getPendingNotifications: {
+            @Shared(.notifications) var notifications
+            // Return future notifications
+            return notifications.filter { $0.timestamp > Date() }
+        },
         
         cancelScheduledNotification: { identifier in
             // Simulate delay
@@ -1026,85 +1123,6 @@ extension NotificationClient: DependencyKey {
             // Mock cancellation always succeeds
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
             UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
-        },
-        
-        sendNotification: { notification in
-            // Send local notification to device
-            let content = UNMutableNotificationContent()
-            content.title = notification.title
-            content.body = notification.message
-            content.sound = notification.type.sound
-            content.userInfo = [
-                "notification_id": notification.id.uuidString,
-                "type": notification.type.rawValue,
-                "contact_id": notification.contactId?.uuidString ?? "",
-                "user_id": notification.userId?.uuidString ?? "",
-                "timestamp": notification.timestamp.timeIntervalSince1970,
-                "metadata": notification.metadata
-            ]
-
-            let request = UNNotificationRequest(
-                identifier: notification.id.uuidString,
-                content: content,
-                trigger: nil
-            )
-
-            try await UNUserNotificationCenter.current().add(request)
-            
-            // Add to shared state for mock
-            @Shared(.notifications) var notifications
-            @Shared(.unreadNotificationCount) var unreadCount
-            
-            var newNotification = notification
-            newNotification.timestamp = Date()
-            $notifications.withLock { $0.insert(newNotification, at: 0) }
-            
-            // Update unread count
-            $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
-        },
-        
-        scheduleNotification: { notification, delay in
-            // Schedule local notification
-            let content = UNMutableNotificationContent()
-            content.title = notification.title
-            content.body = notification.message
-            content.sound = notification.type.sound
-            content.userInfo = [
-                "notification_id": notification.id.uuidString,
-                "type": notification.type.rawValue,
-                "contact_id": notification.contactId?.uuidString ?? "",
-                "user_id": notification.userId?.uuidString ?? "",
-                "timestamp": notification.timestamp.timeIntervalSince1970,
-                "metadata": notification.metadata
-            ]
-
-            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)
-            let request = UNNotificationRequest(
-                identifier: notification.id.uuidString,
-                content: content,
-                trigger: trigger
-            )
-
-            try await UNUserNotificationCenter.current().add(request)
-            
-            // Add to shared state for mock
-            @Shared(.notifications) var notifications
-            @Shared(.unreadNotificationCount) var unreadCount
-            
-            var newNotification = notification
-            newNotification.timestamp = Date().addingTimeInterval(delay)
-            $notifications.withLock { $0.insert(newNotification, at: 0) }
-            
-            // Update unread count
-            $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
-            
-            return notification.id.uuidString
-        },
-        
-        getPendingNotifications: {
-            @Shared(.notifications) var notifications
-            // Return future notifications
-            return notifications.filter { $0.timestamp > Date() }
         },
         
         requestPermission: {
@@ -1157,7 +1175,17 @@ extension NotificationClient: DependencyKey {
             let title = isEmergencyAlertEnabled ? "Emergency Alert Activated" : "Emergency Alert Deactivated"
             let message = isEmergencyAlertEnabled ? "Your emergency alert has been activated" : "Your emergency alert has been deactivated"
             
-            try await Self.mockValue.sendContactNotification(alertType, title, message, nil)
+            // Create notification for emergency alert state change
+            let notification = NotificationItem(
+                title: title,
+                message: message,
+                type: alertType
+            )
+            
+            @Shared(.notifications) var notifications
+            @Shared(.unreadNotificationCount) var unreadCount
+            $notifications.withLock { $0.insert(notification, at: 0) }
+            $unreadCount.withLock { $0 += 1 }
         },
         
         // Ping management operations
@@ -1217,9 +1245,6 @@ extension NotificationClient: DependencyKey {
             )
             
             _ = try await service.addNotification(request)
-            
-            // Send local notification to user's device
-            try await Self.mockValue.sendNotification(notification)
         },
         
         // Ping notification methods (explicit feature-driven)
@@ -1257,7 +1282,11 @@ extension NotificationClient: DependencyKey {
             
             // Send local notification to user's device (only for received pings)
             if [.receiveResponderPing, .sendResponderPingResponded].contains(notificationType) {
-                try await Self.mockValue.sendNotification(notification)
+                // Add notification to shared state
+            @Shared(.notifications) var notifications
+            @Shared(.unreadNotificationCount) var unreadCount
+            $notifications.withLock { $0.insert(notification, at: 0) }
+            $unreadCount.withLock { $0 += 1 }
             }
         },
         

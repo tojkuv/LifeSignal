@@ -5,9 +5,12 @@ import ComposableArchitecture
 
 @DependencyClient
 struct HapticClient {
-  var impact: @Sendable (UIImpactFeedbackGenerator.FeedbackStyle) async -> Void = { _ in }
-  var notification: @Sendable (UINotificationFeedbackGenerator.FeedbackType) async -> Void = { _ in }
-  var selection: @Sendable () async -> Void = { }
+  @DependencyEndpoint
+  var impact: @Sendable (UIImpactFeedbackGenerator.FeedbackStyle) async -> Void
+  @DependencyEndpoint
+  var notification: @Sendable (UINotificationFeedbackGenerator.FeedbackType) async -> Void
+  @DependencyEndpoint
+  var selection: @Sendable () async -> Void
 }
 
 extension HapticClient: DependencyKey {
@@ -32,8 +35,17 @@ extension HapticClient: DependencyKey {
     }
   )
   
-  static let testValue = HapticClient()
-  static let mockValue = HapticClient()
+  static let testValue = HapticClient(
+    impact: { _ in },
+    notification: { _ in },
+    selection: { }
+  )
+  
+  static let mockValue = HapticClient(
+    impact: { _ in },
+    notification: { _ in },
+    selection: { }
+  )
 }
 
 extension DependencyValues {

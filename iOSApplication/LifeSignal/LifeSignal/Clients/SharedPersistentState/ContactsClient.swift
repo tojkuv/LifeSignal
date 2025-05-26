@@ -59,10 +59,12 @@ struct Contact_Proto: Sendable {
     var checkInInterval: Int64
     var hasIncomingPing: Bool
     var hasOutgoingPing: Bool
-    var hasEmergencyAlert: Bool
+    var hasManualAlertActive: Bool
+    var hasNotResponsiveAlert: Bool
     var incomingPingTimestamp: Int64?
     var outgoingPingTimestamp: Int64?
     var emergencyAlertTimestamp: Int64?
+    var notResponsiveAlertTimestamp: Int64?
     var profileImageURL: String?
     var lastUpdated: Int64
 }
@@ -85,10 +87,12 @@ final class MockContactService: ContactServiceProtocol {
                 checkInInterval: 86400,
                 hasIncomingPing: false,
                 hasOutgoingPing: false,
-                hasEmergencyAlert: false,
+                hasManualAlertActive: false,
+                hasNotResponsiveAlert: false,
                 incomingPingTimestamp: nil,
                 outgoingPingTimestamp: nil,
                 emergencyAlertTimestamp: nil,
+                notResponsiveAlertTimestamp: nil,
                 profileImageURL: "https://example.com/profile/john_doe.jpg",
                 lastUpdated: Int64(Date().timeIntervalSince1970)
             ),
@@ -103,10 +107,12 @@ final class MockContactService: ContactServiceProtocol {
                 checkInInterval: 43200,
                 hasIncomingPing: true,
                 hasOutgoingPing: false,
-                hasEmergencyAlert: false,
+                hasManualAlertActive: false,
+                hasNotResponsiveAlert: true,
                 incomingPingTimestamp: Int64(Date().addingTimeInterval(-1800).timeIntervalSince1970),
                 outgoingPingTimestamp: nil,
                 emergencyAlertTimestamp: nil,
+                notResponsiveAlertTimestamp: Int64(Date().addingTimeInterval(-7200).timeIntervalSince1970),
                 profileImageURL: nil,
                 lastUpdated: Int64(Date().timeIntervalSince1970)
             )
@@ -128,10 +134,12 @@ final class MockContactService: ContactServiceProtocol {
             checkInInterval: 86400,
             hasIncomingPing: false,
             hasOutgoingPing: false,
-            hasEmergencyAlert: false,
+            hasManualAlertActive: false,
+            hasNotResponsiveAlert: false,
             incomingPingTimestamp: nil,
             outgoingPingTimestamp: nil,
             emergencyAlertTimestamp: nil,
+            notResponsiveAlertTimestamp: nil,
             profileImageURL: nil,
             lastUpdated: Int64(Date().timeIntervalSince1970)
         )
@@ -159,10 +167,12 @@ final class MockContactService: ContactServiceProtocol {
                         checkInInterval: 86400,
                         hasIncomingPing: false,
                         hasOutgoingPing: false,
-                        hasEmergencyAlert: false,
+                        hasManualAlertActive: false,
+                        hasNotResponsiveAlert: false,
                         incomingPingTimestamp: nil,
                         outgoingPingTimestamp: nil,
                         emergencyAlertTimestamp: nil,
+                        notResponsiveAlertTimestamp: nil,
                         profileImageURL: nil,
                         lastUpdated: Int64(Date().timeIntervalSince1970)
                     )
@@ -197,10 +207,12 @@ extension Contact_Proto {
             checkInInterval: TimeInterval(checkInInterval),
             hasIncomingPing: hasIncomingPing,
             hasOutgoingPing: hasOutgoingPing,
-            hasEmergencyAlert: hasEmergencyAlert,
             incomingPingTimestamp: incomingPingTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
             outgoingPingTimestamp: outgoingPingTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+            hasManualAlertActive: hasManualAlertActive,
             emergencyAlertTimestamp: emergencyAlertTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+            hasNotResponsiveAlert: hasNotResponsiveAlert,
+            notResponsiveAlertTimestamp: notResponsiveAlertTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
             profileImageURL: profileImageURL,
             profileImageData: nil, // Would be populated separately from image service
             lastUpdated: Date(timeIntervalSince1970: TimeInterval(lastUpdated))
@@ -243,8 +255,12 @@ struct Contact: Codable, Equatable, Identifiable, Sendable {
     var outgoingPingTimestamp: Date?
     
     // MARK: - Emergency Alert Properties (matches Contact_Proto)
-    var hasEmergencyAlert: Bool
+    var hasManualAlertActive: Bool
     var emergencyAlertTimestamp: Date?
+    
+    // MARK: - Non-Responsive Alert Properties (matches Contact_Proto)
+    var hasNotResponsiveAlert: Bool
+    var notResponsiveAlertTimestamp: Date?
     
     // MARK: - Profile Image Properties
     var profileImageURL: String? // From Contact_Proto
@@ -327,11 +343,15 @@ struct ContactsClient {
     // MARK: - Core CRUD Operations
     var getContacts: @Sendable () async -> [Contact] = { [] }
     var getContact: @Sendable (UUID) async throws -> Contact? = { _ in nil }
+    var getContactByQRCode: @Sendable (String) async throws -> Contact = { qrCodeId in
+        throw ContactsClientError.contactNotFound("Contact not found for QR code: \(qrCodeId)")
+    }
     var addContact: @Sendable (String, String, Bool, Bool) async throws -> Contact = { _, _, _, _ in
         throw ContactsClientError.saveFailed("Contact")
     }
     var removeContact: @Sendable (UUID) async throws -> Void = { _ in }
-    
+    var updateContact: @Sendable (Contact) async -> Void = { _ in }
+    var refreshContacts: @Sendable () async throws -> Void = { }
     
     // MARK: - Real-time Contact Updates (gRPC Streaming)
     var startContactUpdatesStream: @Sendable () async throws -> Void = { }
@@ -358,6 +378,36 @@ extension ContactsClient: DependencyKey {
             
             @Shared(.contacts) var contacts
             return contacts.first { $0.id == contactId }
+        },
+        
+        getContactByQRCode: { qrCodeId in
+            // Simulate delay
+            try await Task.sleep(for: .milliseconds(500))
+            
+            // Mock contact based on QR code ID
+            let contact = Contact(
+                id: UUID(),
+                name: "John Doe",
+                phoneNumber: "+1234567890",
+                isResponder: true,
+                isDependent: false,
+                emergencyNote: "Emergency contact information",
+                lastCheckInTimestamp: Date(),
+                checkInInterval: 24 * 60 * 60,
+                hasIncomingPing: false,
+                hasOutgoingPing: false,
+                incomingPingTimestamp: nil,
+                outgoingPingTimestamp: nil,
+                hasManualAlertActive: false,
+                emergencyAlertTimestamp: nil,
+                hasNotResponsiveAlert: false,
+                notResponsiveAlertTimestamp: nil,
+                profileImageURL: nil,
+                profileImageData: nil,
+                lastUpdated: Date()
+            )
+            
+            return contact
         },
         
         addContact: { name, phoneNumber, isResponder, isDependent in
@@ -395,7 +445,28 @@ extension ContactsClient: DependencyKey {
             $contacts.withLock { $0.removeAll { $0.id == contactId } }
         },
         
+        updateContact: { updatedContact in
+            @Shared(.contacts) var contacts
+            $contacts.withLock { contacts in
+                if let index = contacts.firstIndex(where: { $0.id == updatedContact.id }) {
+                    contacts[index] = updatedContact
+                }
+            }
+        },
         
+        refreshContacts: {
+            let authInfo = try await Self.getAuthenticatedUserInfo()
+            let service = MockContactService()
+            
+            let request = GetContactsRequest(userId: authInfo.userId, authToken: authInfo.token)
+            let response = try await service.getContacts(request)
+            let contacts = response.contacts.map { proto in
+                proto.toDomain()
+            }
+            
+            @Shared(.contacts) var sharedContacts
+            $sharedContacts.withLock { $0 = contacts }
+        },
         
         startContactUpdatesStream: {
             // Mock gRPC streaming start - establishes bidirectional stream
@@ -427,10 +498,12 @@ extension ContactsClient: DependencyKey {
                                 checkInInterval: contact.checkInInterval,
                                 hasIncomingPing: i == 1,
                                 hasOutgoingPing: contact.hasOutgoingPing,
-                                hasEmergencyAlert: i == 2,
                                 incomingPingTimestamp: i == 1 ? Date() : contact.incomingPingTimestamp,
                                 outgoingPingTimestamp: contact.outgoingPingTimestamp,
+                                hasManualAlertActive: i == 2,
                                 emergencyAlertTimestamp: i == 2 ? Date() : contact.emergencyAlertTimestamp,
+                                hasNotResponsiveAlert: contact.hasNotResponsiveAlert,
+                                notResponsiveAlertTimestamp: contact.notResponsiveAlertTimestamp,
                                 profileImageURL: contact.profileImageURL,
                                 profileImageData: contact.profileImageData,
                                 lastUpdated: Date()

@@ -17,12 +17,20 @@ struct NotificationCenterFeature {
 
         var selectedFilter: NotificationType? = nil
         var isLoading = false
-        var errorMessage: String?
-        @Presents var confirmationAlert: AlertState<Action.Alert>?
 
         var filteredNotifications: [NotificationItem] {
             if let filter = selectedFilter {
-                return allNotifications.filter { $0.type == filter }
+                // Handle grouped filters
+                let alertTypes: [NotificationType] = [.sendManualAlertActive, .sendManualAlertInactive, .receiveDependentManualAlertActive, .receiveDependentManualAlertInactive, .receiveNonResponsiveAlert, .receiveNonResponsiveDependentAlert]
+                let pingTypes: [NotificationType] = [.receiveResponderPing, .sendDependentPing, .sendResponderPingResponded, .receiveDependentPingResponded, .sendClearAllResponderPings]
+                
+                if alertTypes.contains(filter) {
+                    return allNotifications.filter { alertTypes.contains($0.type) }
+                } else if pingTypes.contains(filter) {
+                    return allNotifications.filter { pingTypes.contains($0.type) }
+                } else {
+                    return allNotifications.filter { $0.type == filter }
+                }
             }
             return allNotifications
         }
@@ -42,25 +50,15 @@ struct NotificationCenterFeature {
         case refreshNotifications
         case markAsRead(NotificationItem)
         case markAllAsRead
-        case delete(NotificationItem)
-        case clearAll
         case setFilter(NotificationType?)
         case dismiss
-        case alert(PresentationAction<Alert>)
         case refreshComplete
         case refreshFailed(String)
         case markAsReadResponse(Result<Void, Error>)
-        case deleteResponse(Result<Void, Error>)
-        case clearAllResponse(Result<Void, Error>)
-
-        enum Alert: Equatable {
-            case confirmClearAll
-        }
     }
 
     @Dependency(\.notificationClient) var notificationClient
     @Dependency(\.hapticClient) var haptics
-    @Dependency(\.analytics) var analytics
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -75,12 +73,10 @@ struct NotificationCenterFeature {
 
             case .refreshNotifications:
                 state.isLoading = true
-                state.errorMessage = nil
 
                 return .run { send in
-                    await analytics.track(.featureUsed(feature: "notification_center_refresh", context: [:]))
                     do {
-                        _ = try await notificationClient.getNotifications()
+                        _ = await notificationClient.getNotifications()
                         await send(.refreshComplete)
                     } catch {
                         await send(.refreshFailed(error.localizedDescription))
@@ -92,9 +88,8 @@ struct NotificationCenterFeature {
 
                 return .run { send in
                     await haptics.impact(.light)
-                    await analytics.track(.featureUsed(feature: "notification_mark_read", context: ["notification_id": notification.id.uuidString]))
                     await send(.markAsReadResponse(Result {
-                        try await notificationClient.markAsRead(notification.id)
+                        _ = try await notificationClient.markAsRead(notification.id)
                     }))
                 }
 
@@ -104,104 +99,51 @@ struct NotificationCenterFeature {
 
                 return .run { send in
                     await haptics.notification(.success)
-                    await analytics.track(.featureUsed(feature: "notification_mark_all_read", context: ["count": "\(unreadIds.count)"]))
-
-                    for id in unreadIds {
-                        _ = try? await notificationClient.markAsRead(id)
-                    }
+                    _ = try? await notificationClient.markAllAsRead()
                     await send(.refreshComplete)
                 }
-
-            case let .delete(notification):
-                return .run { send in
-                    await haptics.impact(.medium)
-                    await analytics.track(.featureUsed(feature: "notification_delete", context: ["notification_id": notification.id.uuidString]))
-                    await send(.deleteResponse(Result {
-                        try await notificationClient.deleteNotification(notification.id)
-                    }))
-                }
-
-            case .clearAll:
-                guard !state.allNotifications.isEmpty else { return .none }
-
-                state.confirmationAlert = AlertState {
-                    TextState("Clear All Notifications")
-                } actions: {
-                    ButtonState(role: .destructive, action: .confirmClearAll) {
-                        TextState("Clear All")
-                    }
-                    ButtonState(role: .cancel) {
-                        TextState("Cancel")
-                    }
-                } message: {
-                    TextState("Are you sure you want to clear all notifications? This action cannot be undone.")
-                }
-                return .none
 
             case let .setFilter(filter):
                 state.selectedFilter = filter
                 return .run { _ in
                     await haptics.impact(.light)
-                    let filterName = filter?.rawValue ?? "all"
-                    await analytics.track(.featureUsed(feature: "notification_filter", context: ["filter": filterName]))
                 }
 
             case .dismiss:
                 return .none
 
-            case .alert(.presented(.confirmClearAll)):
-                state.isLoading = true
-
-                return .run { send in
-                    await haptics.notification(.warning)
-                    await analytics.track(.featureUsed(feature: "notification_clear_all", context: [:]))
-                    await send(.clearAllResponse(Result {
-                        try await notificationClient.clearAll()
-                    }))
-                }
-
-            case .alert:
-                return .none
 
             case .refreshComplete:
                 state.isLoading = false
-                state.$unreadNotificationCount.withLock { count in
-                    count = state.unreadNotifications.count
-                }
                 return .none
 
             case let .refreshFailed(error):
                 state.isLoading = false
-                state.errorMessage = error
-                return .none
+                return .run { _ in
+                    try? await notificationClient.sendNotification(
+                        NotificationItem(
+                            title: "Refresh Failed",
+                            message: "Unable to refresh notifications: \(error)",
+                            type: .receiveSystemNotification
+                        )
+                    )
+                }
 
             case .markAsReadResponse(.success):
                 return .send(.refreshNotifications)
 
             case let .markAsReadResponse(.failure(error)):
-                state.errorMessage = error.localizedDescription
-                return .none
-
-            case .deleteResponse(.success):
-                return .send(.refreshNotifications)
-
-            case let .deleteResponse(.failure(error)):
-                state.errorMessage = error.localizedDescription
-                return .none
-
-            case .clearAllResponse(.success):
-                state.isLoading = false
-                state.$allNotifications.withLock { $0.removeAll() }
-                state.$unreadNotificationCount.withLock { $0 = 0 }
-                return .none
-
-            case let .clearAllResponse(.failure(error)):
-                state.isLoading = false
-                state.errorMessage = error.localizedDescription
-                return .none
+                return .run { _ in
+                    try? await notificationClient.sendNotification(
+                        NotificationItem(
+                            title: "Mark Read Failed",
+                            message: "Unable to mark notification as read: \(error.localizedDescription)",
+                            type: .receiveSystemNotification
+                        )
+                    )
+                }
             }
         }
-        .ifLet(\.$confirmationAlert, action: \.alert)
     }
 }
 
@@ -217,105 +159,248 @@ struct NotificationCenterView: View {
     var body: some View {
         WithPerceptionTracking {
             NavigationStack {
-                VStack {
-                    filterPicker
-                    notificationsList
+                VStack(spacing: 0) {
+                    // Filter bar
+                    filterPicker()
+                    
+                    // Notification list
+                    notificationsList()
                 }
                 .navigationTitle("Notifications")
-                .navigationBarTitleDisplayMode(.large)
+                .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Close") {
+                        Button(action: {
                             store.send(.dismiss, animation: .default)
+                        }) {
+                            HStack(spacing: 5) {
+                                Image(systemName: "chevron.left")
+                                Text("Back")
+                            }
                         }
-                    }
-
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Clear All") {
-                            store.send(.clearAll, animation: .default)
-                        }
-                        .disabled(store.allNotifications.isEmpty)
                     }
                 }
+                .navigationBarBackButtonHidden(true)
             }
             .onAppear {
                 store.send(.loadNotifications, animation: .default)
             }
-            .alert($store.scope(state: \.confirmationAlert, action: \.alert))
         }
     }
 
     @ViewBuilder
-    private var filterPicker: some View {
-        Picker("Filter", selection: $store.selectedFilter) {
-            Text("All").tag(NotificationType?.none)
-            ForEach(NotificationType.allCases, id: \.self) { type in
-                Text(type.title).tag(type as NotificationType?)
-            }
-        }
-        .pickerStyle(SegmentedPickerStyle())
-        .padding()
-    }
+    private func filterPicker() -> some View {
+        HStack {
+            Text("Filter:")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
 
-    @ViewBuilder
-    private var notificationsList: some View {
-        Group {
-            if store.isLoading {
-                ProgressView("Loading notifications...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if filteredNotifications.isEmpty {
-                Text("No notifications")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(filteredNotifications, id: \.id) { notification in
-                    NotificationRowView(notification: notification) {
-                        store.send(.markAsRead(notification), animation: .default)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    FilterChip(title: "All", isSelected: store.selectedFilter == nil) {
+                        store.send(.setFilter(nil), animation: .default)
                     }
-                    .swipeActions(edge: .trailing) {
-                        Button("Delete", role: .destructive) {
-                            store.send(.delete(notification), animation: .default)
-                        }
+                    
+                    FilterChip(title: "Alerts", isSelected: isAlertSelected) {
+                        store.send(.setFilter(.sendManualAlertActive), animation: .default)
+                    }
+                    
+                    FilterChip(title: "Pings", isSelected: isPingSelected) {
+                        store.send(.setFilter(.receiveResponderPing), animation: .default)
+                    }
+                    
+                    FilterChip(title: "Roles", isSelected: store.selectedFilter == .receiveContactRoleChanged) {
+                        store.send(.setFilter(.receiveContactRoleChanged), animation: .default)
+                    }
+                    
+                    FilterChip(title: "Removed", isSelected: store.selectedFilter == .receiveContactRemoved) {
+                        store.send(.setFilter(.receiveContactRemoved), animation: .default)
+                    }
+                    
+                    FilterChip(title: "Added", isSelected: store.selectedFilter == .receiveContactAdded) {
+                        store.send(.setFilter(.receiveContactAdded), animation: .default)
+                    }
+                    
+                    FilterChip(title: "System", isSelected: store.selectedFilter == .receiveSystemNotification) {
+                        store.send(.setFilter(.receiveSystemNotification), animation: .default)
                     }
                 }
+                .padding(.horizontal, 4)
             }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color(UIColor.secondarySystemBackground))
+    }
+    
+    private var isAlertSelected: Bool {
+        if let filter = store.selectedFilter {
+            return [.sendManualAlertActive, .sendManualAlertInactive, .receiveDependentManualAlertActive, .receiveDependentManualAlertInactive, .receiveNonResponsiveAlert, .receiveNonResponsiveDependentAlert].contains(filter)
+        }
+        return false
+    }
+    
+    private var isPingSelected: Bool {
+        if let filter = store.selectedFilter {
+            return [.receiveResponderPing, .sendDependentPing, .sendResponderPingResponded, .receiveDependentPingResponded, .sendClearAllResponderPings].contains(filter)
+        }
+        return false
+    }
+
+    @ViewBuilder
+    private func notificationsList() -> some View {
+        if filteredNotifications.isEmpty {
+            VStack(spacing: 16) {
+                Spacer()
+
+                Image(systemName: "bell.slash")
+                    .font(.system(size: 48))
+                    .foregroundColor(.secondary)
+
+                Text("No notifications")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
+        } else {
+            List {
+                ForEach(filteredNotifications, id: \.id) { notification in
+                    NotificationHistoryRow(notification: notification) {
+                        store.send(.markAsRead(notification), animation: .default)
+                    }
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                }
+            }
+            .listStyle(.plain)
         }
     }
 }
 
-// MARK: - Notification Row View
+// MARK: - Notification History Row
 
-struct NotificationRowView: View {
+struct NotificationHistoryRow: View {
     let notification: NotificationItem
-    let onMarkAsRead: () -> Void
+    let onMarkAsRead: (() -> Void)?
+    
+    init(notification: NotificationItem, onMarkAsRead: (() -> Void)? = nil) {
+        self.notification = notification
+        self.onMarkAsRead = onMarkAsRead
+    }
+
+    /// Get the color for the notification type
+    private var notificationColor: Color {
+        switch notification.type {
+        case .sendManualAlertActive, .receiveDependentManualAlertActive:
+            return .red
+        case .receiveNonResponsiveAlert, .receiveNonResponsiveDependentAlert:
+            return .orange
+        case .receiveResponderPing, .sendDependentPing, .sendResponderPingResponded, .receiveDependentPingResponded, .sendClearAllResponderPings:
+            return .blue
+        case .receiveContactAdded:
+            return .purple
+        case .receiveContactRemoved:
+            return .pink
+        case .receiveContactRoleChanged:
+            return .teal
+        case .receiveSystemNotification:
+            return .indigo
+        default:
+            return .gray
+        }
+    }
 
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(notification.title)
-                    .font(.headline)
-                    .foregroundColor(notification.isRead ? .secondary : .primary)
+        VStack(alignment: .leading, spacing: 0) {
+            // Notification content
+            HStack(alignment: .top, spacing: 12) {
+                // Icon with color based on notification type
+                Image(systemName: iconForType(notification.type))
+                    .foregroundColor(notificationColor)
+                    .font(.system(size: 18))
+                    .frame(width: 24, height: 24)
 
-                Text(notification.message)
-                    .font(.body)
-                    .foregroundColor(.secondary)
-                    .lineLimit(2)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(notification.title)
+                            .font(.headline)
 
-                Text(notification.timestamp, style: .relative)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+                        Spacer()
 
-            Spacer()
+                        Text(notification.timestamp, style: .relative)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
 
-            if !notification.isRead {
-                Button("Mark as Read") {
-                    onMarkAsRead()
+                    Text(notification.message)
+                        .font(.body)
+                        .foregroundColor(.secondary)
                 }
-                .font(.caption)
-                .foregroundColor(.blue)
+            }
+            .padding()
+            .background(Color(UIColor.systemBackground))
+            .cornerRadius(8)
+
+            // Divider (will appear between items)
+            Divider()
+                .padding(.vertical, 4)
+        }
+        .onTapGesture {
+            if !notification.isRead {
+                onMarkAsRead?()
             }
         }
-        .padding(.vertical, 4)
+    }
+
+    /// Get the icon for the notification type
+    /// - Parameter type: The notification type
+    /// - Returns: The system image name
+    private func iconForType(_ type: NotificationType) -> String {
+        switch type {
+        case .sendManualAlertActive, .receiveDependentManualAlertActive:
+            return "exclamationmark.octagon.fill"
+        case .receiveNonResponsiveAlert, .receiveNonResponsiveDependentAlert:
+            return "person.badge.clock.fill"
+        case .receiveResponderPing, .sendDependentPing, .sendResponderPingResponded, .receiveDependentPingResponded, .sendClearAllResponderPings:
+            return "bell.fill"
+        case .receiveContactAdded:
+            return "person.badge.plus.fill"
+        case .receiveContactRemoved:
+            return "person.badge.minus.fill"
+        case .receiveContactRoleChanged:
+            return "person.2.badge.gearshape.fill"
+        case .receiveSystemNotification:
+            return "gear.fill"
+        default:
+            return "bell.fill"
+        }
+    }
+}
+
+struct FilterChip: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    isSelected ?
+                        Color.blue :
+                        Color(UIColor.systemBackground)
+                )
+                .foregroundColor(
+                    isSelected ?
+                        .white :
+                        .primary
+                )
+                .cornerRadius(16)
+        }
     }
 }

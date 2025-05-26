@@ -14,8 +14,6 @@ struct ProfileFeature {
         @Shared(.sessionState) var sessionState: SessionState = .unauthenticated
         @Shared(.userAvatarImage) var avatarImageData: AvatarImageWithMetadata? = nil
         
-        var isLoading = false
-        var errorMessage: String?
         
         // Sheet states to match mock UI
         var showEditDescriptionSheet = false
@@ -30,6 +28,32 @@ struct ProfileFeature {
         var newDescription = ""
         var newName = ""
         var imagePickerSourceType: UIImagePickerController.SourceType = .photoLibrary
+        
+        static func == (lhs: State, rhs: State) -> Bool {
+            lhs.currentUser == rhs.currentUser &&
+            lhs.sessionState == rhs.sessionState &&
+            lhs.avatarImageData == rhs.avatarImageData &&
+            lhs.showEditDescriptionSheet == rhs.showEditDescriptionSheet &&
+            lhs.showEditNameSheet == rhs.showEditNameSheet &&
+            lhs.showEditAvatarSheet == rhs.showEditAvatarSheet &&
+            lhs.showPhoneNumberChangeSheet == rhs.showPhoneNumberChangeSheet &&
+            lhs.showSignOutConfirmation == rhs.showSignOutConfirmation &&
+            lhs.showDeleteAvatarConfirmation == rhs.showDeleteAvatarConfirmation &&
+            lhs.showImagePicker == rhs.showImagePicker &&
+            lhs.newDescription == rhs.newDescription &&
+            lhs.newName == rhs.newName &&
+            lhs.imagePickerSourceType.rawValue == rhs.imagePickerSourceType.rawValue &&
+            lhs.newPhoneNumber == rhs.newPhoneNumber &&
+            lhs.phoneVerificationCode == rhs.phoneVerificationCode &&
+            lhs.phoneVerificationID == rhs.phoneVerificationID &&
+            lhs.isPhoneVerificationStep == rhs.isPhoneVerificationStep &&
+            lhs.selectedPhoneRegion == rhs.selectedPhoneRegion &&
+            lhs.showPhoneRegionPicker == rhs.showPhoneRegionPicker &&
+            lhs.textEditorFocused == rhs.textEditorFocused &&
+            lhs.nameFieldFocused == rhs.nameFieldFocused &&
+            lhs.phoneNumberFieldFocused == rhs.phoneNumberFieldFocused &&
+            lhs.phoneVerificationCodeFieldFocused == rhs.phoneVerificationCodeFieldFocused
+        }
         
         // Phone number change states
         var newPhoneNumber = ""
@@ -68,11 +92,11 @@ struct ProfileFeature {
         }
         
         var canSendPhoneVerification: Bool {
-            isPhoneNumberValid && !isLoading
+            isPhoneNumberValid
         }
         
         var canVerifyPhoneCode: Bool {
-            isVerificationCodeValid && !isLoading
+            isVerificationCodeValid
         }
         
         var isPhoneNumberValid: Bool {
@@ -125,7 +149,7 @@ struct ProfileFeature {
         case handlePhoneVerificationCodeFieldFocusChange(Bool)
         
         // Network responses
-        case updateResponse(Result<User, Error>)
+        case updateResponse(Result<Void, Error>)
         case uploadAvatarResponse(Result<URL, Error>)
         case phoneVerificationSent(Result<String, Error>)
         case phoneNumberChanged(Result<Void, Error>)
@@ -184,7 +208,6 @@ struct ProfileFeature {
                 state.phoneVerificationCode = ""
                 state.phoneVerificationID = nil
                 state.isPhoneVerificationStep = false
-                state.errorMessage = nil
                 return .run { _ in
                     await haptics.impact(.light)
                 }
@@ -204,17 +227,18 @@ struct ProfileFeature {
                 
             case .sendPhoneVerificationCode:
                 guard !state.newPhoneNumber.isEmpty else {
-                    state.errorMessage = "Please enter a phone number"
-                    return .run { _ in
+                    return .run { [notificationClient, haptics] _ in
+                        let notification = NotificationItem(
+                            title: "Phone Number Required",
+                            message: "Please enter a phone number to continue.",
+                            type: .receiveSystemNotification
+                        )
+                        try? await notificationClient.sendNotification(notification)
                         await haptics.notification(.error)
                     }
                 }
                 
-                // Validate phone number using SessionClient
-                state.isLoading = true
-                state.errorMessage = nil
-                
-                return .run { [phoneNumber = state.newPhoneNumber] send in
+                return .run { [phoneNumber = state.newPhoneNumber, sessionClient] send in
                     await send(.phoneVerificationSent(
                         Result {
                             try await sessionClient.sendPhoneChangeVerificationCode(phoneNumber)
@@ -228,23 +252,30 @@ struct ProfileFeature {
                 
             case .verifyPhoneNumber:
                 guard !state.phoneVerificationCode.isEmpty else {
-                    state.errorMessage = "Please enter the verification code"
-                    return .run { _ in
+                    return .run { [notificationClient, haptics] _ in
+                        let notification = NotificationItem(
+                            title: "Verification Code Required",
+                            message: "Please enter the 6-digit verification code.",
+                            type: .receiveSystemNotification
+                        )
+                        try? await notificationClient.sendNotification(notification)
                         await haptics.notification(.error)
                     }
                 }
                 
                 guard let verificationID = state.phoneVerificationID else {
-                    state.errorMessage = "Verification session expired. Please try again."
-                    return .run { _ in
+                    return .run { [notificationClient, haptics] _ in
+                        let notification = NotificationItem(
+                            title: "Session Expired",
+                            message: "Verification session expired. Please request a new code.",
+                            type: .receiveSystemNotification
+                        )
+                        try? await notificationClient.sendNotification(notification)
                         await haptics.notification(.error)
                     }
                 }
                 
-                state.isLoading = true
-                state.errorMessage = nil
-                
-                return .run { [verificationID = verificationID, code = state.phoneVerificationCode] send in
+                return .run { [verificationID = verificationID, code = state.phoneVerificationCode, sessionClient] send in
                     await send(.phoneNumberChanged(
                         Result {
                             try await sessionClient.changePhoneNumber(verificationID, code)
@@ -256,7 +287,6 @@ struct ProfileFeature {
                 state.isPhoneVerificationStep = false
                 state.phoneVerificationCode = ""
                 state.phoneVerificationID = nil
-                state.errorMessage = nil
                 return .none
 
             case .confirmSignOut:
@@ -267,27 +297,24 @@ struct ProfileFeature {
 
             case .signOut:
                 state.showSignOutConfirmation = false
-                return .run { _ in
+                return .run { [sessionClient, haptics, notificationClient] _ in
                     do {
                         try await sessionClient.endSession()
                         await haptics.notification(.success)
                         
-                        // Send notification for successful sign out
                         let notification = NotificationItem(
                             title: "Signed Out",
                             message: "You have been successfully signed out of your account.",
-                            type: .system
+                            type: .receiveSystemNotification
                         )
                         try? await notificationClient.sendNotification(notification)
                     } catch {
-                        // Handle error silently, session cleanup should still happen
                         await haptics.notification(.error)
                         
-                        // Send notification for sign out error
                         let notification = NotificationItem(
                             title: "Sign Out Issue",
                             message: "There was an issue signing out, but you have been logged out locally.",
-                            type: .system
+                            type: .receiveSystemNotification
                         )
                         try? await notificationClient.sendNotification(notification)
                     }
@@ -296,8 +323,13 @@ struct ProfileFeature {
             case .saveEditedDescription:
                 let trimmedDescription = state.newDescription.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard var user = state.currentUser else {
-                    state.errorMessage = "User not found"
-                    return .run { _ in
+                    return .run { [notificationClient, haptics] _ in
+                        let notification = NotificationItem(
+                            title: "Profile Update Issue",
+                            message: "Unable to update emergency note. Please try again.",
+                            type: .receiveSystemNotification
+                        )
+                        try? await notificationClient.sendNotification(notification)
                         await haptics.notification(.error)
                     }
                 }
@@ -306,12 +338,10 @@ struct ProfileFeature {
                 user.lastModified = Date()
                 
                 state.showEditDescriptionSheet = false
-                state.isLoading = true
                 
-                return .run { send in
+                return .run { [userClient, user] send in
                     await send(.updateResponse(Result {
                         try await userClient.updateUser(user)
-                        return user
                     }))
                 }
 
@@ -327,15 +357,19 @@ struct ProfileFeature {
                 
                 let validationResult = sessionClient.validateName(trimmedName)
                 guard validationResult.isValid else {
-                    state.errorMessage = validationResult.errorMessage
-                    return .run { _ in
+                    return .run { [notificationClient, haptics, errorMessage = validationResult.errorMessage] _ in
+                        let notification = NotificationItem(
+                            title: "Name Validation Issue",
+                            message: errorMessage ?? "Please check your name format.",
+                            type: .receiveSystemNotification
+                        )
+                        try? await notificationClient.sendNotification(notification)
                         await haptics.notification(.error)
                     }
                 }
                 
                 guard var user = state.currentUser else {
-                    state.errorMessage = "User not found"
-                    return .run { _ in
+                    return .run { [haptics] _ in
                         await haptics.notification(.error)
                     }
                 }
@@ -344,12 +378,10 @@ struct ProfileFeature {
                 user.lastModified = Date()
                 
                 state.showEditNameSheet = false
-                state.isLoading = true
                 
-                return .run { send in
+                return .run { [userClient, user] send in
                     await send(.updateResponse(Result {
                         try await userClient.updateUser(user)
-                        return user
                     }))
                 }
 
@@ -361,80 +393,60 @@ struct ProfileFeature {
                 }
 
             case let .setAvatarImage(image):
-                guard var user = state.currentUser else {
-                    state.errorMessage = "User not found"
-                    return .run { _ in
+                guard let user = state.currentUser else {
+                    return .run { [haptics] _ in
                         await haptics.notification(.error)
                     }
                 }
                 
                 state.showEditAvatarSheet = false
                 state.showImagePicker = false
-                state.isLoading = true
                 
-                return .run { send in
+                return .run { [userClient, notificationClient, userID = user.id] send in
                     await send(.updateResponse(Result {
-                        // Upload avatar via UserClient's avatar upload method
                         guard let imageData = image.jpegData(compressionQuality: 0.8) else {
                             throw UserClientError.operationFailed
                         }
                         
-                        try await userClient.updateAvatarData(user.id, imageData)
+                        try await userClient.updateAvatarData(userID, imageData)
                         
-                        // Send notification for successful avatar upload
                         let notification = NotificationItem(
                             title: "Avatar Updated",
                             message: "Your profile avatar has been successfully updated.",
-                            type: .system
+                            type: .receiveSystemNotification
                         )
                         try? await notificationClient.sendNotification(notification)
                         
-                        // Get updated user from shared state after avatar upload
-                        @Shared(.currentUser) var currentUser
-                        guard let updatedUser = currentUser else {
-                            throw UserClientError.userNotFound
-                        }
-                        
-                        return updatedUser
                     }))
                 }
 
             case .deleteAvatarImage:
                 guard let user = state.currentUser else {
-                    state.errorMessage = "User not found"
-                    return .run { _ in
+                    return .run { [haptics] _ in
                         await haptics.notification(.error)
                     }
                 }
                 
                 state.showDeleteAvatarConfirmation = false
                 state.showEditAvatarSheet = false
-                state.isLoading = true
                 
-                return .run { send in
+                return .run { [userClient, notificationClient, userID = user.id] send in
                     await send(.updateResponse(Result {
-                        try await userClient.deleteAvatarData(user.id)
+                        try await userClient.deleteAvatarData(userID)
                         
-                        // Send notification for successful avatar deletion
                         let notification = NotificationItem(
                             title: "Avatar Deleted",
                             message: "Your profile avatar has been successfully deleted.",
-                            type: .system
+                            type: .receiveSystemNotification
                         )
                         try? await notificationClient.sendNotification(notification)
                         
-                        // Get updated user from shared state after avatar deletion
-                        @Shared(.currentUser) var currentUser
-                        guard let updatedUser = currentUser else {
-                            throw UserClientError.userNotFound
-                        }
-                        
-                        return updatedUser
                     }))
                 }
 
             case let .showImagePickerWithSourceType(sourceType):
                 state.imagePickerSourceType = sourceType
+                state.showEditAvatarSheet = false // Dismiss avatar sheet first
                 state.showImagePicker = true
                 return .run { _ in
                     await haptics.impact(.light)
@@ -456,33 +468,26 @@ struct ProfileFeature {
                 state.phoneVerificationCodeFieldFocused = focused
                 return .none
 
-            case let .updateResponse(.success(user)):
-                state.isLoading = false
-                state.$currentUser.withLock { $0 = user }
-                state.errorMessage = nil
-                return .run { _ in
+            case .updateResponse(.success):
+                return .run { [haptics, notificationClient] _ in
                     await haptics.notification(.success)
                     
-                    // Send silent notification for profile update success
                     let notification = NotificationItem(
                         title: "Profile Updated",
                         message: "Your profile information has been successfully updated.",
-                        type: .system
+                        type: .receiveSystemNotification
                     )
                     try? await notificationClient.sendNotification(notification)
                 }
 
             case let .updateResponse(.failure(error)):
-                state.isLoading = false
-                state.errorMessage = error.localizedDescription
-                return .run { [errorMessage = error.localizedDescription] _ in
+                return .run { [errorMessage = error.localizedDescription, haptics, notificationClient] _ in
                     await haptics.notification(.error)
                     
-                    // Send silent notification for profile update failure
                     let notification = NotificationItem(
                         title: "Profile Update Failed",
                         message: "Failed to update profile: \(errorMessage)",
-                        type: .system
+                        type: .receiveSystemNotification
                     )
                     try? await notificationClient.sendNotification(notification)
                 }
@@ -490,80 +495,71 @@ struct ProfileFeature {
             case let .uploadAvatarResponse(.success(url)):
                 guard var user = state.currentUser else { return .none }
                 user.avatarURL = url.absoluteString
-                state.isLoading = false
-                return .send(.updateResponse(.success(user)))
+                let updatedUser = user
+                return .run { [userClient] send in
+                    await send(.updateResponse(Result {
+                        try await userClient.updateUser(updatedUser)
+                    }))
+                }
 
-            case let .uploadAvatarResponse(.failure(error)):
-                state.isLoading = false
-                state.errorMessage = error.localizedDescription
-                return .run { _ in
+            case .uploadAvatarResponse(.failure(_)):
+                return .run { [haptics] _ in
                     await haptics.notification(.error)
                 }
                 
             case let .phoneVerificationSent(.success(verificationID)):
-                state.isLoading = false
                 state.phoneVerificationID = verificationID
                 state.isPhoneVerificationStep = true
                 state.phoneVerificationCodeFieldFocused = true
-                return .run { [phoneNumber = state.newPhoneNumber] _ in
+                return .run { [phoneNumber = state.newPhoneNumber, haptics, notificationClient] _ in
                     await haptics.notification(.success)
                     
-                    // Send silent notification for verification code sent
                     let notification = NotificationItem(
                         title: "Verification Code Sent",
                         message: "A verification code has been sent to \(phoneNumber)",
-                        type: .system
+                        type: .receiveSystemNotification
                     )
                     try? await notificationClient.sendNotification(notification)
                 }
                 
             case let .phoneVerificationSent(.failure(error)):
-                state.isLoading = false
-                state.errorMessage = error.localizedDescription
-                return .run { [errorMessage = error.localizedDescription] _ in
+                return .run { [errorMessage = error.localizedDescription, haptics, notificationClient] _ in
                     await haptics.notification(.error)
                     
-                    // Send silent notification for verification failure
                     let notification = NotificationItem(
                         title: "Verification Failed",
                         message: "Failed to send verification code: \(errorMessage)",
-                        type: .system
+                        type: .receiveSystemNotification
                     )
                     try? await notificationClient.sendNotification(notification)
                 }
                 
-            case let .phoneNumberChanged(.success):
-                state.isLoading = false
+            case .phoneNumberChanged(.success):
                 state.showPhoneNumberChangeSheet = false
                 let changedPhoneNumber = state.newPhoneNumber
                 state.newPhoneNumber = ""
                 state.phoneVerificationCode = ""
                 state.phoneVerificationID = nil
                 state.isPhoneVerificationStep = false
-                state.errorMessage = nil
-                return .run { _ in
+                return .run { [haptics, notificationClient] _ in
                     await haptics.notification(.success)
                     
-                    // Send silent notification for successful phone number change
                     let notification = NotificationItem(
                         title: "Phone Number Updated",
                         message: "Your phone number has been successfully changed to \(changedPhoneNumber)",
-                        type: .system
+                        type: .receiveSystemNotification
                     )
                     try? await notificationClient.sendNotification(notification)
                 }
                 
             case let .phoneNumberChanged(.failure(error)):
-                state.isLoading = false
-                state.errorMessage = error.localizedDescription
-                return .run { [errorMessage = error.localizedDescription] _ in
+                return .run { [errorMessage = error.localizedDescription, haptics, notificationClient] _ in
                     await haptics.notification(.error)
                     
-                    // Send silent notification for phone number change failure
                     let notification = NotificationItem(
                         title: "Phone Number Change Failed",
                         message: "Failed to change phone number: \(errorMessage)",
-                        type: .system
+                        type: .receiveSystemNotification
                     )
                     try? await notificationClient.sendNotification(notification)
                 }
@@ -635,123 +631,148 @@ struct ProfileView: View {
     @FocusState private var phoneNumberFieldFocused: Bool
     @FocusState private var phoneVerificationCodeFieldFocused: Bool
 
+    @ViewBuilder
+    private func profileHeader() -> some View {
+        VStack(spacing: 16) {
+            if let user = store.currentUser {
+                CommonAvatarView(
+                    name: user.name,
+                    image: store.currentAvatarImage,
+                    size: 80,
+                    backgroundColor: Color.blue.opacity(0.1),
+                    textColor: .blue,
+                    strokeWidth: 2,
+                    strokeColor: .blue
+                )
+                Text(user.name)
+                    .font(.headline)
+                Text(user.phoneNumber.isEmpty ? "(954) 234-5678" : user.phoneNumber)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func descriptionCard(_ user: User) -> some View {
+        Button(action: {
+            store.send(.prepareEditDescription, animation: .default)
+        }) {
+            HStack(alignment: .top) {
+                Text(user.emergencyNote.isEmpty ? "This is simply a note for contacts." : user.emergencyNote)
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .multilineTextAlignment(.leading)
+                Spacer()
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal)
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .cornerRadius(12)
+        }
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private func updateCards() -> some View {
+        VStack(spacing: 0) {
+            Button(action: {
+                store.send(.showAvatarEditor, animation: .default)
+            }) {
+                HStack {
+                    Text("Update Avatar")
+                        .font(.body)
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 12)
+                .padding(.horizontal)
+            }
+            Divider().padding(.leading)
+            Button(action: {
+                store.send(.prepareEditName, animation: .default)
+            }) {
+                HStack {
+                    Text("Update Name")
+                        .font(.body)
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 12)
+                .padding(.horizontal)
+            }
+        }
+        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .cornerRadius(12)
+        .padding(.horizontal)
+        .padding(.bottom, 8)
+    }
+
+    private func mainContent(_ user: User) -> some View {
+        VStack(spacing: 16) {
+            profileHeader()
+            descriptionCard(user)
+            updateCards()
+            
+            Button(action: {
+                store.send(.showPhoneNumberChange, animation: .default)
+            }) {
+                HStack {
+                    Text("Change Phone Number")
+                        .font(.body)
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 12)
+                .padding(.horizontal)
+                .background(Color(UIColor.secondarySystemGroupedBackground))
+                .cornerRadius(12)
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+            
+            Button(action: {
+                store.send(.confirmSignOut, animation: .default)
+            }) {
+                Text("Sign Out")
+                    .font(.body)
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .padding(.horizontal)
+                    .background(Color(UIColor.secondarySystemGroupedBackground))
+                    .cornerRadius(12)
+            }
+            .padding(.horizontal)
+            
+            Spacer()
+        }
+    }
+
     var body: some View {
         WithPerceptionTracking {
+            setupLifecycle()
+        }
+    }
+    
+    @ViewBuilder
+    private var contentView: some View {
+        ZStack {
+            Color(UIColor.systemGroupedBackground)
+                .ignoresSafeArea()
+            
             ScrollView {
-                VStack(spacing: 16) {
-                    if let user = store.currentUser {
-                        // Profile Header
-                        VStack(spacing: 16) {
-                            CommonAvatarView(
-                                name: user.name,
-                                image: store.currentAvatarImage,
-                                size: 80,
-                                backgroundColor: Color.blue.opacity(0.1),
-                                textColor: .blue,
-                                strokeWidth: 2,
-                                strokeColor: .blue
-                            )
-                            Text(user.name)
-                                .font(.headline)
-                            Text(user.phoneNumber.isEmpty ? "(954) 234-5678" : user.phoneNumber)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        }
-
-                        // Description Setting Card
-                        Button(action: {
-                            store.send(.prepareEditDescription, animation: .default)
-                        }) {
-                            HStack(alignment: .top) {
-                                Text(user.emergencyNote.isEmpty ? "This is simply a note for contacts." : user.emergencyNote)
-                                    .font(.body)
-                                    .foregroundColor(.primary)
-                                    .multilineTextAlignment(.leading)
-                                Spacer()
-                            }
-                            .padding(.vertical, 12)
-                            .padding(.horizontal)
-                            .background(Color(UIColor.secondarySystemGroupedBackground))
-                            .cornerRadius(12)
-                        }
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-                        .padding(.bottom, 8)
-
-                        // Grouped Update Cards
-                        VStack(spacing: 0) {
-                            Button(action: {
-                                store.send(.showAvatarEditor, animation: .default)
-                            }) {
-                                HStack {
-                                    Text("Update Avatar")
-                                        .font(.body)
-                                        .foregroundColor(.primary)
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.vertical, 12)
-                                .padding(.horizontal)
-                            }
-                            Divider().padding(.leading)
-                            Button(action: {
-                                store.send(.prepareEditName, animation: .default)
-                            }) {
-                                HStack {
-                                    Text("Update Name")
-                                        .font(.body)
-                                        .foregroundColor(.primary)
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.vertical, 12)
-                                .padding(.horizontal)
-                            }
-                        }
-                        .background(Color(UIColor.secondarySystemGroupedBackground))
-                        .cornerRadius(12)
-                        .padding(.horizontal)
-                        .padding(.bottom, 8)
-
-                        // Phone Number Setting Card
-                        Button(action: {
-                            store.send(.showPhoneNumberChange, animation: .default)
-                        }) {
-                            HStack {
-                                Text("Change Phone Number")
-                                    .font(.body)
-                                    .foregroundColor(.primary)
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 12)
-                            .padding(.horizontal)
-                            .background(Color(UIColor.secondarySystemGroupedBackground))
-                            .cornerRadius(12)
-                        }
-                        .padding(.horizontal)
-                        .padding(.bottom, 8)
-
-                        // Sign Out Setting Card
-                        Button(action: {
-                            store.send(.confirmSignOut, animation: .default)
-                        }) {
-                            Text("Sign Out")
-                                .font(.body)
-                                .foregroundColor(.red)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .padding(.horizontal)
-                                .background(Color(UIColor.secondarySystemGroupedBackground))
-                                .cornerRadius(12)
-                        }
-                        .padding(.horizontal)
-
-                        Spacer()
-                    } else {
+                if let user = store.currentUser {
+                    mainContent(user)
+                } else {
+                    VStack {
                         ProgressView()
                         Text("Loading profile...")
                             .font(.caption)
@@ -759,18 +780,43 @@ struct ProfileView: View {
                     }
                 }
             }
-            .background(Color(UIColor.systemGroupedBackground))
+        }
+    }
+}
+
+// MARK: - View Extensions
+extension View {
+    @ViewBuilder
+    fileprivate func setupSheets() -> some View {
+        self
+    }
+    
+    @ViewBuilder
+    fileprivate func setupAlerts() -> some View {
+        self
+    }
+    
+    @ViewBuilder
+    fileprivate func setupLifecycle() -> some View {
+        self
+    }
+}
+
+extension ProfileView {
+    @ViewBuilder
+    private func setupSheets() -> some View {
+        contentView
             .sheet(isPresented: $store.showEditDescriptionSheet) {
-                emergencyNoteSheetView
+                emergencyNoteSheetView()
             }
             .sheet(isPresented: $store.showEditNameSheet) {
-                nameEditSheetView
+                nameEditSheetView()
             }
             .sheet(isPresented: $store.showEditAvatarSheet) {
-                avatarEditSheetView
+                avatarEditSheetView()
             }
             .sheet(isPresented: $store.showPhoneNumberChangeSheet) {
-                phoneNumberChangeSheetView
+                phoneNumberChangeSheetView()
             }
             .sheet(isPresented: $store.showImagePicker) {
                 ImagePicker(sourceType: store.imagePickerSourceType, selectedImage: { image in
@@ -779,6 +825,11 @@ struct ProfileView: View {
                     }
                 })
             }
+    }
+    
+    @ViewBuilder
+    private func setupAlerts() -> some View {
+        setupSheets()
             .alert("Sign Out", isPresented: $store.showSignOutConfirmation) {
                 Button("Cancel", role: .cancel) { }
                 Button("Sign Out", role: .destructive) {
@@ -795,8 +846,12 @@ struct ProfileView: View {
             } message: {
                 Text("Are you sure you want to delete your avatar photo?")
             }
+    }
+    
+    @ViewBuilder
+    private func setupLifecycle() -> some View {
+        setupAlerts()
             .onAppear {
-                // Sync focus states
                 textEditorFocused = store.textEditorFocused
                 nameFieldFocused = store.nameFieldFocused
             }
@@ -824,12 +879,11 @@ struct ProfileView: View {
             .onChange(of: store.phoneVerificationCodeFieldFocused) { _, newValue in
                 phoneVerificationCodeFieldFocused = newValue
             }
-        }
     }
 
     // MARK: - Emergency Note Sheet View
     @ViewBuilder
-    private var emergencyNoteSheetView: some View {
+    private func emergencyNoteSheetView() -> some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -870,7 +924,7 @@ struct ProfileView: View {
 
     // MARK: - Name Edit Sheet View
     @ViewBuilder
-    private var nameEditSheetView: some View {
+    private func nameEditSheetView() -> some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -909,7 +963,7 @@ struct ProfileView: View {
 
     // MARK: - Avatar Edit Sheet View
     @ViewBuilder
-    private var avatarEditSheetView: some View {
+    private func avatarEditSheetView() -> some View {
         VStack(spacing: 20) {
             Text("Avatar")
                 .font(.headline.bold())
@@ -957,7 +1011,7 @@ struct ProfileView: View {
     
     // MARK: - Phone Number Change Sheet View
     @ViewBuilder
-    private var phoneNumberChangeSheetView: some View {
+    private func phoneNumberChangeSheetView() -> some View {
         NavigationStack {
             ZStack {
                 // Background that fills the entire view
@@ -968,9 +1022,9 @@ struct ProfileView: View {
                     VStack {
                         // Main content container
                         if !store.isPhoneVerificationStep {
-                            phoneNumberEntryView
+                            phoneNumberEntryView()
                         } else {
-                            phoneVerificationView
+                            phoneVerificationView()
                         }
 
                         Spacer(minLength: 0)
@@ -996,7 +1050,7 @@ struct ProfileView: View {
     }
     
     @ViewBuilder
-    private var phoneNumberEntryView: some View {
+    private func phoneNumberEntryView() -> some View {
         // Initial phone number change view
         VStack(alignment: .leading, spacing: 16) {
             Text("Current Phone Number")
@@ -1052,25 +1106,19 @@ struct ProfileView: View {
                 .foregroundColor(.secondary)
                 .padding(.horizontal, 4)
 
-            if let errorMessage = store.errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundColor(.red)
-                    .padding(.horizontal, 4)
-            }
 
             Button(action: {
                 store.send(.sendPhoneVerificationCode, animation: .default)
             }) {
-                Text(store.isLoading ? "Sending..." : "Send Verification Code")
+                Text("Send Verification Code")
                     .font(.headline)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(store.isLoading || !store.isPhoneNumberValid ? Color.gray : Color.blue)
+                    .background(!store.isPhoneNumberValid ? Color.gray : Color.blue)
                     .cornerRadius(10)
             }
-            .disabled(store.isLoading || !store.isPhoneNumberValid)
+            .disabled(!store.isPhoneNumberValid)
             .padding(.top, 16)
         }
         .padding(.horizontal)
@@ -1078,7 +1126,7 @@ struct ProfileView: View {
     }
     
     @ViewBuilder
-    private var phoneVerificationView: some View {
+    private func phoneVerificationView() -> some View {
         // Verification code view
         VStack(alignment: .leading, spacing: 16) {
             Text("Verification Code")
@@ -1105,15 +1153,15 @@ struct ProfileView: View {
             Button(action: {
                 store.send(.verifyPhoneNumber, animation: .default)
             }) {
-                Text(store.isLoading ? "Verifying..." : "Verify Code")
+                Text("Verify Code")
                     .font(.headline)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(store.isLoading || !store.isVerificationCodeValid ? Color.gray : Color.blue)
+                    .background(!store.isVerificationCodeValid ? Color.gray : Color.blue)
                     .cornerRadius(10)
             }
-            .disabled(store.isLoading || !store.isVerificationCodeValid)
+            .disabled(!store.isVerificationCodeValid)
             .padding(.top, 16)
         }
         .padding(.horizontal)

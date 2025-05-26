@@ -23,7 +23,6 @@ struct RespondersFeature {
         @Shared(.currentUser) var currentUser: User? = nil
         
         var isLoading = false
-        var errorMessage: String?
         
         // Add presentations
         @Presents var contactDetails: ContactDetailsSheetFeature.State?
@@ -126,7 +125,41 @@ struct RespondersFeature {
         func responderActivityStatus(for contact: Contact) -> (String, Color) {
             let now = Date()
 
-            // Check for pings first (most relevant for responders)
+            // Check for emergency alerts first (highest priority)
+            if contact.hasManualAlertActive {
+                if let alertTime = contact.emergencyAlertTimestamp {
+                    let timeSinceAlert = now.timeIntervalSince(alertTime)
+                    if timeSinceAlert < 300 { // 5 minutes
+                        return ("🚨 Has Alert (Just Now)", .red)
+                    } else if timeSinceAlert < 3600 { // 1 hour
+                        let minutes = Int(timeSinceAlert / 60)
+                        return ("🚨 Has Alert (\(minutes)m ago)", .red)
+                    } else {
+                        return ("🚨 Has Alert", .red)
+                    }
+                } else {
+                    return ("🚨 Has Alert", .red)
+                }
+            }
+
+            // Check for non-responsive alerts
+            if contact.hasNotResponsiveAlert {
+                if let alertTime = contact.notResponsiveAlertTimestamp {
+                    let timeSinceAlert = now.timeIntervalSince(alertTime)
+                    if timeSinceAlert < 300 { // 5 minutes
+                        return ("❌ Not Responsive (Just Now)", .red)
+                    } else if timeSinceAlert < 3600 { // 1 hour
+                        let minutes = Int(timeSinceAlert / 60)
+                        return ("❌ Not Responsive (\(minutes)m ago)", .red)
+                    } else {
+                        return ("❌ Not Responsive", .red)
+                    }
+                } else {
+                    return ("❌ Not Responsive", .red)
+                }
+            }
+
+            // Check for pings (relevant for responders)
             if contact.hasIncomingPing {
                 if let pingTime = contact.incomingPingTimestamp {
                     let timeSincePing = now.timeIntervalSince(pingTime)
@@ -157,23 +190,6 @@ struct RespondersFeature {
                 }
             }
 
-            // Check for manual alerts (responders might have their own alerts)
-            if contact.manualAlertActive {
-                if let alertTime = contact.manualAlertTimestamp {
-                    let timeSinceAlert = now.timeIntervalSince(alertTime)
-                    if timeSinceAlert < 300 { // 5 minutes
-                        return ("🚨 Has Alert (Just Now)", .red)
-                    } else if timeSinceAlert < 3600 { // 1 hour
-                        let minutes = Int(timeSinceAlert / 60)
-                        return ("🚨 Has Alert (\(minutes)m ago)", .red)
-                    } else {
-                        return ("🚨 Has Alert", .red)
-                    }
-                } else {
-                    return ("🚨 Has Alert", .red)
-                }
-            }
-
             // Default state for responders
             return ("✅ Available", .green)
         }
@@ -197,10 +213,11 @@ struct RespondersFeature {
         // Network responses
         case pingResponse(Result<Void, Error>)
         case removeResponse(Result<Void, Error>)
-        case refreshResponse(Result<[Contact], Error>)
+        case refreshResponse(Result<Void, Error>)
     }
 
     @Dependency(\.contactsClient) var contactsClient
+    @Dependency(\.notificationClient) var notificationClient
     @Dependency(\.hapticClient) var haptics
 
     var body: some ReducerOf<Self> {
@@ -210,13 +227,11 @@ struct RespondersFeature {
             case .refreshResponders:
                 guard state.currentUser != nil else { return .none }
                 state.isLoading = true
-                state.errorMessage = nil
 
-                return .run { send in
-                    let result = await Result {
-                        try await contactsClient.getContacts()
-                    }
-                    await send(.refreshResponse(result))
+                return .run { [contactsClient] send in
+                    await send(.refreshResponse(Result {
+                        try await contactsClient.refreshContacts()
+                    }))
                 }
 
             // Contact interactions
@@ -226,13 +241,18 @@ struct RespondersFeature {
 
             case let .pingContact(contact):
                 state.isLoading = true
-                state.errorMessage = nil
+                let senderName = state.currentUser?.name ?? "Someone"
 
                 return .run { send in
                     await haptics.notification(.warning)
                     await send(.pingResponse(Result {
-                        // In production, this would send a ping/notification to the responder
-                        try await Task.sleep(for: .milliseconds(1000))
+                        // Send ping notification to responder via NotificationClient
+                        try await notificationClient.sendPingNotification(
+                            .receiveResponderPing,
+                            "You Received a Ping", 
+                            "\(senderName) sent you a check-in ping",
+                            contact.id
+                        )
                     }))
                 }
 
@@ -277,7 +297,6 @@ struct RespondersFeature {
 
             case .confirmationAlert(.presented(.confirmRemove(let contact))):
                 state.isLoading = true
-                state.errorMessage = nil
 
                 return .run { send in
                     await haptics.notification(.success)
@@ -288,13 +307,20 @@ struct RespondersFeature {
 
             case .confirmationAlert(.presented(.confirmRespondAll)):
                 state.isLoading = true
-                state.errorMessage = nil
 
                 return .run { [pendingPingsCount = state.pendingPingsCount] send in
                     await haptics.notification(.success)
                     await send(.pingResponse(Result {
-                        // In production, this would respond to all pending pings
-                        try await Task.sleep(for: .milliseconds(1500))
+                        // Send response to all pending pings via NotificationClient
+                        try await notificationClient.sendPingNotification(
+                            .sendResponderPingResponded,
+                            "Responded to All Pings",
+                            "You responded to \(pendingPingsCount) pending ping\(pendingPingsCount == 1 ? "" : "s")",
+                            UUID() // Broadcast to all relevant contacts
+                        )
+                        
+                        // Clear all received pings
+                        try await notificationClient.clearAllReceivedPings()
                     }))
                 }
 
@@ -310,8 +336,14 @@ struct RespondersFeature {
 
             case let .pingResponse(.failure(error)):
                 state.isLoading = false
-                state.errorMessage = error.localizedDescription
-                return .none
+                return .run { _ in
+                    let notification = NotificationItem(
+                        title: "Ping Failed",
+                        message: "Unable to send ping: \(error.localizedDescription)",
+                        type: .receiveSystemNotification
+                    )
+                    try? await notificationClient.sendNotification(notification)
+                }
 
             case .removeResponse(.success):
                 state.isLoading = false
@@ -321,19 +353,29 @@ struct RespondersFeature {
 
             case let .removeResponse(.failure(error)):
                 state.isLoading = false
-                state.errorMessage = error.localizedDescription
-                return .none
+                return .run { _ in
+                    let notification = NotificationItem(
+                        title: "Remove Failed",
+                        message: "Unable to remove responder: \(error.localizedDescription)",
+                        type: .receiveSystemNotification
+                    )
+                    try? await notificationClient.sendNotification(notification)
+                }
 
-            case let .refreshResponse(.success(contacts)):
+            case .refreshResponse(.success):
                 state.isLoading = false
-                state.errorMessage = nil
-                state.$allContacts.withLock { $0 = contacts }
                 return .none
 
             case let .refreshResponse(.failure(error)):
                 state.isLoading = false
-                state.errorMessage = error.localizedDescription
-                return .none
+                return .run { _ in
+                    let notification = NotificationItem(
+                        title: "Refresh Failed",
+                        message: "Unable to refresh responders: \(error.localizedDescription)",
+                        type: .receiveSystemNotification
+                    )
+                    try? await notificationClient.sendNotification(notification)
+                }
             }
         }
         .ifLet(\.$contactDetails, action: \.contactDetails) {
@@ -458,6 +500,7 @@ struct ResponderCardView: View {
         }
         .padding() // This padding is inside the card
         .background(
+            contact.hasManualAlertActive || contact.hasNotResponsiveAlert ? Color.red.opacity(0.1) :
             contact.hasIncomingPing ? Color.blue.opacity(0.1) : Color(UIColor.secondarySystemGroupedBackground)
         )
         .cornerRadius(12)

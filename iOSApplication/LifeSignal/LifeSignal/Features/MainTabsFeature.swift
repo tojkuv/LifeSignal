@@ -7,26 +7,32 @@ struct MainTabsFeature: Sendable {
     struct State: Equatable {
         @Shared(.currentUser) var currentUser: User? = nil
         @Shared(.contacts) var contacts: [Contact] = []
-        @Shared(.isOnline) var isOnline: Bool = true
-        @Shared(.offlineQueue) var offlineQueue: [OfflineAction] = []
+        @Shared(.isNetworkConnected) var isOnline: Bool = true
         
         var selectedTab: Tab = .home
         var isAlertActive: Bool = false
         var pendingPingsCount: Int = 0
         var nonResponsiveDependentsCount: Int = 0
 
-        var home = HomeFeature.State()
-        var responders = RespondersFeature.State()
-        var checkIn = CheckInFeature.State()
-        var dependents = DependentsFeature.State()
-        var profile = ProfileFeature.State()
+        var home: HomeFeature.State
+        var responders: RespondersFeature.State
+        var checkIn: CheckInFeature.State
+        var dependents: DependentsFeature.State
+        var profile: ProfileFeature.State
+
+        init() {
+            self.home = HomeFeature.State()
+            self.responders = RespondersFeature.State()
+            self.checkIn = CheckInFeature.State()
+            self.dependents = DependentsFeature.State()
+            self.profile = ProfileFeature.State()
+        }
 
         var isLoggedIn: Bool { currentUser != nil }
-        var offlineQueueCount: Int { offlineQueue.count }
 
         // Computed properties for tab badges
         var alertingContactsCount: Int {
-            contacts.filter { $0.manualAlertActive }.count
+            contacts.filter { $0.hasManualAlertActive }.count
         }
 
         var respondersCount: Int {
@@ -39,7 +45,7 @@ struct MainTabsFeature: Sendable {
 
         var activeAlertsCount: Int {
             contacts.filter { contact in
-                contact.manualAlertActive || contact.hasIncomingPing || contact.hasOutgoingPing
+                contact.hasManualAlertActive || contact.hasIncomingPing || contact.hasOutgoingPing
             }.count
         }
 
@@ -81,7 +87,7 @@ struct MainTabsFeature: Sendable {
         case updatePendingPingsCount(Int)
         case updateNonResponsiveDependentsCount(Int)
         case refreshContacts
-        case contactsRefreshed(Result<[Contact], Error>)
+        case contactsRefreshed(Result<Void, Error>)
 
         case home(HomeFeature.Action)
         case responders(RespondersFeature.Action)
@@ -91,7 +97,7 @@ struct MainTabsFeature: Sendable {
     }
 
     @Dependency(\.hapticClient) var haptics
-    @Dependency(\.contactRepository) var contactRepository
+    @Dependency(\.contactsClient) var contactsClient
 
     init() {}
 
@@ -153,15 +159,13 @@ struct MainTabsFeature: Sendable {
                 return .none
 
             case .refreshContacts:
-                return .run { [contacts = state.$contacts] send in
+                return .run { [contactsClient] send in
                     await send(.contactsRefreshed(Result {
-                        let refreshedContacts = try await contactRepository.getContacts()
-                        contacts.withLock { $0 = refreshedContacts }
-                        return refreshedContacts
+                        try await contactsClient.refreshContacts()
                     }))
                 }
 
-            case let .contactsRefreshed(.success(contacts)):
+            case .contactsRefreshed(.success):
                 return .none
 
             case let .contactsRefreshed(.failure(error)):

@@ -3,6 +3,7 @@ import ComposableArchitecture
 import Dependencies
 import DependenciesMacros
 import UserNotifications
+import Network
 @_exported import Sharing
 
 // MARK: - Session Shared State
@@ -64,6 +65,7 @@ extension SharedReaderKey where Self == InMemoryKey<Bool>.Default {
         Self[.inMemory("isNetworkConnected"), default: true]
     }
 }
+
 
 extension SharedReaderKey where Self == InMemoryKey<Date?>.Default {
     static var lastNetworkCheck: Self {
@@ -410,6 +412,11 @@ struct SessionClient {
     /// Stops all real-time streams
     var stopAllStreams: @Sendable () async throws -> Void = { }
     
+    // MARK: - Debug Methods
+    
+    /// DEBUG ONLY: Creates a mock authenticated session with sample user data, bypassing sign-in and onboarding
+    var debugSkipAuthenticationAndOnboarding: @Sendable () async throws -> Void = { }
+    
 }
 
 extension SessionClient: DependencyKey {
@@ -448,7 +455,6 @@ extension SessionClient: DependencyKey {
                 // Load current user data via UserClient
                 @Dependency(\.userClient) var userClient
                 let loadedUser = try await userClient.getUser()
-                $currentUser.withLock { $0 = loadedUser }
                 
                 // If user doesn't exist, session becomes unauthenticated
                 if currentUser == nil {
@@ -496,7 +502,7 @@ extension SessionClient: DependencyKey {
                 // Delete user data via UserClient
                 @Dependency(\.userClient) var userClient
                 if let user = currentUser {
-                    try await userClient.deleteUser(id: user.id)
+                    try await userClient.deleteUser(user.id)
                 }
                 
                 // Sign out from auth service
@@ -566,7 +572,7 @@ extension SessionClient: DependencyKey {
                 @Dependency(\.userClient) var userClient
                 do {
                     let loadedUser = try await userClient.getUser()
-                    $currentUser.withLock { $0 = loadedUser }
+                    // UserClient handles shared state updates
                 } catch {
                     // User doesn't exist - this is expected for new phone users
                     // Keep auth state for user creation flow
@@ -615,10 +621,9 @@ extension SessionClient: DependencyKey {
             user.emergencyNote = emergencyNote
             user.lastModified = Date()
             
-            // Update user via UserClient
+            // Update user via UserClient - it handles shared state updates
             @Dependency(\.userClient) var userClient
-            let updatedUser = try await userClient.updateUser(user)
-            $currentUser.withLock { $0 = updatedUser }
+            try await userClient.updateUser(user)
         },
         
         completeOnboarding: {
@@ -629,7 +634,8 @@ extension SessionClient: DependencyKey {
         sendPhoneChangeVerificationCode: { newPhoneNumber in
             // Mock: Simulate sending verification code to new phone number
             try await Task.sleep(for: .seconds(1))
-            return "mock_phone_change_verification_id_\(UUID().uuidString)"
+            // Encode phone number in verification ID for mock implementation
+            return "mock_phone_change_verification_id_\(newPhoneNumber)_\(UUID().uuidString)"
         },
         
         changePhoneNumber: { verificationID, verificationCode in
@@ -649,21 +655,22 @@ extension SessionClient: DependencyKey {
             try await Task.sleep(for: .seconds(1))
             
             // Validate verification code (mock validation)
-            guard verificationCode == "123456" else {
+            guard verificationCode.filter({ $0.isNumber }).count == 6 else {
                 throw SessionClientError.authenticationFailed
             }
             
-            // Mock: Extract new phone number from verification ID (in real implementation, would come from auth result)
-            let newPhoneNumber = "+1234567890" // Mock new phone number
+            // Extract new phone number from verification ID (mock implementation)
+            // In real implementation, this would come from the Firebase auth result
+            // For now, extract from verification ID which contains the phone number
+            let newPhoneNumber = Self.extractPhoneNumberFromVerificationID(verificationID)
             
             // Update user's phone number in the user profile
             user.phoneNumber = newPhoneNumber
             user.lastModified = Date()
             
-            // Update user via UserClient
+            // Update user via UserClient - it handles shared state updates
             @Dependency(\.userClient) var userClient
-            let updatedUser = try await userClient.updateUser(user)
-            $currentUser.withLock { $0 = updatedUser }
+            try await userClient.updateUser(user)
             
             // Mock: Update internal auth state with new phone number
             @Shared(.internalAuthUser) var internalAuthUser
@@ -709,41 +716,31 @@ extension SessionClient: DependencyKey {
             @Shared(.isNetworkConnected) var isConnected
             @Shared(.lastNetworkCheck) var lastCheck
             $isConnected.withLock { $0 = connected }
-            $lastNetworkCheck.withLock { $0 = Date() }
+            $lastCheck.withLock { $0 = Date() }
         },
         
         monitorConnectivity: {
             AsyncStream { continuation in
-                let task = Task {
-                    @Shared(.isNetworkConnected) var isConnected
-                    var lastStatus = isConnected
+                let monitor = NWPathMonitor()
+                let queue = DispatchQueue(label: "NetworkMonitor")
+                
+                monitor.pathUpdateHandler = { path in
+                    let isConnected = path.status == .satisfied
+                    continuation.yield(isConnected)
                     
-                    // Yield initial status
-                    continuation.yield(lastStatus)
-                    
-                    while !Task.isCancelled {
-                        try await Task.sleep(for: .seconds(2))
-                        
-                        // Check for status changes
-                        let currentStatus = isConnected
-                        if currentStatus != lastStatus {
-                            continuation.yield(currentStatus)
-                            lastStatus = currentStatus
-                        }
-                        
-                        // Mock: Simulate occasional connectivity changes
-                        if Int.random(in: 1...20) == 1 {
-                            @Shared(.isNetworkConnected) var networkConnected
-                            $networkConnected.withLock { $0.toggle() }
-                            @Shared(.lastNetworkCheck) var lastCheck
-                            $lastCheck.withLock { $0 = Date() }
-                        }
+                    // Update shared state
+                    Task {
+                        @Shared(.isNetworkConnected) var networkConnected
+                        @Shared(.lastNetworkCheck) var lastCheck
+                        $networkConnected.withLock { $0 = isConnected }
+                        $lastCheck.withLock { $0 = Date() }
                     }
-                    continuation.finish()
                 }
                 
+                monitor.start(queue: queue)
+                
                 continuation.onTermination = { _ in
-                    task.cancel()
+                    monitor.cancel()
                 }
             }
         },
@@ -754,8 +751,24 @@ extension SessionClient: DependencyKey {
         },
         
         checkConnectivity: {
-            @Shared(.isNetworkConnected) var isConnected
-            return isConnected
+            await withCheckedContinuation { continuation in
+                let monitor = NWPathMonitor()
+                let queue = DispatchQueue(label: "ConnectivityCheck")
+                
+                monitor.pathUpdateHandler = { path in
+                    let isConnected = path.status == .satisfied
+                    monitor.cancel()
+                    continuation.resume(returning: isConnected)
+                }
+                
+                monitor.start(queue: queue)
+                
+                // Timeout after 3 seconds
+                DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+                    monitor.cancel()
+                    continuation.resume(returning: false)
+                }
+            }
         },
         
         // Stream management
@@ -772,6 +785,68 @@ extension SessionClient: DependencyKey {
             try await notificationClient.stopListening()
             
             // Other streams will be cancelled when their Tasks are cancelled
+        },
+        
+        // Debug method
+        debugSkipAuthenticationAndOnboarding: {
+            @Shared(.sessionState) var sessionState
+            @Shared(.authenticationToken) var authToken
+            @Shared(.currentUser) var currentUser
+            @Shared(.needsOnboarding) var needsOnboarding
+            @Shared(.internalAuthUID) var internalAuthUID
+            @Shared(.internalIdToken) var internalIdToken
+            @Shared(.internalRefreshToken) var internalRefreshToken
+            @Shared(.internalTokenExpiry) var tokenExpiry
+            @Shared(.internalAuthUser) var internalAuthUser
+            
+            // Create mock auth user
+            let mockAuthUser = InternalAuthUser(
+                uid: "debug_mock_uid_\(UUID().uuidString)",
+                phoneNumber: "+1234567890",
+                displayName: "Debug User",
+                creationDate: Date().addingTimeInterval(-86400), // 1 day ago
+                lastSignInDate: Date()
+            )
+            
+            // Set internal auth state
+            let mockIdToken = "debug_mock_id_token_\(UUID().uuidString)"
+            let mockRefreshToken = "debug_mock_refresh_token_\(UUID().uuidString)"
+            let mockExpiry = Date().addingTimeInterval(3600) // 1 hour from now
+            
+            $internalAuthUID.withLock { $0 = mockAuthUser.uid }
+            $internalIdToken.withLock { $0 = mockIdToken }
+            $internalRefreshToken.withLock { $0 = mockRefreshToken }
+            $tokenExpiry.withLock { $0 = mockExpiry }
+            $internalAuthUser.withLock { $0 = mockAuthUser }
+            $authToken.withLock { $0 = mockIdToken }
+            
+            // Create mock user via UserClient
+            @Dependency(\.userClient) var userClient
+            
+            try await userClient.createUser(
+                mockAuthUser.uid,        // firebaseUID
+                "Debug User",            // name  
+                "+1234567890",          // phoneNumber
+                "US"                    // phoneRegion
+            )
+            
+            // Set up a realistic last check-in time for debug mode
+            if var user = currentUser {
+                user.lastCheckedIn = Date().addingTimeInterval(-3600) // 1 hour ago
+                user.lastModified = Date()
+                try await userClient.updateUser(user)
+            }
+            
+            // Mark onboarding as completed
+            $needsOnboarding.withLock { $0 = false }
+            
+            // Initialize NotificationClient and start streams
+            @Dependency(\.notificationClient) var notificationClient
+            try await notificationClient.initialize()
+            try await notificationClient.startListening()
+            
+            // Set authenticated state
+            $sessionState.withLock { $0 = .authenticated }
         }
     )
 }
@@ -780,7 +855,7 @@ extension SessionClient: DependencyKey {
 
 extension SessionClient {
     /// Mock delay configurations for consistent testing behavior
-    private enum MockDelays {
+    enum MockDelays {
         static let authVerification: Duration = .milliseconds(800)
         static let phoneVerification: Duration = .seconds(1)
         static let tokenRefresh: Duration = .milliseconds(300)
@@ -798,10 +873,9 @@ extension SessionClient {
         // NotificationClient streams will be stopped via the client methods
         // Connectivity monitoring streams are managed by their respective consumers
         // Contact streams are managed per-feature basis
-        
         // This method provides a centralized way to ensure all streams are stopped
         // Additional stream cleanup can be added here as needed
-    }
+        }
     
     /// Clears all authentication and user-related state from shared storage
     static func clearAllUserState() {
@@ -999,6 +1073,21 @@ extension SessionClient {
         } else {
             return ""
         }
+    }
+    
+    // MARK: - Phone Number Change Helpers
+    
+    /// Extracts phone number from mock verification ID 
+    private static func extractPhoneNumberFromVerificationID(_ verificationID: String) -> String {
+        // Mock implementation: extract phone number from verification ID
+        let components = verificationID.components(separatedBy: "_")
+        if components.count >= 6 && components[0] == "mock" && components[1] == "phone" {
+            // Format: "mock_phone_change_verification_id_{phoneNumber}_{uuid}"
+            let phoneNumber = components[5]
+            return phoneNumber
+        }
+        // Fallback for any malformed verification IDs
+        return "+1234567890"
     }
 }
 

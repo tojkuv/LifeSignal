@@ -16,13 +16,12 @@ struct SignInFeature {
         var phoneNumber = ""
         var verificationCode = ""
         var verificationID: String? = nil
-        var isLoading = false
-        var errorMessage: String?
         var showPhoneEntry = true
         var selectedRegion = "US"
         var showRegionPicker = false
         var phoneNumberFieldFocused = false
         var verificationCodeFieldFocused = false
+        var isLoading = false
         
         // Available regions
         static let regions: [(String, String)] = [
@@ -74,9 +73,13 @@ struct SignInFeature {
         // Authentication actions
         case signOut
         
+        // Debug actions
+        case debugSkipSignInAndOnboarding
+        
         // Internal actions
         case verificationCodeSent(Result<String, Error>)
         case sessionStartResult(Result<Void, Error>)
+        case debugSessionResult(Result<Void, Error>)
     }
 
     @Dependency(\.sessionClient) var sessionClient
@@ -91,7 +94,6 @@ struct SignInFeature {
                 return .none
 
             case .clearError:
-                state.errorMessage = nil
                 return .none
                 
             case .focusPhoneNumberField:
@@ -113,12 +115,10 @@ struct SignInFeature {
                 
             case .sendVerificationCode:
                 guard !state.phoneNumber.isEmpty else {
-                    state.errorMessage = "Please enter a phone number"
                     return .none
                 }
                 
                 state.isLoading = true
-                state.errorMessage = nil
                 
                 return .run { [phoneNumber = state.phoneNumber] send in
                     await send(.verificationCodeSent(
@@ -134,17 +134,14 @@ struct SignInFeature {
                 
             case .verifyCode:
                 guard !state.verificationCode.isEmpty else {
-                    state.errorMessage = "Please enter the verification code"
                     return .none
                 }
                 
                 guard let verificationID = state.verificationID else {
-                    state.errorMessage = "Verification session expired. Please try again."
                     return .none
                 }
                 
                 state.isLoading = true
-                state.errorMessage = nil
                 
                 return .run { [verificationID = verificationID, code = state.verificationCode] send in
                     await send(.sessionStartResult(
@@ -158,12 +155,10 @@ struct SignInFeature {
                 state.showPhoneEntry = true
                 state.verificationCode = ""
                 state.verificationID = nil
-                state.errorMessage = nil
                 return .none
 
                 
             case .signOut:
-                state.isLoading = true
                 return .run { send in
                     do {
                         try await sessionClient.endSession()
@@ -171,7 +166,17 @@ struct SignInFeature {
                     } catch {
                         // Handle error silently, session cleanup should still happen
                     }
-                    await send(.binding(.set(\.isLoading, false)))
+                    // Session cleanup completed
+                }
+                
+            case .debugSkipSignInAndOnboarding:
+                state.isLoading = true
+                return .run { send in
+                    await send(.debugSessionResult(
+                        Result {
+                            try await sessionClient.debugSkipAuthenticationAndOnboarding()
+                        }
+                    ))
                 }
                 
             case let .verificationCodeSent(.success(verificationID)):
@@ -183,21 +188,30 @@ struct SignInFeature {
                 
             case let .verificationCodeSent(.failure(error)):
                 state.isLoading = false
-                state.errorMessage = error.localizedDescription
                 return .run { send in
                     await haptics.notification(.error)
                 }
                 
             case let .sessionStartResult(.success):
                 state.isLoading = false
-                state.errorMessage = nil
                 return .run { send in
                     await haptics.notification(.success)
                 }
                 
             case let .sessionStartResult(.failure(error)):
                 state.isLoading = false
-                state.errorMessage = error.localizedDescription
+                return .run { send in
+                    await haptics.notification(.error)
+                }
+                
+            case let .debugSessionResult(.success):
+                state.isLoading = false
+                return .run { send in
+                    await haptics.notification(.success)
+                }
+                
+            case let .debugSessionResult(.failure(error)):
+                state.isLoading = false
                 return .run { send in
                     await haptics.notification(.error)
                 }
@@ -220,20 +234,13 @@ struct SignInView: View {
             NavigationStack {
                 VStack {
                     if store.showPhoneEntry {
-                        phoneEntryView
+                        phoneEntryView()
                     } else {
-                        verificationView
+                        verificationView()
                     }
                 }
                 .padding()
                 .navigationTitle("Sign In")
-                .alert("Error", isPresented: .constant(store.errorMessage != nil)) {
-                    Button("OK") {
-                        store.send(.clearError)
-                    }
-                } message: {
-                    Text(store.errorMessage ?? "")
-                }
                 .onAppear {
                     store.send(.focusPhoneNumberField)
                 }
@@ -249,7 +256,7 @@ struct SignInView: View {
     }
 
     @ViewBuilder
-    private var phoneEntryView: some View {
+    private func phoneEntryView() -> some View {
         VStack(spacing: 24) {
             // App logo placeholder
             ZStack {
@@ -265,17 +272,21 @@ struct SignInView: View {
             }
             .padding(.top, 40)
 
-            // Debug button under the logo
+            // Debug button (only shown in debug builds)
             #if DEBUG
             Button(action: {
-                store.send(.skipAuthentication, animation: .default)
+                store.send(.debugSkipSignInAndOnboarding, animation: .default)
             }) {
-                Text("Debug: Skip to Home")
+                Text("🚀 DEBUG: Skip Sign In & Onboarding")
                     .font(.caption)
-                    .padding(8)
-                    .background(Color.blue.opacity(0.2))
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.1))
                     .cornerRadius(8)
             }
+            .disabled(store.isLoading)
+            .padding(.horizontal)
             #endif
 
             Text("Enter your phone number")
@@ -365,7 +376,7 @@ struct SignInView: View {
     }
 
     @ViewBuilder
-    private var verificationView: some View {
+    private func verificationView() -> some View {
         VStack(spacing: 24) {
             // App logo placeholder
             ZStack {
@@ -381,18 +392,6 @@ struct SignInView: View {
             }
             .padding(.top, 40)
 
-            // Debug button under the logo
-            #if DEBUG
-            Button(action: {
-                store.send(.skipAuthentication, animation: .default)
-            }) {
-                Text("Debug: Skip to Home")
-                    .font(.caption)
-                    .padding(8)
-                    .background(Color.blue.opacity(0.2))
-                    .cornerRadius(8)
-            }
-            #endif
 
             Text("Enter verification code")
                 .font(.title2)

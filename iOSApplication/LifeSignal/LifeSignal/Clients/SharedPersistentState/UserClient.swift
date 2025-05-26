@@ -175,7 +175,7 @@ final class MockUserService: UserServiceProtocol {
             phoneRegion: request.phoneRegion,
             emergencyNote: "",
             checkInInterval: 86400,
-            lastCheckedIn: nil,
+            lastCheckedIn: Int64(Date().timeIntervalSince1970),
             notificationPreference: request.notificationPreference,
             isEmergencyAlertEnabled: request.isEmergencyAlertEnabled,
             emergencyAlertTimestamp: nil,
@@ -357,7 +357,7 @@ struct QRImageWithMetadata: Codable {
     let metadata: ImageMetadata
 }
 
-struct AvatarImageWithMetadata: Codable {
+struct AvatarImageWithMetadata: Codable, Equatable {
     let image: Data
     let metadata: ImageMetadata
 }
@@ -420,6 +420,7 @@ enum UserClientError: Error, LocalizedError {
     case operationFailed
     case networkError
     case qrCodeGenerationFailed
+    case authenticationFailed(String)
     
     var errorDescription: String? {
         switch self {
@@ -431,6 +432,8 @@ enum UserClientError: Error, LocalizedError {
             return "Network error"
         case .qrCodeGenerationFailed:
             return "QR code generation failed"
+        case .authenticationFailed(let message):
+            return "Authentication failed: \(message)"
         }
     }
 }
@@ -626,6 +629,8 @@ struct UserClient {
     
     // QR Code operations
     var resetQRCode: @Sendable () async throws -> Void = { throw UserClientError.operationFailed }
+    var updateQRCodeImages: @Sendable () async -> Void = { }
+    var clearQRCodeImages: @Sendable () async -> Void = { }
 }
 
 extension UserClient: DependencyKey {
@@ -665,7 +670,9 @@ extension UserClient: DependencyKey {
             if let avatarURL = user.avatarURL {
                 Task {
                     do {
-                        let imageData = try await Self.mockValue.downloadAvatarData(avatarURL)
+                        // Mock avatar download simulation
+                        try await Task.sleep(for: .milliseconds(500))
+                        let imageData = Data() // Mock image data
                         let metadata = ImageMetadata(avatarURL: avatarURL)
                         @Shared(.userAvatarImage) var avatarImage
                         $avatarImage.withLock { 
@@ -809,7 +816,7 @@ extension UserClient: DependencyKey {
             user.lastModified = Date()
             
             // Update user profile via gRPC to sync new QR ID with server
-            let authToken = try await Self.getAuthenticationToken()
+            let authInfo = try await Self.getAuthenticatedUserInfo()
             let service = MockUserService()
             let request = UpdateUserRequest(
                 id: user.id,
@@ -834,8 +841,21 @@ extension UserClient: DependencyKey {
             
             // Update shared state with new user data and fresh QR images
             $currentUser.withLock { $0 = updatedUser }
+        },
+        
+        updateQRCodeImages: {
+            @Shared(.currentUser) var currentUser
+            guard let user = currentUser else { return }
+            user.generateAndCacheQRCodeImages()
+        },
+        
+        clearQRCodeImages: {
+            @Shared(.userQRCodeImage) var qrCodeImage
+            @Shared(.userShareableQRCodeImage) var shareableQRCodeImage
             
-}
+            $qrCodeImage.withLock { $0 = nil }
+            $shareableQRCodeImage.withLock { $0 = nil }
+        }
     )
 }
 

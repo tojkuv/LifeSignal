@@ -8,6 +8,7 @@ import AVFoundation
 struct CameraClient {
     var requestPermission: @Sendable () async -> AVAuthorizationStatus = { .notDetermined }
     var checkPermission: @Sendable () async -> AVAuthorizationStatus = { .notDetermined }
+    var getRecentPhotos: @Sendable () async -> [UIImage] = { [] }
 }
 
 extension CameraClient: DependencyKey {
@@ -22,12 +23,18 @@ extension CameraClient: DependencyKey {
         },
         checkPermission: {
             AVCaptureDevice.authorizationStatus(for: .video)
+        },
+        getRecentPhotos: {
+            // Mock implementation - returns empty array
+            // In a real implementation, this would access Photos library
+            return []
         }
     )
 
     static let testValue = CameraClient(
         requestPermission: { .authorized },
-        checkPermission: { .authorized }
+        checkPermission: { .authorized },
+        getRecentPhotos: { [] }
     )
 }
 

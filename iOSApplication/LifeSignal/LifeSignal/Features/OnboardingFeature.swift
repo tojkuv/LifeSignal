@@ -12,9 +12,6 @@ struct OnboardingFeature {
         @Shared(.currentUser) var currentUser: User? = nil
 
         var currentStep = 0
-        var isLoading = false
-        var errorMessage: String?
-        var showError = false
         var showInstructions = false
         
         // Name entry fields
@@ -26,6 +23,7 @@ struct OnboardingFeature {
         var firstNameFieldFocused = false
         var lastNameFieldFocused = false
         var noteFieldFocused = false
+        var isLoading = false
 
         var progress: Double {
             Double(currentStep) / 1.0  // 2 steps total (0 and 1)
@@ -83,9 +81,6 @@ struct OnboardingFeature {
 
             case .startOnboarding:
                 state.currentStep = 0
-                state.isLoading = false
-                state.errorMessage = nil
-                state.showError = false
                 state.firstName = ""
                 state.lastName = ""
                 state.emergencyNote = ""
@@ -98,7 +93,6 @@ struct OnboardingFeature {
                 guard state.areBothNamesFilled else { return .none }
                 
                 state.currentStep = 1
-                state.errorMessage = nil
 
                 return .run { _ in
                     await haptics.impact(.medium)
@@ -106,7 +100,6 @@ struct OnboardingFeature {
 
             case .previousStep:
                 state.currentStep = 0
-                state.errorMessage = nil
 
                 return .run { _ in
                     await haptics.impact(.medium)
@@ -114,7 +107,6 @@ struct OnboardingFeature {
 
             case .completeOnboarding:
                 state.isLoading = true
-                state.errorMessage = nil
                 
                 return .run { send in
                     await send(.createUserProfile)
@@ -137,9 +129,6 @@ struct OnboardingFeature {
                 }
 
             case let .userProfileCreated(.failure(error)):
-                state.isLoading = false
-                state.errorMessage = error.localizedDescription
-                state.showError = true
                 
                 return .run { _ in
                     await haptics.notification(.error)
@@ -205,12 +194,6 @@ struct OnboardingView: View {
                 .navigationTitle("Welcome to LifeSignal")
                 .navigationBarTitleDisplayMode(.inline)
                 .background(Color(UIColor.systemGroupedBackground))
-                .alert("Error", isPresented: $store.showError) {
-                    Button("OK") { }
-                } message: {
-                    Text(store.errorMessage ?? "")
-                }
-                .disabled(store.isLoading)
                 .onChange(of: store.firstNameFieldFocused) { _, newValue in
                     firstNameFieldFocused = newValue
                 }
