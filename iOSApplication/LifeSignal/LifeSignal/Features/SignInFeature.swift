@@ -2,18 +2,20 @@ import Foundation
 import SwiftUI
 import ComposableArchitecture
 import Perception
+@_exported import Sharing
 
 @Reducer 
 struct SignInFeature {
     @ObservableState
     struct State: Equatable {
         @Shared(.currentUser) var currentUser: User? = nil
-        @Shared(.isAuthenticated) var isAuthenticated: Bool = false
+        @Shared(.sessionState) var sessionState: SessionState = .unauthenticated
         @Shared(.needsOnboarding) var needsOnboarding: Bool = false
 
         // UI state
         var phoneNumber = ""
         var verificationCode = ""
+        var verificationID: String? = nil
         var isLoading = false
         var errorMessage: String?
         var showPhoneEntry = true
@@ -45,20 +47,12 @@ struct SignInFeature {
         }
         
         var isPhoneNumberValid: Bool {
-            // Allow development testing number
-            if phoneNumber == "+11234567890" {
-                return true
-            }
-            
-            // Count only digits
             let digitCount = phoneNumber.filter { $0.isNumber }.count
-            
-            // Check if we have a complete phone number (10 digits for all supported regions)
-            return digitCount == 10
+            return digitCount == 10 || phoneNumber == "+11234567890" // Allow dev testing
         }
         
         var isVerificationCodeValid: Bool {
-            !verificationCode.isEmpty
+            verificationCode.filter { $0.isNumber }.count == 6
         }
     }
 
@@ -78,17 +72,14 @@ struct SignInFeature {
         case changeToPhoneEntryView
         
         // Authentication actions
-        case skipAuthentication
-        case signInWithPhone(String)
-        case signInWithCredentials(String, String)
-        case signUpWithCredentials(String, String, String, String)
         case signOut
         
         // Internal actions
-        case authenticationResult(Result<User, Error>)
+        case verificationCodeSent(Result<String, Error>)
+        case sessionStartResult(Result<Void, Error>)
     }
 
-    @Dependency(\.authenticationClient) var authenticationClient
+    @Dependency(\.sessionClient) var sessionClient
     @Dependency(\.hapticClient) var haptics
 
     var body: some ReducerOf<Self> {
@@ -130,7 +121,11 @@ struct SignInFeature {
                 state.errorMessage = nil
                 
                 return .run { [phoneNumber = state.phoneNumber] send in
-                    await send(.signInWithPhone(phoneNumber))
+                    await send(.verificationCodeSent(
+                        Result {
+                            try await sessionClient.sendVerificationCode(phoneNumber)
+                        }
+                    ))
                 }
                 
             case let .handleVerificationCodeChange(newValue):
@@ -143,88 +138,70 @@ struct SignInFeature {
                     return .none
                 }
                 
+                guard let verificationID = state.verificationID else {
+                    state.errorMessage = "Verification session expired. Please try again."
+                    return .none
+                }
+                
                 state.isLoading = true
                 state.errorMessage = nil
                 
-                // Mock verification - use phone number as email and verification code as password
-                return .run { [phoneNumber = state.phoneNumber, code = state.verificationCode] send in
-                    await send(.signInWithCredentials(phoneNumber, code))
+                return .run { [verificationID = verificationID, code = state.verificationCode] send in
+                    await send(.sessionStartResult(
+                        Result {
+                            try await sessionClient.verifyPhoneCodeAndStartSession(verificationID, code)
+                        }
+                    ))
                 }
                 
             case .changeToPhoneEntryView:
                 state.showPhoneEntry = true
                 state.verificationCode = ""
+                state.verificationID = nil
                 state.errorMessage = nil
                 return .none
 
-            case let .signInWithPhone(phoneNumber):
-                // For mock MVP, move to verification step
-                state.showPhoneEntry = false
-                state.isLoading = false
-                return .none
-                
-            case let .signInWithCredentials(email, password):
-                return .run { send in
-                    await send(.authenticationResult(
-                        Result {
-                            try await authenticationClient.signIn(email, password)
-                        }
-                    ))
-                }
-                
-            case let .signUpWithCredentials(email, password, name, phoneNumber):
-                return .run { send in
-                    await send(.authenticationResult(
-                        Result {
-                            try await authenticationClient.signUp(email, password, name, phoneNumber)
-                        }
-                    ))
-                }
                 
             case .signOut:
                 state.isLoading = true
                 return .run { send in
                     do {
-                        try await authenticationClient.signOut()
+                        try await sessionClient.endSession()
                         await haptics.notification(.success)
-                        logging.info("User signed out successfully", [:])
                     } catch {
-                        logging.error("Sign out failed", ["error": error.localizedDescription])
+                        // Handle error silently, session cleanup should still happen
                     }
                     await send(.binding(.set(\.isLoading, false)))
                 }
                 
-            case let .authenticationResult(.success(user)):
+            case let .verificationCodeSent(.success(verificationID)):
+                // Verification code sent successfully
                 state.isLoading = false
-                state.errorMessage = nil
-                return .run { send in
-                    await haptics.notification(.success)
-                    logging.info("Authentication successful", ["userId": user.id.uuidString])
-                }
+                state.verificationID = verificationID
+                state.showPhoneEntry = false
+                return .none
                 
-            case let .authenticationResult(.failure(error)):
+            case let .verificationCodeSent(.failure(error)):
                 state.isLoading = false
                 state.errorMessage = error.localizedDescription
                 return .run { send in
                     await haptics.notification(.error)
-                    logging.error("Authentication failed", ["error": error.localizedDescription])
+                }
+                
+            case let .sessionStartResult(.success):
+                state.isLoading = false
+                state.errorMessage = nil
+                return .run { send in
+                    await haptics.notification(.success)
+                }
+                
+            case let .sessionStartResult(.failure(error)):
+                state.isLoading = false
+                state.errorMessage = error.localizedDescription
+                return .run { send in
+                    await haptics.notification(.error)
                 }
 
-            case .skipAuthentication:
-                #if DEBUG
-                state.isLoading = true
-                
-                return .run { send in
-                    await send(.signUpWithCredentials(
-                        "debug@lifesignal.app", 
-                        "debug123", 
-                        "Debug User", 
-                        "+11234567890"
-                    ))
-                }
-                #else
-                return .none
-                #endif
             }
         }
     }
@@ -473,7 +450,7 @@ struct SignInView: View {
         store: Store(initialState: SignInFeature.State()) {
             SignInFeature()
         } withDependencies: {
-            $0.authenticationClient = .mockValue
+            $0.sessionClient = .mockValue
         }
     )
 }

@@ -15,6 +15,7 @@ struct NotificationCenterView: View {
     ///   - type: The notification type to filter by (nil for all)
     ///   - label: The button label
     /// - Returns: A button view
+    @ViewBuilder
     private func filterButton(for type: NotificationType?, label: String) -> some View {
         Button(action: {
             HapticFeedback.selectionFeedback()

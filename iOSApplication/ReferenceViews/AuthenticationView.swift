@@ -24,9 +24,9 @@ struct AuthenticationView: View {
         NavigationStack {
             VStack {
                 if viewModel.showPhoneEntry {
-                    phoneEntryView
+                    phoneEntryView()
                 } else {
-                    verificationView
+                    verificationView()
                 }
             }
             .padding()
@@ -67,7 +67,8 @@ struct AuthenticationView: View {
         }
     }
 
-    private var phoneEntryView: some View {
+    @ViewBuilder
+    private func phoneEntryView() -> some View {
         VStack(spacing: 24) {
             // App logo placeholder
             ZStack {
@@ -194,7 +195,8 @@ struct AuthenticationView: View {
         return digitCount == 10
     }
 
-    private var verificationView: some View {
+    @ViewBuilder
+    private func verificationView() -> some View {
         VStack(spacing: 24) {
             // App logo placeholder
             ZStack {
@@ -274,8 +276,9 @@ struct AuthenticationView: View {
         }
     }
 
-    /// A standalone verification view as a computed property
-    private var standaloneVerificationView: some View {
+    /// A standalone verification view as a method
+    @ViewBuilder
+    private func standaloneVerificationView() -> some View {
         VStack(spacing: 24) {
             Image(systemName: "lock.circle.fill")
                 .resizable()

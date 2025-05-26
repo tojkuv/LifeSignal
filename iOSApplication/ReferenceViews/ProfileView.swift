@@ -132,7 +132,7 @@ struct ProfileView: View {
         }
         .background(Color(UIColor.systemGroupedBackground))
         .sheet(isPresented: $viewModel.showPhoneNumberChangeSheetView) {
-            phoneNumberChangeSheetView
+            phoneNumberChangeSheetView()
         }
         .alert(isPresented: $viewModel.showCheckInConfirmation) {
             Alert(
@@ -156,13 +156,13 @@ struct ProfileView: View {
             Text("Are you sure you want to sign out?")
         }
         .sheet(isPresented: $viewModel.showEditDescriptionSheet) {
-            emergencyNoteSheetView
+            emergencyNoteSheetView()
         }
         .sheet(isPresented: $viewModel.showEditNameSheet) {
-            nameEditSheetView
+            nameEditSheetView()
         }
         .sheet(isPresented: $viewModel.showEditAvatarSheet) {
-            avatarEditSheetView
+            avatarEditSheetView()
         }
         .sheet(isPresented: $viewModel.showImagePicker) {
             ImagePicker(sourceType: viewModel.imagePickerSourceType, selectedImage: { image in
@@ -174,11 +174,11 @@ struct ProfileView: View {
 
     }
 
-    // MARK: - Private Computed Properties
+    // MARK: - Private Methods
 
     // Emergency Note Sheet View
     @ViewBuilder
-    private var emergencyNoteSheetView: some View {
+    private func emergencyNoteSheetView() -> some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -229,7 +229,7 @@ struct ProfileView: View {
 
     // Name Edit Sheet View
     @ViewBuilder
-    private var nameEditSheetView: some View {
+    private func nameEditSheetView() -> some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -278,7 +278,7 @@ struct ProfileView: View {
 
     // Avatar Edit Sheet View
     @ViewBuilder
-    private var avatarEditSheetView: some View {
+    private func avatarEditSheetView() -> some View {
         VStack(spacing: 20) {
             Text("Avatar")
                 .font(.headline.bold())
@@ -336,7 +336,7 @@ struct ProfileView: View {
 
     // Phone Number Change View
     @ViewBuilder
-    private var phoneNumberChangeSheetView: some View {
+    private func phoneNumberChangeSheetView() -> some View {
         NavigationStack {
             ZStack {
                 // Background that fills the entire view

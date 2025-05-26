@@ -141,13 +141,14 @@ struct DependentsView: View {
 
             // Ping badge (only for ping status)
             if contact.hasOutgoingPing {
-                pingBadge
+                pingBadge()
             }
         }
     }
 
     /// Ping badge view
-    private var pingBadge: some View {
+    @ViewBuilder
+    private func pingBadge() -> some View {
         Circle()
             .fill(Color.blue)
             .frame(width: 20, height: 20)

@@ -25,13 +25,13 @@ struct OnboardingView: View {
         NavigationStack {
             VStack {
                 // Progress indicator - fixed position
-                progressIndicator
+                progressIndicator()
 
                 // Content based on current step
                 if viewModel.currentStep == 0 {
-                    nameEntryView
+                    nameEntryView()
                 } else {
-                    emergencyNoteView
+                    emergencyNoteView()
                 }
             }
             .padding()
@@ -84,13 +84,14 @@ struct OnboardingView: View {
                 // Handle proper dismissal of the sheet
                 viewModel.handleInstructionsDismissal()
             }) {
-                instructionsView
+                instructionsView()
             }
         }
     }
 
     /// Progress indicator for the onboarding steps
-    private var progressIndicator: some View {
+    @ViewBuilder
+    private func progressIndicator() -> some View {
         HStack(spacing: 8) {
             ForEach(0..<2) { step in
                 RoundedRectangle(cornerRadius: 4)
@@ -103,7 +104,8 @@ struct OnboardingView: View {
     }
 
     /// Instructions view shown after completing onboarding
-    private var instructionsView: some View {
+    @ViewBuilder
+    private func instructionsView() -> some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("How to use LifeSignal")
                 .font(.title)
@@ -159,7 +161,8 @@ struct OnboardingView: View {
     }
 
     /// Name entry view for the first step of onboarding
-    private var nameEntryView: some View {
+    @ViewBuilder
+    private func nameEntryView() -> some View {
         VStack(spacing: 24) {
             Text("What's your name?")
                 .font(.title2)
@@ -245,7 +248,8 @@ struct OnboardingView: View {
     }
 
     /// Emergency note view for the second step of onboarding
-    private var emergencyNoteView: some View {
+    @ViewBuilder
+    private func emergencyNoteView() -> some View {
         VStack(spacing: 24) {
             Text("Your emergency note")
                 .font(.title2)
@@ -319,6 +323,7 @@ struct OnboardingView: View {
     }
 
     /// Creates an instruction item with a numbered circle and description
+    @ViewBuilder
     private func instructionItem(number: String, title: String, description: String) -> some View {
         HStack(alignment: .top, spacing: 15) {
             Text(number)

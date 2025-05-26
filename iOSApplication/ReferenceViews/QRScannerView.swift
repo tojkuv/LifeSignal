@@ -15,20 +15,20 @@ struct QRScannerView: View {
         ZStack {
             // Camera view or camera failed view
             if viewModel.cameraLoadFailed {
-                cameraFailedView
+                cameraFailedView()
             } else {
-                cameraView
+                cameraView()
             }
 
             // Overlay controls
             VStack {
                 // Top controls
-                topControlsView
+                topControlsView()
 
                 Spacer()
 
                 // Bottom controls
-                bottomControlsView
+                bottomControlsView()
             }
         }
         .onAppear {
@@ -36,7 +36,7 @@ struct QRScannerView: View {
             viewModel.initializeCamera()
         }
         .sheet(isPresented: $viewModel.isShowingManualEntry) {
-            manualEntryView
+            manualEntryView()
         }
         .sheet(isPresented: $viewModel.isShowingGallery) {
             PhotoPickerView(viewModel: viewModel)
@@ -52,14 +52,15 @@ struct QRScannerView: View {
             Text("The clipboard content is not a valid UUID format.")
         }
         .sheet(isPresented: $viewModel.showAddContactSheet) {
-            addContactSheetView
+            addContactSheetView()
         }
     }
 
     // MARK: - Subviews
 
     /// The add contact sheet view
-    private var addContactSheetView: some View {
+    @ViewBuilder
+    private func addContactSheetView() -> some View {
         NavigationStack {
             ZStack {
                 ScrollView {
@@ -203,7 +204,8 @@ struct QRScannerView: View {
     }
 
     /// The top controls view
-    private var topControlsView: some View {
+    @ViewBuilder
+    private func topControlsView() -> some View {
         HStack {
             // Close button
             Button(action: {
@@ -231,7 +233,8 @@ struct QRScannerView: View {
     }
 
     /// The bottom controls view
-    private var bottomControlsView: some View {
+    @ViewBuilder
+    private func bottomControlsView() -> some View {
         VStack {
             // Gallery carousel
             ScrollView(.horizontal, showsIndicators: false) {
@@ -289,13 +292,15 @@ struct QRScannerView: View {
     }
 
     /// The camera view
-    private var cameraView: some View {
+    @ViewBuilder
+    private func cameraView() -> some View {
         CameraPreviewView(torchOn: viewModel.torchOn)
             .edgesIgnoringSafeArea(.all)
     }
 
     /// The camera failed view
-    private var cameraFailedView: some View {
+    @ViewBuilder
+    private func cameraFailedView() -> some View {
         ZStack {
             Color.black
                 .edgesIgnoringSafeArea(.all)
@@ -346,7 +351,8 @@ struct QRScannerView: View {
     }
 
     /// The manual entry view
-    private var manualEntryView: some View {
+    @ViewBuilder
+    private func manualEntryView() -> some View {
         NavigationStack {
             VStack(alignment: .center, spacing: 20) {
                 Text("Enter QR Code ID")

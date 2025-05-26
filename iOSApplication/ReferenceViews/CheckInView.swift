@@ -11,13 +11,13 @@ struct CheckInView: View {
             // Single vertical stack for the entire view with equal spacing
             VStack(spacing: 16) {
                 // Alert Button
-                alertButtonView
+                alertButtonView()
 
                 // Countdown display
-                countdownView
+                countdownView()
 
                 // Check-in button
-                checkInButtonView
+                checkInButtonView()
 
                 // Add extra padding at the bottom to ensure content doesn't overlap with tab bar
                 Spacer()
@@ -42,7 +42,8 @@ struct CheckInView: View {
     }
 
     /// Alert button view
-    private var alertButtonView: some View {
+    @ViewBuilder
+    private func alertButtonView() -> some View {
         ZStack(alignment: .center) {
             Button(action: {
                 viewModel.handleAlertButtonTap()
@@ -136,7 +137,8 @@ struct CheckInView: View {
     }
 
     /// Countdown view
-    private var countdownView: some View {
+    @ViewBuilder
+    private func countdownView() -> some View {
         VStack {
             Text("Interval Time Left")
                 .font(.system(size: 14, weight: .semibold))
@@ -162,7 +164,8 @@ struct CheckInView: View {
     }
 
     /// Check-in button view
-    private var checkInButtonView: some View {
+    @ViewBuilder
+    private func checkInButtonView() -> some View {
         Button(action: {
             viewModel.performCheckIn()
         }) {

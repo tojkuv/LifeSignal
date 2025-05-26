@@ -12,10 +12,10 @@ struct QRCodeShareSheetView: View {
     var body: some View {
         VStack(spacing: 20) {
             // Header with title and refresh button
-            headerView
+            headerView()
 
             // QR Code Display
-            qrCodeView
+            qrCodeView()
 
             // QR Code ID
             Text("ID: \(viewModel.qrCodeId)")
@@ -23,10 +23,10 @@ struct QRCodeShareSheetView: View {
                 .foregroundColor(.secondary)
 
             // Share button
-            shareButton
+            shareButton()
 
             // Close button
-            closeButton
+            closeButton()
         }
         .padding()
         .background(Color(UIColor.systemGroupedBackground))
@@ -48,7 +48,8 @@ struct QRCodeShareSheetView: View {
     // MARK: - UI Components
 
     /// Header view with title and refresh button
-    private var headerView: some View {
+    @ViewBuilder
+    private func headerView() -> some View {
         HStack {
             Text("Your QR Code")
                 .font(.title)
@@ -70,7 +71,8 @@ struct QRCodeShareSheetView: View {
     }
 
     /// QR code display view
-    private var qrCodeView: some View {
+    @ViewBuilder
+    private func qrCodeView() -> some View {
         Group {
             if let qrCodeImage = viewModel.qrCodeImage {
                 Image(uiImage: qrCodeImage)
@@ -87,7 +89,8 @@ struct QRCodeShareSheetView: View {
     }
 
     /// Share button view
-    private var shareButton: some View {
+    @ViewBuilder
+    private func shareButton() -> some View {
         Button(action: {
             viewModel.showShareSheet()
         }) {
@@ -103,7 +106,8 @@ struct QRCodeShareSheetView: View {
     }
 
     /// Close button view
-    private var closeButton: some View {
+    @ViewBuilder
+    private func closeButton() -> some View {
         Button(action: {
             viewModel.dismiss()
         }) {

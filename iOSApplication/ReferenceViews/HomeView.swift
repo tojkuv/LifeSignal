@@ -11,10 +11,10 @@ struct HomeView: View {
         ScrollView {
             VStack(spacing: 24) {
                 // QR Code Section
-                qrCodeSection
+                qrCodeSection()
 
                 // Settings Section
-                settingsSection
+                settingsSection()
 
                 // Add extra padding at the bottom to ensure content doesn't overlap with tab bar
                 Spacer()
@@ -43,7 +43,7 @@ struct HomeView: View {
 
         // Instructions Sheet
         .sheet(isPresented: $viewModel.showInstructions) {
-            instructionsView
+            instructionsView()
         }
 
         // Share Sheet
@@ -124,7 +124,8 @@ struct HomeView: View {
 
     // MARK: - Instructions View
 
-    private var instructionsView: some View {
+    @ViewBuilder
+    private func instructionsView() -> some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("How to use LifeSignal")
                 .font(.title)
@@ -243,10 +244,11 @@ struct HomeView: View {
 
     // MARK: - QR Code Section
 
-    private var qrCodeSection: some View {
+    @ViewBuilder
+    private func qrCodeSection() -> some View {
         VStack(spacing: 16) {
             // QR Code Card
-            qrCodeCard
+            qrCodeCard()
 
             // Action Buttons
             HStack(spacing: 12) {
@@ -286,7 +288,8 @@ struct HomeView: View {
         }
     }
 
-    private var qrCodeCard: some View {
+    @ViewBuilder
+    private func qrCodeCard() -> some View {
         HStack(alignment: .top, spacing: 16) {
             // QR Code
             ZStack {
@@ -367,20 +370,22 @@ struct HomeView: View {
 
     // MARK: - Settings Section
 
-    private var settingsSection: some View {
+    @ViewBuilder
+    private func settingsSection() -> some View {
         VStack(alignment: .leading, spacing: 24) {
             // Check-in Interval
-            checkInIntervalSection
+            checkInIntervalSection()
 
             // Notifications
-            notificationsSection
+            notificationsSection()
 
             // Help/Instructions
-            helpSection
+            helpSection()
         }
     }
 
-    private var checkInIntervalSection: some View {
+    @ViewBuilder
+    private func checkInIntervalSection() -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Check-in interval")
                 .foregroundColor(.primary)
@@ -414,7 +419,8 @@ struct HomeView: View {
         }
     }
 
-    private var notificationsSection: some View {
+    @ViewBuilder
+    private func notificationsSection() -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Check-in notification")
                 .foregroundColor(.primary)
@@ -451,7 +457,8 @@ struct HomeView: View {
         }
     }
 
-    private var helpSection: some View {
+    @ViewBuilder
+    private func helpSection() -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Button(action: {
                 HapticFeedback.triggerHaptic()

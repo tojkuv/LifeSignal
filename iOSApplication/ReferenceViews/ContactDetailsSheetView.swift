@@ -13,7 +13,8 @@ struct ContactDetailsSheetView: View {
     }
 
     // MARK: - Contact Dismissed View
-    private var contactDismissedView: some View {
+    @ViewBuilder
+    private func contactDismissedView() -> some View {
         VStack(spacing: 20) {
             Spacer()
             Text("Contact role updated")
@@ -41,7 +42,8 @@ struct ContactDetailsSheetView: View {
     }
 
     // MARK: - Contact Header View
-    private var contactHeaderView: some View {
+    @ViewBuilder
+    private func contactHeaderView() -> some View {
         Group {
             if let contact = viewModel.contact {
                 VStack(spacing: 12) {
@@ -73,7 +75,8 @@ struct ContactDetailsSheetView: View {
     }
 
     // MARK: - Action Buttons View
-    private var actionButtonsView: some View {
+    @ViewBuilder
+    private func actionButtonsView() -> some View {
         Group {
             if let contact = viewModel.contact {
                 HStack(spacing: 12) {
@@ -115,7 +118,8 @@ struct ContactDetailsSheetView: View {
     }
 
     // MARK: - Alert Card Views
-    private var manualAlertCardView: some View {
+    @ViewBuilder
+    private func manualAlertCardView() -> some View {
         Group {
             if let contact = viewModel.contact, contact.manualAlertActive, let ts = contact.manualAlertTimestamp {
                 VStack(spacing: 0) {
@@ -144,7 +148,8 @@ struct ContactDetailsSheetView: View {
         }
     }
 
-    private var pingCardView: some View {
+    @ViewBuilder
+    private func pingCardView() -> some View {
         Group {
             if let contact = viewModel.contact, contact.hasIncomingPing, let pingTime = contact.incomingPingTimestamp, contact.isResponder {
                 VStack(spacing: 0) {
@@ -173,7 +178,8 @@ struct ContactDetailsSheetView: View {
         }
     }
 
-    private var outgoingPingCardView: some View {
+    @ViewBuilder
+    private func outgoingPingCardView() -> some View {
         Group {
             if let contact = viewModel.contact, contact.hasOutgoingPing, let pingTime = contact.outgoingPingTimestamp {
                 VStack(spacing: 0) {
@@ -202,7 +208,8 @@ struct ContactDetailsSheetView: View {
         }
     }
 
-    private var notResponsiveCardView: some View {
+    @ViewBuilder
+    private func notResponsiveCardView() -> some View {
         Group {
             if let contact = viewModel.contact, viewModel.isNotResponsive(contact) {
                 VStack(spacing: 0) {
@@ -241,7 +248,8 @@ struct ContactDetailsSheetView: View {
     }
 
     // MARK: - Information Card Views
-    private var noteCardView: some View {
+    @ViewBuilder
+    private func noteCardView() -> some View {
         Group {
             if let contact = viewModel.contact {
                 VStack(spacing: 0) {
@@ -262,7 +270,8 @@ struct ContactDetailsSheetView: View {
         }
     }
 
-    private var rolesCardView: some View {
+    @ViewBuilder
+    private func rolesCardView() -> some View {
         Group {
             VStack(spacing: 0) {
                 HStack {
@@ -313,7 +322,8 @@ struct ContactDetailsSheetView: View {
         }
     }
 
-    private var checkInCardView: some View {
+    @ViewBuilder
+    private func checkInCardView() -> some View {
         Group {
             if let contact = viewModel.contact {
                 VStack(spacing: 0) {
@@ -356,7 +366,8 @@ struct ContactDetailsSheetView: View {
         }
     }
 
-    private var deleteButtonView: some View {
+    @ViewBuilder
+    private func deleteButtonView() -> some View {
         Group {
             if viewModel.contact != nil {
                 Button(action: {
@@ -383,7 +394,7 @@ struct ContactDetailsSheetView: View {
             Group {
                 if viewModel.shouldDismiss {
                     // Show a message when the contact is removed from its original list
-                    contactDismissedView
+                    contactDismissedView()
                 } else {
                     ScrollView {
                         VStack(spacing: 16) {
@@ -394,39 +405,39 @@ struct ContactDetailsSheetView: View {
                                 .id(viewModel.refreshID)
 
                             // Header
-                            contactHeaderView
+                            contactHeaderView()
 
                             // Button Row (moved above note)
-                            actionButtonsView
+                            actionButtonsView()
 
                             // Alert Cards
                             if let contact = viewModel.contact {
                                 // Manual alert card - only show for dependents (1st priority)
                                 if contact.isDependent && contact.manualAlertActive {
-                                    manualAlertCardView
+                                    manualAlertCardView()
                                 }
 
                                 // Non-responsive card - only show for dependents (2nd priority)
                                 if contact.isDependent && viewModel.isNotResponsive(contact) {
-                                    notResponsiveCardView
+                                    notResponsiveCardView()
                                 }
 
                                 // Ping card - incoming pings (3rd priority)
                                 if contact.hasIncomingPing && contact.isResponder {
-                                    pingCardView
+                                    pingCardView()
                                 }
 
                                 // Outgoing pings (4th priority)
                                 if contact.isDependent && contact.hasOutgoingPing {
-                                    outgoingPingCardView
+                                    outgoingPingCardView()
                                 }
                             }
 
                             // Information Cards
-                            noteCardView
-                            rolesCardView
-                            checkInCardView
-                            deleteButtonView
+                            noteCardView()
+                            rolesCardView()
+                            checkInCardView()
+                            deleteButtonView()
                         }
                     }
                 }

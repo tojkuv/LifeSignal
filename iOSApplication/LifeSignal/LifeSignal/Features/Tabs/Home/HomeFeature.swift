@@ -5,6 +5,7 @@ import UIKit
 import PhotosUI
 import ComposableArchitecture
 import Perception
+@_exported import Sharing
 
 // Define Alert enum outside of the feature to avoid circular dependencies
 enum HomeAlert: Equatable {
@@ -145,13 +146,17 @@ struct HomeFeature {
 
             case .loadUser:
                 return .run { send in
-                    if let user = await userClient.getCurrentUser() {
-                        await send(.userLoaded(user))
+                    do {
+                        if let user = try await userClient.getUser() {
+                            await send(.userLoaded(user))
+                        }
+                    } catch {
+                        // Handle error if needed
                     }
                 }
 
             case let .userLoaded(user):
-                state.$currentUser.withLock { $0 = user }
+                // User state is already updated by getUser
                 return .merge(
                     .send(.initializeIntervalPicker),
                     .send(.generateQRCode)
@@ -159,15 +164,42 @@ struct HomeFeature {
 
             case .generateQRCode:
                 state.isQRCodeReady = false
-                return .run { send in
+                return .run { [currentUser = state.currentUser] send in
                     await send(._qrCodeGenerationStarted)
-                    do {
-                        let image = try await userClient.getQRCodeImage(300)
-                        await send(.qrCodeGenerated(image))
-                    } catch {
-                        // Handle QR code generation error
+                    
+                    guard let user = currentUser else {
                         await send(.qrCodeGenerated(nil))
+                        return
                     }
+                    
+                    // Check shared state for cached QR image
+                    @Shared(.userQRCodeImage) var qrCodeImage
+                    if let cached = qrCodeImage,
+                       cached.metadata.qrCodeId == user.qrCodeId,
+                       let image = UIImage(data: cached.image) {
+                        await send(.qrCodeGenerated(image))
+                        return
+                    }
+                    
+                    // Generate new QR code image
+                    let image: UIImage
+                    #if DEBUG
+                    image = UserClient.generateMockQRCodeImage(data: user.qrCodeId.uuidString, size: 300)
+                    #else
+                    do {
+                        image = try UserClient.generateQRCodeImage(from: user.qrCodeId.uuidString, size: 300)
+                    } catch {
+                        image = UserClient.generateMockQRCodeImage(data: user.qrCodeId.uuidString, size: 300)
+                    }
+                    #endif
+                    
+                    // Cache the image
+                    if let imageData = image.pngData() {
+                        let metadata = ImageMetadata(qrCodeId: user.qrCodeId)
+                        $qrCodeImage.withLock { $0 = QRImageWithMetadata(image: imageData, metadata: metadata) }
+                    }
+                    
+                    await send(.qrCodeGenerated(image))
                 }
 
             case ._qrCodeGenerationStarted:
@@ -200,15 +232,53 @@ struct HomeFeature {
                     return .send(.shareableQRCodeGenerated(nil))
                 }
 
-                return .run { send in
+                return .run { [currentUser = state.currentUser] send in
                     await send(._shareableQRCodeGenerationStarted)
-                    do {
-                        let shareableImage = try await userClient.getShareableQRCodeImage()
-                        await send(.shareableQRCodeGenerated(shareableImage))
-                    } catch {
-                        // Handle shareable QR code generation error
+                    
+                    guard let user = currentUser else {
                         await send(.shareableQRCodeGenerated(nil))
+                        return
                     }
+                    
+                    // Check shared state for cached shareable image
+                    @Shared(.userShareableQRCodeImage) var shareableImage
+                    if let cached = shareableImage,
+                       cached.metadata.qrCodeId == user.qrCodeId,
+                       let image = UIImage(data: cached.image) {
+                        await send(.shareableQRCodeGenerated(image))
+                        return
+                    }
+                    
+                    // Generate QR code first
+                    let qrImage: UIImage
+                    @Shared(.userQRCodeImage) var qrCodeImage
+                    if let cached = qrCodeImage,
+                       cached.metadata.qrCodeId == user.qrCodeId,
+                       let image = UIImage(data: cached.image) {
+                        qrImage = image
+                    } else {
+                        qrImage = UserClient.generateMockQRCodeImage(data: user.qrCodeId.uuidString, size: 300)
+                    }
+                    
+                    // Generate shareable image
+                    let image: UIImage
+                    #if DEBUG
+                    image = UserClient.generateMockShareableQRCodeImage(qrImage: qrImage, userName: user.name)
+                    #else
+                    do {
+                        image = try UserClient.generateShareableQRCodeImage(qrImage: qrImage, userName: user.name)
+                    } catch {
+                        image = UserClient.generateMockShareableQRCodeImage(qrImage: qrImage, userName: user.name)
+                    }
+                    #endif
+                    
+                    // Cache the shareable image
+                    if let imageData = image.pngData() {
+                        let metadata = ImageMetadata(qrCodeId: user.qrCodeId)
+                        $shareableImage.withLock { $0 = QRImageWithMetadata(image: imageData, metadata: metadata) }
+                    }
+                    
+                    await send(.shareableQRCodeGenerated(image))
                 }
 
             case ._shareableQRCodeGenerationStarted:
@@ -235,9 +305,12 @@ struct HomeFeature {
                 }
 
             case let .updateCheckInInterval(interval):
-                return .run { send in
+                return .run { [currentUser = state.currentUser] send in
                     do {
-                        let updatedUser = try await userClient.updateCheckInInterval(interval)
+                        guard var user = currentUser else { return }
+                        user.checkInInterval = interval
+                        user.lastModified = Date()
+                        try await userClient.updateUser(user)
                         await send(.initializeIntervalPicker)
                     } catch {
                         // Error handling if needed
@@ -309,9 +382,21 @@ struct HomeFeature {
                 return .send(.initializeIntervalPicker)
 
             case let .updateNotificationSettings(enabled, notify30Min, notify2Hours):
-                return .run { send in
+                return .run { [currentUser = state.currentUser] send in
                     do {
-                        let updatedUser = try await userClient.updateNotificationSettings(enabled, notify30Min, notify2Hours)
+                        guard var user = currentUser else { return }
+                        
+                        if !enabled {
+                            user.notificationPreference = .disabled
+                        } else if notify2Hours {
+                            user.notificationPreference = .twoHours
+                        } else {
+                            user.notificationPreference = .thirtyMinutes
+                        }
+                        
+                        user.lastModified = Date()
+                        try await userClient.updateUser(user)
+                        
                         let notification = NotificationItem(
                             type: .system,
                             title: "Notification Settings Updated",
@@ -416,11 +501,13 @@ struct HomeFeature {
             case .alert(.presented(.resetQRConfirmation)):
                 state.shareableImage = nil
 
-                return .run { send in
+                return .run { [currentUser = state.currentUser] send in
                     do {
-                        let updatedUser = try await userClient.regenerateQRCode()
-                        // Clear cached QR image to force regeneration
-                        _ = try await userClient.refreshQRCodeImage()
+                        guard var user = currentUser else { return }
+                        user.qrCodeId = UUID()
+                        user.lastModified = Date()
+                        try await userClient.updateUser(user)
+                        
                         let notification = NotificationItem(
                             type: .system,
                             title: "QR Code Reset",

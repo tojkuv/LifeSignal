@@ -57,7 +57,7 @@ struct OnboardingFeature {
         
         // User profile creation
         case createUserProfile
-        case userProfileCreated(Result<User, Error>)
+        case userProfileCreated(Result<Void, Error>)
         
         // Instructions
         case handleInstructionsDismissal
@@ -71,7 +71,7 @@ struct OnboardingFeature {
 
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.notificationClient) var notificationClient
-    @Dependency(\.userClient) var userClient
+    @Dependency(\.sessionClient) var sessionClient
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -123,16 +123,13 @@ struct OnboardingFeature {
             case .createUserProfile:
                 return .run { [firstName = state.firstName, lastName = state.lastName, emergencyNote = state.emergencyNote] send in
                     let result = await Result {
-                        // Create user profile with name from onboarding
-                        let fullName = "\(firstName) \(lastName)"
-                        return try await userClient.updateProfile(fullName, emergencyNote)
+                        try await sessionClient.completeUserProfile(firstName, lastName, emergencyNote)
                     }
                     await send(.userProfileCreated(result))
                 }
 
-            case let .userProfileCreated(.success(user)):
+            case let .userProfileCreated(.success):
                 state.isLoading = false
-                state.$currentUser.withLock { $0 = user }
                 state.showInstructions = true
                 
                 return .run { _ in
@@ -150,18 +147,18 @@ struct OnboardingFeature {
 
             case .handleInstructionsDismissal:
                 state.showInstructions = false
-                state.$needsOnboarding.withLock { $0 = false }
                 
                 return .run { send in
+                    try await sessionClient.completeOnboarding()
                     await send(.onboardingCompleted)
                 }
 
             case .handleGotItButtonTap:
                 state.showInstructions = false
-                state.$needsOnboarding.withLock { $0 = false }
                 
                 return .run { send in
                     await haptics.impact(.medium)
+                    try await sessionClient.completeOnboarding()
                     await send(.onboardingCompleted)
                 }
 

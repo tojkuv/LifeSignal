@@ -4,27 +4,35 @@ import SwiftUI
 import Firebase
 import UserNotifications
 import Perception
+@_exported import Sharing
 
 @Reducer
 struct ApplicationFeature {
     @ObservableState
     struct State: Equatable {
         @Shared(.currentUser) var currentUser: User? = nil
+        @Shared(.sessionState) var sessionState: SessionState = .unauthenticated
+        @Shared(.needsOnboarding) var needsOnboarding: Bool = false
         @Shared(.contacts) var contacts: [Contact] = []
-        @Shared(.isOnline) var isOnline: Bool = true
+        @Shared(.isNetworkConnected) var isNetworkConnected: Bool = true
         @Shared(.offlineQueue) var offlineQueue: [OfflineAction] = []
+        @Shared(.authenticationToken) var authenticationToken: String? = nil
 
         var isActive: Bool = true
         var error: String? = nil
         
         var mainTabs = MainTabsFeature.State()
-        var authentication = AuthenticationFeature.State()
+        var signIn = SignInFeature.State()
         var onboarding = OnboardingFeature.State()
         var connectivity = ConnectivityFeature.State()
         var notifications = NotificationCenterFeature.State()
 
-        var isLoggedIn: Bool { currentUser != nil }
+        var isLoggedIn: Bool { sessionState.isAuthenticated && currentUser != nil }
+        var shouldShowOnboarding: Bool { sessionState.isAuthenticated && needsOnboarding }
+        var shouldShowMainTabs: Bool { sessionState.isAuthenticated && !needsOnboarding && currentUser != nil }
         var offlineQueueCount: Int { offlineQueue.count }
+        var hasValidSession: Bool { sessionState.isAuthenticated && authenticationToken != nil && currentUser != nil }
+        var isOnline: Bool { isNetworkConnected }
 
         init() {}
     }
@@ -36,8 +44,21 @@ struct ApplicationFeature {
         case appWillTerminate
         case clearError
         
+        // Session management
+        case validateExistingSession
+        case sessionValidated
+        case sessionValidationFailed(Error)
+        case sessionExpired
+        case refreshSessionToken
+        case tokenRefreshed
+        case tokenRefreshFailed(Error)
+        
+        // Network monitoring
+        case startNetworkMonitoring
+        case networkStatusChanged(Bool)
+        
         case mainTabs(MainTabsFeature.Action)
-        case authentication(AuthenticationFeature.Action)
+        case signIn(SignInFeature.Action)
         case onboarding(OnboardingFeature.Action)
         case connectivity(ConnectivityFeature.Action)
         case notifications(NotificationCenterFeature.Action)
@@ -45,7 +66,6 @@ struct ApplicationFeature {
         case performBackgroundSync
         case backgroundSyncCompleted(Result<Int, Error>)
         case handleNotificationNavigation(String)
-        // case debugSkipToHome
     }
 
     @Dependency(\.userRepository) var userRepository
@@ -59,8 +79,8 @@ struct ApplicationFeature {
             MainTabsFeature()
         }
 
-        Scope(state: \.authentication, action: \.authentication) {
-            AuthenticationFeature()
+        Scope(state: \.signIn, action: \.signIn) {
+            SignInFeature()
         }
 
         Scope(state: \.onboarding, action: \.onboarding) {
@@ -78,11 +98,19 @@ struct ApplicationFeature {
         Reduce { state, action in
             switch action {
             case .onAppear:
-                return .none
+                return .run { send in
+                    await send(.startNetworkMonitoring)
+                    await send(.validateExistingSession)
+                }
 
             case .appDidBecomeActive:
                 state.isActive = true
-                return .none
+                return .run { send in
+                    // Validate session if we have one
+                    if sessionClient.isAuthenticated() {
+                        await send(.validateExistingSession)
+                    }
+                }
 
             case .appDidEnterBackground:
                 state.isActive = false
@@ -94,6 +122,83 @@ struct ApplicationFeature {
             case .clearError:
                 state.error = nil
                 return .none
+
+            case .validateExistingSession:
+                return .run { send in
+                    do {
+                        try await sessionClient.validateExistingSession()
+                        await send(.sessionValidated)
+                    } catch {
+                        await send(.sessionValidationFailed(error))
+                    }
+                }
+
+            case .sessionValidated:
+                // Session is valid, user is authenticated with valid user data
+                return .none
+
+            case .sessionValidationFailed(let error):
+                if let sessionError = error as? SessionClientError {
+                    switch sessionError {
+                    case .sessionExpired, .tokenRefreshFailed:
+                        return .run { send in
+                            await send(.refreshSessionToken)
+                        }
+                    case .userLoadFailed:
+                        return .run { send in
+                            await send(.sessionExpired)
+                        }
+                    default:
+                        state.error = error.localizedDescription
+                        return .none
+                    }
+                } else {
+                    state.error = error.localizedDescription
+                    return .none
+                }
+
+            case .sessionExpired:
+                // Handle session expiration by ending session
+                return .run { send in
+                    do {
+                        try await sessionClient.endSession()
+                    } catch {
+                        // Log error but continue with cleanup
+                    }
+                }
+                
+            case .refreshSessionToken:
+                return .run { send in
+                    do {
+                        try await sessionClient.refreshToken()
+                        await send(.tokenRefreshed)
+                    } catch {
+                        await send(.tokenRefreshFailed(error))
+                    }
+                }
+                
+            case .tokenRefreshed:
+                // Token successfully refreshed, session remains valid
+                return .none
+                
+            case .tokenRefreshFailed(let error):
+                state.error = error.localizedDescription
+                return .run { send in
+                    await send(.sessionExpired)
+                }
+                
+            case .startNetworkMonitoring:
+                return .run { send in
+                    // Start monitoring network connectivity changes
+                    for await isConnected in await sessionClient.monitorConnectivity() {
+                        await send(.networkStatusChanged(isConnected))
+                    }
+                }
+                
+            case .networkStatusChanged(let isConnected):
+                return .run { send in
+                    await sessionClient.updateNetworkStatus(isConnected)
+                }
 
             case .performBackgroundSync:
                 return .none
@@ -108,9 +213,7 @@ struct ApplicationFeature {
             case .handleNotificationNavigation:
                 return .none
 
-            // case .debugSkipToHome:
-
-            case .mainTabs, .authentication, .onboarding, .connectivity, .notifications:
+            case .mainTabs, .signIn, .onboarding, .connectivity, .notifications:
                 return .none
             }
         }
@@ -144,11 +247,14 @@ struct LifeSignalApp: App {
     let store = Store(initialState: ApplicationFeature.State()) {
         ApplicationFeature()
     } withDependencies: { dependencies in
-        // Force use of mock implementations for MVP
+        // Use mock implementations for MVP
         dependencies.sessionClient = .mockValue
         dependencies.userRepository = .mockValue
         dependencies.contactRepository = .mockValue
         dependencies.haptics = .mockValue
+        dependencies.userClient = .mockValue
+        dependencies.notificationClient = .mockValue
+        dependencies.contactsClient = .mockValue
     }
 
     var body: some Scene {
@@ -163,20 +269,44 @@ struct AppRootView: View {
 
     var body: some View {
         Group {
-            if store.isLoggedIn {
+            if store.shouldShowMainTabs {
                 MainTabsView(store: store.scope(
                     state: \.mainTabs,
                     action: \.mainTabs
                 ))
+            } else if store.shouldShowOnboarding {
+                OnboardingView(store: store.scope(
+                    state: \.onboarding,
+                    action: \.onboarding
+                ))
             } else {
-                AuthenticationView(store: store.scope(
-                    state: \.authentication,
-                    action: \.authentication
+                SignInView(store: store.scope(
+                    state: \.signIn,
+                    action: \.signIn
                 ))
             }
         }
         .onAppear {
             store.send(.onAppear)
+        }
+        .overlay(alignment: .top) {
+            if !store.isOnline {
+                HStack {
+                    Image(systemName: "wifi.slash")
+                    Text("No Internet Connection")
+                    if store.offlineQueueCount > 0 {
+                        Text("(\(store.offlineQueueCount) pending)")
+                            .opacity(0.8)
+                    }
+                }
+                .font(.caption)
+                .foregroundColor(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.red)
+                .cornerRadius(8)
+                .padding(.top)
+            }
         }
     }
 }

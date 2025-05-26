@@ -2,18 +2,18 @@ import SwiftUI
 import Foundation
 import ComposableArchitecture
 import Perception
+@_exported import Sharing
 
 @Reducer
 struct CheckInFeature {
     @ObservableState
     struct State: Equatable {
-        @Shared(.lastCheckInDate) var lastCheckInTime: Date? = nil
-        var isAlertActive: Bool = false
         @Shared(.currentUser) var currentUser: User? = nil
         
         var isCheckingIn = false
-        var showConfirmation = false
-        var checkInMessage = ""
+        var isAlertActive: Bool {
+            currentUser?.isEmergencyAlertEnabled ?? false
+        }
         var tapProgress: Double = 0.0
         var longPressProgress: Double = 0.0
         var isLongPressing = false
@@ -28,7 +28,7 @@ struct CheckInFeature {
         
         var checkInButtonBackgroundColor: Color {
             if isCheckingIn { return .gray }
-            if let lastCheckIn = lastCheckInTime,
+            if let lastCheckIn = currentUser?.lastCheckedIn,
                let interval = currentUser?.checkInInterval {
                 let timeSince = Date().timeIntervalSince(lastCheckIn)
                 let timeRemaining = interval - timeSince
@@ -42,7 +42,7 @@ struct CheckInFeature {
         }
         
         var isCheckInButtonCoolingDown: Bool {
-            if let lastCheckIn = lastCheckInTime {
+            if let lastCheckIn = currentUser?.lastCheckedIn {
                 return Date().timeIntervalSince(lastCheckIn) < 300 // 5 minute cooldown
             }
             return false
@@ -53,39 +53,33 @@ struct CheckInFeature {
     enum Action: BindableAction {
         case binding(BindingAction<State>)
         
+        // Lifecycle
+        case onAppear
+        case onDisappear
+        
         // Core check-in functionality
         case checkIn
-        case performCheckIn
         case checkInResponse(Result<Void, Error>)
         
         // Alert system
         case activateAlert
         case deactivateAlert
-        case checkAlertStatus
         case alertResponse(Result<Void, Error>)
         
         // Alert button interactions
         case alertButtonTapped
-        case handleAlertButtonTap
         
         // Long press gestures
         case longPressStarted
         case longPressEnded
-        case startLongPress
-        case handleLongPressEnded
-        
-        // Drag gestures
-        case handleDragGestureChanged
-        case handleDragGestureEnded
         
         // Timer management
         case startTimer
         case stopTimer
         case updateTimer
-        case startUpdateTimer
-        case cleanUpTimers
     }
 
+    @Dependency(\.userClient) var userClient
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.notificationClient) var notificationClient
 
@@ -97,34 +91,51 @@ struct CheckInFeature {
             case .binding:
                 return .none
                 
+            case .onAppear:
+                return .send(.startTimer)
+                
+            case .onDisappear:
+                return .send(.stopTimer)
+                
             // Core check-in functionality
             case .checkIn:
                 guard state.canCheckIn else { return .none }
                 state.isCheckingIn = true
                 state.errorMessage = nil
                 
-                return .run { send in
-                    await send(.checkInResponse(Result {
-                        // Simulate check-in API call
-                        try await Task.sleep(for: .milliseconds(1000))
-                        let notification = NotificationItem(type: .checkInReminder, title: "Check-in Complete", message: "You've successfully checked in")
+                return .run { [currentUser = state.currentUser] send in
+                    do {
+                        guard var user = currentUser else {
+                            await send(.checkInResponse(.failure(UserClientError.userNotFound)))
+                            return
+                        }
+                        
+                        // Update lastCheckedIn timestamp
+                        user.lastCheckedIn = Date()
+                        user.lastModified = Date()
+                        
+                        // Call updateUser to persist the check-in
+                        try await userClient.updateUser(user)
+                        
+                        // Send success notification
+                        let notification = NotificationItem(
+                            type: .checkInReminder,
+                            title: "Check-in Complete",
+                            message: "You've successfully checked in"
+                        )
                         try await notificationClient.sendNotification(notification)
-                    }))
+                        
+                        await send(.checkInResponse(.success(())))
+                    } catch {
+                        await send(.checkInResponse(.failure(error)))
+                    }
                 }
-
-            case .performCheckIn:
-                // Handle perform check-in action
-                return .send(.checkIn)
 
             case .checkInResponse(.success):
                 state.isCheckingIn = false
-                state.showConfirmation = true
-                state.$lastCheckInTime.withLock { $0 = Date() }
                 
                 return .run { _ in
                     await haptics.notification(.success)
-                    try? await Task.sleep(for: .seconds(3))
-                    // Note: showConfirmation reset would be handled by binding if needed
                 }
 
             case let .checkInResponse(.failure(error)):
@@ -140,37 +151,77 @@ struct CheckInFeature {
                 guard state.canActivateAlert else { return .none }
                 state.errorMessage = nil
                 
-                return .run { send in
-                    await haptics.notification(.warning)
-                    await send(.alertResponse(Result {
-                        // In production, this would trigger emergency protocols
-                        let notification = NotificationItem(type: .emergencyAlert, title: "Emergency Alert Activated", message: "Your contacts have been notified")
+                return .run { [currentUser = state.currentUser] send in
+                    do {
+                        guard var user = currentUser else {
+                            await send(.alertResponse(.failure(UserClientError.userNotFound)))
+                            return
+                        }
+                        
+                        // Enable emergency alert
+                        user.setEmergencyAlertEnabled(true)
+                        user.emergencyAlertTimestamp = Date()
+                        
+                        // Call updateUser to persist the alert activation
+                        try await userClient.updateUser(user)
+                        
+                        // Notify contacts about emergency alert
+                        try await notificationClient.notifyEmergencyAlertToggled(user.id, true)
+                        
+                        // Send local notification
+                        let notification = NotificationItem(
+                            type: .emergencyAlert,
+                            title: "Emergency Alert Activated",
+                            message: "Your contacts have been notified"
+                        )
                         try await notificationClient.sendNotification(notification)
-                    }))
+                        
+                        await haptics.notification(.warning)
+                        await send(.alertResponse(.success(())))
+                    } catch {
+                        await send(.alertResponse(.failure(error)))
+                    }
                 }
                 
             case .deactivateAlert:
                 guard state.canDeactivateAlert else { return .none }
                 state.errorMessage = nil
                 
-                return .run { send in
-                    await haptics.notification(.success)
-                    await send(.alertResponse(Result {
-                        // In production, this would cancel emergency protocols
-                        let notification = NotificationItem(type: .system, title: "Emergency Alert Cancelled", message: "The emergency alert has been cancelled")
+                return .run { [currentUser = state.currentUser] send in
+                    do {
+                        guard var user = currentUser else {
+                            await send(.alertResponse(.failure(UserClientError.userNotFound)))
+                            return
+                        }
+                        
+                        // Disable emergency alert
+                        user.setEmergencyAlertEnabled(false)
+                        
+                        // Call updateUser to persist the alert deactivation
+                        try await userClient.updateUser(user)
+                        
+                        // Notify contacts about emergency alert deactivation
+                        try await notificationClient.notifyEmergencyAlertToggled(user.id, false)
+                        
+                        // Send local notification
+                        let notification = NotificationItem(
+                            type: .system,
+                            title: "Emergency Alert Cancelled",
+                            message: "The emergency alert has been cancelled"
+                        )
                         try await notificationClient.sendNotification(notification)
-                    }))
+                        
+                        await haptics.notification(.success)
+                        await send(.alertResponse(.success(())))
+                    } catch {
+                        await send(.alertResponse(.failure(error)))
+                    }
                 }
-
-            case .checkAlertStatus:
-                return .send(.updateTimer)
 
             case .alertResponse(.success):
                 state.alertTapCount = 0
                 state.tapProgress = 0.0
-                return .run { [isAlertActive = state.$isAlertActive] send in
-                    isAlertActive.withLock { $0 = !$0 }
-                }
+                return .none
 
             case let .alertResponse(.failure(error)):
                 state.errorMessage = error.localizedDescription
@@ -205,9 +256,6 @@ struct CheckInFeature {
                         await send(.binding(.set(\.tapProgress, 0.0)))
                     }
                 }
-
-            case .handleAlertButtonTap:
-                return .send(.alertButtonTapped)
                 
             // Long press gestures
             case .longPressStarted:
@@ -234,21 +282,6 @@ struct CheckInFeature {
                     state.longPressProgress = 0.0
                     return .cancel(id: CancelID.longPress)
                 }
-
-            case .startLongPress:
-                return .send(.longPressStarted)
-
-            case .handleLongPressEnded:
-                return .send(.longPressEnded)
-                
-            // Drag gestures
-            case .handleDragGestureChanged:
-                // Handle drag gesture for alert interface
-                return .none
-
-            case .handleDragGestureEnded:
-                // Handle drag gesture end
-                return .none
                 
             // Timer management
             case .startTimer:
@@ -264,7 +297,7 @@ struct CheckInFeature {
                 return .cancel(id: CancelID.timer)
                 
             case .updateTimer:
-                if let lastCheckIn = state.lastCheckInTime,
+                if let lastCheckIn = state.currentUser?.lastCheckedIn,
                    let interval = state.currentUser?.checkInInterval {
                     let timeSince = Date().timeIntervalSince(lastCheckIn)
                     let timeRemaining = max(0, interval - timeSince)
@@ -278,13 +311,6 @@ struct CheckInFeature {
                     state.timeUntilNextCheckInText = "--:--:--"
                 }
                 return .none
-                
-
-            case .startUpdateTimer:
-                return .send(.startTimer)
-
-            case .cleanUpTimers:
-                return .cancel(id: CancelID.timer)
             }
         }
     }
@@ -294,8 +320,6 @@ struct CheckInFeature {
         case longPress
     }
 }
-
-
 
 struct CheckInView: View {
     @Bindable var store: StoreOf<CheckInFeature>
@@ -325,25 +349,19 @@ struct CheckInView: View {
             .background(Color(UIColor.systemGroupedBackground))
             .edgesIgnoringSafeArea(.bottom) // Extend background to bottom edge
             .onAppear {
-                // Check if alert is already active when view appears
-                store.send(.checkAlertStatus)
-
-                // Start the timer to update the time display
-                store.send(.startUpdateTimer)
+                store.send(.onAppear)
             }
             .onDisappear {
-                // Clean up all timers when the view disappears
-                store.send(.cleanUpTimers)
+                store.send(.onDisappear)
             }
         }
     }
 
-    /// Alert button view
     @ViewBuilder
     private func alertButtonView() -> some View {
         ZStack(alignment: .center) {
             Button(action: {
-                store.send(.handleAlertButtonTap, animation: .default)
+                store.send(.alertButtonTapped, animation: .default)
             }) {
                 ZStack {
                     // Background
@@ -413,27 +431,16 @@ struct CheckInView: View {
                 LongPressGesture(minimumDuration: 3.0)
                     .onChanged { _ in
                         if store.isAlertActive && store.canDeactivateAlert {
-                            store.send(.startLongPress)
+                            store.send(.longPressStarted)
                         }
                     }
                     .onEnded { _ in
-                        store.send(.handleLongPressEnded)
-                    }
-            )
-            // Add a DragGesture to detect when the user's finger moves away
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        store.send(.handleDragGestureChanged)
-                    }
-                    .onEnded { _ in
-                        store.send(.handleDragGestureEnded)
+                        store.send(.longPressEnded)
                     }
             )
         }
     }
 
-    /// Countdown view
     @ViewBuilder
     private func countdownView() -> some View {
         VStack {
@@ -460,11 +467,10 @@ struct CheckInView: View {
         .cornerRadius(12)
     }
 
-    /// Check-in button view
     @ViewBuilder
     private func checkInButtonView() -> some View {
         Button(action: {
-            store.send(.performCheckIn, animation: .default)
+            store.send(.checkIn, animation: .default)
         }) {
             Text("Check-in")
                 .font(.system(size: 26, weight: .bold))
