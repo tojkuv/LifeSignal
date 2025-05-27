@@ -200,17 +200,14 @@ struct ApplicationFeature {
                 return .run { [wasConnected, sessionClient, notificationClient] send in
                     await sessionClient.updateNetworkStatus(isConnected)
                     
-                    // Show notification if connection state changed
+                    // Show system notification for connection state changes
                     if wasConnected != isConnected {
-                        let notification = NotificationItem(
-                            title: isConnected ? "Connection Restored" : "No Internet Connection",
-                            message: isConnected ? 
+                        try? await notificationClient.sendSystemNotification(
+                            isConnected ? "Connection Restored" : "No Internet Connection",
+                            isConnected ? 
                                 "Your internet connection has been restored." : 
-                                "Please check your network settings and try again.",
-                            type: .receiveSystemNotification
+                                "Please check your network settings and try again."
                         )
-                        
-                        try? await notificationClient.sendNotification(notification)
                     }
                 }
 

@@ -10,7 +10,7 @@ import Perception
 
 enum RespondersAlert: Equatable {
     case confirmRemove(Contact)
-    case confirmRespondAll
+    case confirmClearAllPings
 }
 
 // MARK: - Feature
@@ -27,6 +27,7 @@ struct RespondersFeature {
         // Add presentations
         @Presents var contactDetails: ContactDetailsSheetFeature.State?
         @Presents var confirmationAlert: AlertState<RespondersAlert>?
+        var showClearAllPingsConfirmation = false
         
         // Computed property for responders
         var responders: [Contact] {
@@ -34,6 +35,25 @@ struct RespondersFeature {
                 // Filter contacts that are marked as responders
                 contact.isResponder
             }
+            .sorted { contact1, contact2 in
+                // Priority groups: [manual alert, not responsive, ping status, default]
+                let priority1 = getContactPriority(contact1)
+                let priority2 = getContactPriority(contact2)
+                
+                if priority1 != priority2 {
+                    return priority1 < priority2
+                }
+                
+                // Within same priority group, sort by name
+                return contact1.name < contact2.name
+            }
+        }
+        
+        private func getContactPriority(_ contact: Contact) -> Int {
+            if contact.hasManualAlertActive { return 0 }
+            if contact.hasNotResponsiveAlert { return 1 }
+            if contact.hasIncomingPing || contact.hasOutgoingPing { return 2 }
+            return 3 // default
         }
         
         var pendingPingsCount: Int {
@@ -44,23 +64,7 @@ struct RespondersFeature {
         // MARK: - Formatting Functions
 
         func responderStatusText(for contact: Contact) -> String {
-            if contact.hasIncomingPing {
-                // Format time ago directly
-                let calendar = Calendar.current
-                let now = Date()
-                let components = calendar.dateComponents([.minute, .hour, .day], from: contact.incomingPingTimestamp ?? Date(), to: now)
-
-                if let day = components.day, day > 0 {
-                    return "Pinged you " + (day == 1 ? "yesterday" : "\(day) days ago")
-                } else if let hour = components.hour, hour > 0 {
-                    return "Pinged you " + (hour == 1 ? "an hour ago" : "\(hour) hours ago")
-                } else if let minute = components.minute, minute > 0 {
-                    return "Pinged you " + (minute == 1 ? "a minute ago" : "\(minute) minutes ago")
-                } else {
-                    return "Pinged you just now"
-                }
-            }
-            return ""
+            return contact.hasIncomingPing ? "Pinged you" : ""
         }
 
         func statusDisplay(for contact: Contact) -> (String, Color) {
@@ -123,75 +127,63 @@ struct RespondersFeature {
         }
 
         func responderActivityStatus(for contact: Contact) -> (String, Color) {
-            let now = Date()
-
-            // Check for emergency alerts first (highest priority)
             if contact.hasManualAlertActive {
-                if let alertTime = contact.emergencyAlertTimestamp {
-                    let timeSinceAlert = now.timeIntervalSince(alertTime)
-                    if timeSinceAlert < 300 { // 5 minutes
-                        return ("🚨 Has Alert (Just Now)", .red)
-                    } else if timeSinceAlert < 3600 { // 1 hour
-                        let minutes = Int(timeSinceAlert / 60)
-                        return ("🚨 Has Alert (\(minutes)m ago)", .red)
-                    } else {
-                        return ("🚨 Has Alert", .red)
-                    }
-                } else {
-                    return ("🚨 Has Alert", .red)
-                }
+                return alertStatus(for: contact, type: "Alert")
             }
-
-            // Check for non-responsive alerts
+            
             if contact.hasNotResponsiveAlert {
-                if let alertTime = contact.notResponsiveAlertTimestamp {
-                    let timeSinceAlert = now.timeIntervalSince(alertTime)
-                    if timeSinceAlert < 300 { // 5 minutes
-                        return ("❌ Not Responsive (Just Now)", .red)
-                    } else if timeSinceAlert < 3600 { // 1 hour
-                        let minutes = Int(timeSinceAlert / 60)
-                        return ("❌ Not Responsive (\(minutes)m ago)", .red)
-                    } else {
-                        return ("❌ Not Responsive", .red)
-                    }
-                } else {
-                    return ("❌ Not Responsive", .red)
-                }
+                return alertStatus(for: contact, type: "Not Responsive")
             }
-
-            // Check for pings (relevant for responders)
+            
             if contact.hasIncomingPing {
-                if let pingTime = contact.incomingPingTimestamp {
-                    let timeSincePing = now.timeIntervalSince(pingTime)
-                    if timeSincePing < 300 { // 5 minutes
-                        return ("📥 Pinged You (Just Now)", .orange)
-                    } else if timeSincePing < 3600 { // 1 hour
-                        let minutes = Int(timeSincePing / 60)
-                        return ("📥 Pinged You (\(minutes)m ago)", .orange)
-                    } else {
-                        return ("📥 Incoming Ping", .orange)
-                    }
-                } else {
-                    return ("📥 Incoming Ping", .orange)
-                }
+                return pingStatus(for: contact, direction: "incoming")
             }
-
+            
             if contact.hasOutgoingPing {
-                if let pingTime = contact.outgoingPingTimestamp {
-                    let timeSincePing = now.timeIntervalSince(pingTime)
-                    if timeSincePing < 300 { // 5 minutes
-                        return ("📤 You Pinged (Just Now)", .blue)
-                    } else {
-                        let minutes = Int(timeSincePing / 60)
-                        return ("📤 You Pinged (\(minutes)m ago)", .blue)
-                    }
-                } else {
-                    return ("📤 Outgoing Ping", .blue)
-                }
+                return pingStatus(for: contact, direction: "outgoing")
             }
-
-            // Default state for responders
+            
             return ("✅ Available", .green)
+        }
+        
+        private func alertStatus(for contact: Contact, type: String) -> (String, Color) {
+            let timestamp = type == "Alert" ? contact.emergencyAlertTimestamp : contact.notResponsiveAlertTimestamp
+            let emoji = type == "Alert" ? "🚨" : "❌"
+            
+            guard let alertTime = timestamp else {
+                return ("\(emoji) \(type)", .red)
+            }
+            
+            let timeSince = Date().timeIntervalSince(alertTime)
+            if timeSince < 300 {
+                return ("\(emoji) \(type) (Just Now)", .red)
+            } else if timeSince < 3600 {
+                let minutes = Int(timeSince / 60)
+                return ("\(emoji) \(type) (\(minutes)m ago)", .red)
+            } else {
+                return ("\(emoji) \(type)", .red)
+            }
+        }
+        
+        private func pingStatus(for contact: Contact, direction: String) -> (String, Color) {
+            let timestamp = direction == "incoming" ? contact.incomingPingTimestamp : contact.outgoingPingTimestamp
+            let emoji = direction == "incoming" ? "📥" : "📤"
+            let text = direction == "incoming" ? "Pinged You" : "You Pinged"
+            let color: Color = direction == "incoming" ? .orange : .blue
+            
+            guard let pingTime = timestamp else {
+                return ("\(emoji) \(text)", color)
+            }
+            
+            let timeSince = Date().timeIntervalSince(pingTime)
+            if timeSince < 300 {
+                return ("\(emoji) \(text) (Just Now)", color)
+            } else if timeSince < 3600 {
+                let minutes = Int(timeSince / 60)
+                return ("\(emoji) \(text) (\(minutes)m ago)", color)
+            } else {
+                return ("\(emoji) \(text)", color)
+            }
         }
     }
 
@@ -203,7 +195,7 @@ struct RespondersFeature {
         case selectContact(Contact)
         case pingContact(Contact)
         case removeContact(Contact)
-        case respondToAllPings
+        case clearAllPings
         case showRemoveConfirmation(Contact)
         
         // UI presentations
@@ -271,21 +263,9 @@ struct RespondersFeature {
                 }
                 return .none
 
-            case .respondToAllPings:
+            case .clearAllPings:
                 guard state.pendingPingsCount > 0 else { return .none }
-
-                state.confirmationAlert = AlertState {
-                    TextState("Respond to All Pings")
-                } actions: {
-                    ButtonState(action: .confirmRespondAll) {
-                        TextState("Respond")
-                    }
-                    ButtonState(role: .cancel) {
-                        TextState("Cancel")
-                    }
-                } message: {
-                    TextState("This will send a response to all pending pings from your responders.")
-                }
+                state.showClearAllPingsConfirmation = true
                 return .none
 
             case let .showRemoveConfirmation(contact):
@@ -305,21 +285,44 @@ struct RespondersFeature {
                     }))
                 }
 
-            case .confirmationAlert(.presented(.confirmRespondAll)):
+            case .confirmationAlert(.presented(.confirmClearAllPings)):
                 state.isLoading = true
+                state.showClearAllPingsConfirmation = false
 
-                return .run { [pendingPingsCount = state.pendingPingsCount] send in
+                // Get contacts that need ping clearing before updating them
+                let contactsToNotify = state.allContacts.filter { $0.isResponder && $0.hasIncomingPing }
+                let contactsToUpdate = contactsToNotify.map { contact in
+                    var updatedContact = contact
+                    updatedContact.hasIncomingPing = false
+                    updatedContact.incomingPingTimestamp = nil
+                    return updatedContact
+                }
+
+                return .run { [contactsClient, notificationClient] send in
                     await haptics.notification(.success)
+                    
+                    // First: Send acknowledgment notifications to each contact who sent pings
+                    for originalContact in contactsToNotify {
+                        do {
+                            try await notificationClient.sendPingNotification(
+                                .sendResponderPingResponded,
+                                "Ping Acknowledged",
+                                "Your ping has been acknowledged",
+                                originalContact.id
+                            )
+                        } catch {
+                            // Continue with other notifications even if one fails
+                            print("Failed to send acknowledgment to \(originalContact.name): \(error)")
+                        }
+                    }
+                    
+                    // Second: Update each contact's state to clear the pings
+                    for contact in contactsToUpdate {
+                        await contactsClient.updateContact(contact)
+                    }
+                    
                     await send(.pingResponse(Result {
-                        // Send response to all pending pings via NotificationClient
-                        try await notificationClient.sendPingNotification(
-                            .sendResponderPingResponded,
-                            "Responded to All Pings",
-                            "You responded to \(pendingPingsCount) pending ping\(pendingPingsCount == 1 ? "" : "s")",
-                            UUID() // Broadcast to all relevant contacts
-                        )
-                        
-                        // Clear all received pings
+                        // Clear notification history (but don't send duplicate notifications)
                         try await notificationClient.clearAllReceivedPings()
                     }))
                 }
@@ -330,36 +333,42 @@ struct RespondersFeature {
             // Network responses
             case .pingResponse(.success):
                 state.isLoading = false
-                return .run { _ in
+                return .run { [haptics, notificationClient] _ in
                     await haptics.notification(.success)
+                    try? await notificationClient.sendSystemNotification(
+                        "Success",
+                        "All incoming pings have been cleared successfully."
+                    )
                 }
 
             case let .pingResponse(.failure(error)):
                 state.isLoading = false
-                return .run { _ in
-                    let notification = NotificationItem(
-                        title: "Ping Failed",
-                        message: "Unable to send ping: \(error.localizedDescription)",
-                        type: .receiveSystemNotification
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.error)
+                    try? await notificationClient.sendSystemNotification(
+                        "Operation Failed",
+                        "Unable to clear pings: \(error.localizedDescription)"
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
 
             case .removeResponse(.success):
                 state.isLoading = false
-                return .run { _ in
+                return .run { [haptics, notificationClient] _ in
                     await haptics.notification(.success)
+                    try? await notificationClient.sendSystemNotification(
+                        "Responder Removed",
+                        "The responder has been successfully removed from your list."
+                    )
                 }
 
             case let .removeResponse(.failure(error)):
                 state.isLoading = false
-                return .run { _ in
-                    let notification = NotificationItem(
-                        title: "Remove Failed",
-                        message: "Unable to remove responder: \(error.localizedDescription)",
-                        type: .receiveSystemNotification
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.error)
+                    try? await notificationClient.sendSystemNotification(
+                        "Remove Failed",
+                        "Unable to remove responder: \(error.localizedDescription)"
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
 
             case .refreshResponse(.success):
@@ -368,13 +377,11 @@ struct RespondersFeature {
 
             case let .refreshResponse(.failure(error)):
                 state.isLoading = false
-                return .run { _ in
-                    let notification = NotificationItem(
-                        title: "Refresh Failed",
-                        message: "Unable to refresh responders: \(error.localizedDescription)",
-                        type: .receiveSystemNotification
+                return .run { [notificationClient] _ in
+                    try? await notificationClient.sendSystemNotification(
+                        "Refresh Failed",
+                        "Unable to refresh responders: \(error.localizedDescription)"
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
             }
         }
@@ -390,123 +397,147 @@ struct RespondersFeature {
 struct RespondersView: View {
     @Bindable var store: StoreOf<RespondersFeature>
 
+    // MARK: - Body
+    
     var body: some View {
         WithPerceptionTracking {
-            // Simplified scrollable view with direct LazyVStack
-            ScrollView(.vertical, showsIndicators: true) {
-                LazyVStack(spacing: 12) {
-                    if store.responders.isEmpty {
-                        Text("No responders yet")
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.top, 40)
-                    } else {
-                        // Use the responders from the feature state
-                        ForEach(store.responders) { responder in
-                            ResponderCardView(contact: responder, store: store)
-                        }
-                    }
-
-                    // Add extra padding at the bottom to ensure content doesn't overlap with tab bar
-                    Spacer()
-                        .frame(height: 20)
+            contentView
+                .toolbar { toolbarContent }
+                .onAppear(perform: onAppear)
+                .alert($store.scope(state: \.confirmationAlert, action: \.confirmationAlert))
+                .alert("Clear All Pings", isPresented: confirmationBinding, actions: alertActions, message: alertMessage)
+                .sheet(item: $store.scope(state: \.contactDetails, action: \.contactDetails)) { store in
+                    ContactDetailsSheetView(store: store)
                 }
-                .padding(.horizontal)
-                .padding(.bottom, 70) // Add padding to ensure content doesn't overlap with tab bar
-            }
-            .background(Color(UIColor.systemGroupedBackground))
-            .edgesIgnoringSafeArea(.bottom) // Extend background to bottom edge
-            .onAppear {
-                store.send(.refreshResponders, animation: .default)
-            }
-            .toolbar {
-                // Respond to All button (grayed out when there are no pending pings)
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        store.send(.respondToAllPings, animation: .default)
-                    }) {
-                        Image(systemName: store.pendingPingsCount > 0 ? "bell.badge.slash.fill" : "bell.fill")
-                            .foregroundColor(store.pendingPingsCount > 0 ? .blue : Color.blue.opacity(0.5))
-                            .font(.system(size: 18))
-                    }
-                    .disabled(store.pendingPingsCount == 0)
-                }
-
-                // Notification Center button
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: {
-                        // This should be handled by parent feature if needed
-                    }) {
-                        Image(systemName: "square.fill.text.grid.1x2")
-                    }
-                }
-            }
-
-            .alert($store.scope(state: \.confirmationAlert, action: \.confirmationAlert))
-            .sheet(item: $store.scope(state: \.contactDetails, action: \.contactDetails)) { store in
-                ContactDetailsSheetView(store: store)
-            }
         }
     }
 }
 
-struct ResponderCardView: View {
-    let contact: Contact
-    let store: StoreOf<RespondersFeature>
+// MARK: - Content Views
 
-    var body: some View {
-        HStack(spacing: 12) {
-            // Avatar
-            Circle()
-                .fill(Color.blue.opacity(0.1))
-                .frame(width: 50, height: 50)
-                .overlay(
-                    Text(String(contact.name.prefix(1)))
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.blue)
-                )
+private extension RespondersView {
+    
+    @ViewBuilder
+    var contentView: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            LazyVStack(spacing: 12) {
+                contactsContent
+                Spacer().frame(height: 20)
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 70)
+        }
+        .background(Color(UIColor.systemGroupedBackground))
+        .edgesIgnoringSafeArea(.bottom)
+    }
+    
+    @ViewBuilder
+    var contactsContent: some View {
+        if store.responders.isEmpty {
+            emptyStateView
+        } else {
+            contactsListView
+        }
+    }
+    
+    @ViewBuilder
+    var emptyStateView: some View {
+        Text("No responders yet")
+            .foregroundColor(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 40)
+    }
+    
+    @ViewBuilder
+    var contactsListView: some View {
+        ForEach(store.responders) { responder in
+            ContactCardView(
+                contact: responder,
+                style: .responder(statusText: store.state.responderStatusText(for: responder)),
+                onTap: { store.send(.selectContact(responder), animation: .default) }
+            )
+        }
+    }
+}
 
-            // Name and status
-            VStack(alignment: .leading, spacing: 4) {
-                Text(contact.name)
+// MARK: - Toolbar
+
+private extension RespondersView {
+    
+    @ToolbarContentBuilder
+    var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            clearAllPingsButton
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
+            notificationCenterButton
+        }
+    }
+    
+    @ViewBuilder
+    var clearAllPingsButton: some View {
+        Button(action: clearAllPingsAction) {
+            HStack(spacing: 4) {
+                Image(systemName: store.pendingPingsCount > 0 ? "bell.badge.slash.fill" : "bell.fill")
+                    .font(.system(size: 18))
+                Text("Clear")
                     .font(.body)
-                    .foregroundColor(.primary)
-
-                let statusText = store.state.responderStatusText(for: contact)
-                if !statusText.isEmpty {
-                    Text(statusText)
-                        .font(.footnote)
-                        .foregroundColor(contact.hasIncomingPing ? Color.blue : Color.secondary)
-                }
             }
-            .frame(maxHeight: .infinity, alignment: .center)
-
-            Spacer()
-
-            // Trailing content (ping icon - non-interactive as per requirements)
-            if contact.hasIncomingPing {
-                // Display ping icon without button functionality
-                Circle()
-                    .fill(Color(UIColor.tertiarySystemGroupedBackground))
-                    .frame(width: 40, height: 40)
-                    .overlay(
-                        Image(systemName: "bell.badge.fill")
-                            .foregroundColor(.blue)
-                            .font(.system(size: 18))
-                    )
-                    .accessibilityLabel("Ping notification from \(contact.name)")
-            }
+            .foregroundColor(store.pendingPingsCount > 0 ? .blue : .gray)
         }
-        .padding() // This padding is inside the card
-        .background(
-            contact.hasManualAlertActive || contact.hasNotResponsiveAlert ? Color.red.opacity(0.1) :
-            contact.hasIncomingPing ? Color.blue.opacity(0.1) : Color(UIColor.secondarySystemGroupedBackground)
-        )
-        .cornerRadius(12)
-        .onTapGesture {
-            // Haptic feedback handled by TCA action
-            store.send(.selectContact(contact), animation: .default)
+        .disabled(store.pendingPingsCount == 0)
+    }
+    
+    @ViewBuilder
+    var notificationCenterButton: some View {
+        Button(action: notificationCenterAction) {
+            Image(systemName: "square.fill.text.grid.1x2")
         }
+        .simultaneousGesture(TapGesture().onEnded { _ in
+            store.send(.clearAllPings, animation: .default)
+        })
     }
 }
+
+// MARK: - Alerts
+
+private extension RespondersView {
+    
+    var confirmationBinding: Binding<Bool> {
+        Binding(
+            get: { store.showClearAllPingsConfirmation },
+            set: { _ in }
+        )
+    }
+    
+    @ViewBuilder
+    func alertActions() -> some View {
+        Button("Clear All") {
+            store.send(.confirmationAlert(.presented(.confirmClearAllPings)), animation: .default)
+        }
+        Button("Cancel", role: .cancel) { }
+    }
+    
+    @ViewBuilder
+    func alertMessage() -> some View {
+        Text("Are you sure you want to clear all pending pings?")
+    }
+}
+
+// MARK: - Actions
+
+private extension RespondersView {
+    
+    func onAppear() {
+        store.send(.refreshResponders, animation: .default)
+    }
+    
+    func clearAllPingsAction() {
+        store.send(.clearAllPings, animation: .default)
+    }
+    
+    func notificationCenterAction() {
+        // This should be handled by parent feature if needed
+    }
+}
+

@@ -142,7 +142,7 @@ final class MockUserService: UserServiceProtocol {
             phoneNumber: "+1234567890",
             phoneRegion: "US",
             emergencyNote: "",
-            checkInInterval: 28800, // 8 hours (minimum interval)
+            checkInInterval: 115200, // 32 hours (default interval)
             lastCheckedIn: Int64(recentCheckIn.timeIntervalSince1970),
             notificationPreference: .thirtyMinutes,
             isEmergencyAlertEnabled: false,
@@ -161,7 +161,7 @@ final class MockUserService: UserServiceProtocol {
             phoneNumber: "+1234567890",
             phoneRegion: "US",
             emergencyNote: "",
-            checkInInterval: 28800, // 8 hours (minimum interval)
+            checkInInterval: 115200, // 32 hours (default interval)
             lastCheckedIn: request.timestamp,
             notificationPreference: .thirtyMinutes,
             isEmergencyAlertEnabled: false,
@@ -180,7 +180,7 @@ final class MockUserService: UserServiceProtocol {
             phoneNumber: request.phoneNumber,
             phoneRegion: request.phoneRegion,
             emergencyNote: "",
-            checkInInterval: 28800, // 8 hours (minimum interval) (instead of 24 hours)
+            checkInInterval: 115200, // 32 hours (default interval) (instead of 24 hours)
             lastCheckedIn: Int64(Date().timeIntervalSince1970),
             notificationPreference: request.notificationPreference,
             isEmergencyAlertEnabled: request.isEmergencyAlertEnabled,
@@ -229,7 +229,7 @@ final class MockUserService: UserServiceProtocol {
             phoneNumber: "+1234567890",
             phoneRegion: "US",
             emergencyNote: "",
-            checkInInterval: 28800, // 8 hours (minimum interval)
+            checkInInterval: 115200, // 32 hours (default interval)
             lastCheckedIn: nil,
             notificationPreference: .thirtyMinutes,
             isEmergencyAlertEnabled: true,
@@ -255,7 +255,7 @@ final class MockUserService: UserServiceProtocol {
             phoneNumber: "+1234567890",
             phoneRegion: "US",
             emergencyNote: "",
-            checkInInterval: 28800, // 8 hours (minimum interval)
+            checkInInterval: 115200, // 32 hours (default interval)
             lastCheckedIn: nil,
             notificationPreference: .thirtyMinutes,
             isEmergencyAlertEnabled: true,
@@ -872,5 +872,92 @@ extension DependencyValues {
     var userClient: UserClient {
         get { self[UserClient.self] }
         set { self[UserClient.self] = newValue }
+    }
+}
+
+// MARK: - Mock Data Extensions
+
+extension User {
+    /// Mock user data for testing
+    static let mock = User(
+        id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+        name: "Test User",
+        phoneNumber: "+1234567890",
+        phoneRegion: "US",
+        emergencyNote: "Test emergency note",
+        checkInInterval: 115200, // 32 hours
+        lastCheckedIn: Date().addingTimeInterval(-3600), // 1 hour ago
+        notificationPreference: .thirtyMinutes,
+        isEmergencyAlertEnabled: false,
+        emergencyAlertTimestamp: nil,
+        qrCodeId: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+        avatarURL: nil,
+        lastModified: Date()
+    )
+    
+    /// Mock user with active emergency alert
+    static let mockWithAlert = User(
+        id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+        name: "Test User",
+        phoneNumber: "+1234567890",
+        phoneRegion: "US",
+        emergencyNote: "Test emergency note",
+        checkInInterval: 115200, // 32 hours
+        lastCheckedIn: Date().addingTimeInterval(-3600), // 1 hour ago
+        notificationPreference: .thirtyMinutes,
+        isEmergencyAlertEnabled: true,
+        emergencyAlertTimestamp: Date().addingTimeInterval(-600), // 10 minutes ago
+        qrCodeId: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+        avatarURL: nil,
+        lastModified: Date()
+    )
+    
+    /// Mock user with overdue check-in
+    static let mockOverdue = User(
+        id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+        name: "Test User",
+        phoneNumber: "+1234567890",
+        phoneRegion: "US",
+        emergencyNote: "Test emergency note",
+        checkInInterval: 115200, // 32 hours
+        lastCheckedIn: Date().addingTimeInterval(-86400), // 24 hours ago (overdue)
+        notificationPreference: .thirtyMinutes,
+        isEmergencyAlertEnabled: false,
+        emergencyAlertTimestamp: nil,
+        qrCodeId: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+        avatarURL: nil,
+        lastModified: Date()
+    )
+    
+    /// Create a mock user with specific characteristics for testing
+    static func mockUser(
+        id: UUID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+        name: String = "Test User",
+        phoneNumber: String = "+1234567890",
+        phoneRegion: String = "US",
+        emergencyNote: String = "Test emergency note",
+        checkInInterval: TimeInterval = 115200,
+        lastCheckedIn: Date? = nil,
+        notificationPreference: NotificationPreference = .thirtyMinutes,
+        isEmergencyAlertEnabled: Bool = false,
+        emergencyAlertTimestamp: Date? = nil,
+        qrCodeId: UUID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+        avatarURL: String? = nil
+    ) -> User {
+        User(
+            id: id,
+            name: name,
+            phoneNumber: phoneNumber,
+            phoneRegion: phoneRegion,
+            emergencyNote: emergencyNote,
+            checkInInterval: checkInInterval,
+            lastCheckedIn: lastCheckedIn,
+            notificationPreference: notificationPreference,
+            isEmergencyAlertEnabled: isEmergencyAlertEnabled,
+            emergencyAlertTimestamp: emergencyAlertTimestamp,
+            qrCodeId: qrCodeId,
+            avatarURL: avatarURL,
+            lastModified: Date()
+        )
     }
 }

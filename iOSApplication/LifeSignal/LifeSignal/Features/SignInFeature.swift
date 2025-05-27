@@ -278,15 +278,19 @@ struct SignInView: View {
                 store.send(.debugSkipSignInAndOnboarding, animation: .default)
             }) {
                 Text("🚀 DEBUG: Skip Sign In & Onboarding")
-                    .font(.caption)
-                    .foregroundColor(.orange)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundColor(.primary)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(Color.orange.opacity(0.1))
-                    .cornerRadius(8)
+                    .padding(.vertical, 12)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(.quaternary, lineWidth: 0.5)
+                    )
             }
             .disabled(store.isLoading)
             .padding(.horizontal)
+            .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
             #endif
 
             Text("Enter your phone number")

@@ -228,12 +228,10 @@ struct ProfileFeature {
             case .sendPhoneVerificationCode:
                 guard !state.newPhoneNumber.isEmpty else {
                     return .run { [notificationClient, haptics] _ in
-                        let notification = NotificationItem(
-                            title: "Phone Number Required",
-                            message: "Please enter a phone number to continue.",
-                            type: .receiveSystemNotification
+                        try? await notificationClient.sendSystemNotification(
+                            "Phone Number Required",
+                            "Please enter a phone number to continue."
                         )
-                        try? await notificationClient.sendNotification(notification)
                         await haptics.notification(.error)
                     }
                 }
@@ -253,24 +251,20 @@ struct ProfileFeature {
             case .verifyPhoneNumber:
                 guard !state.phoneVerificationCode.isEmpty else {
                     return .run { [notificationClient, haptics] _ in
-                        let notification = NotificationItem(
-                            title: "Verification Code Required",
-                            message: "Please enter the 6-digit verification code.",
-                            type: .receiveSystemNotification
+                        try? await notificationClient.sendSystemNotification(
+                            "Verification Code Required",
+                            "Please enter the 6-digit verification code."
                         )
-                        try? await notificationClient.sendNotification(notification)
                         await haptics.notification(.error)
                     }
                 }
                 
                 guard let verificationID = state.phoneVerificationID else {
                     return .run { [notificationClient, haptics] _ in
-                        let notification = NotificationItem(
-                            title: "Session Expired",
-                            message: "Verification session expired. Please request a new code.",
-                            type: .receiveSystemNotification
+                        try? await notificationClient.sendSystemNotification(
+                            "Session Expired",
+                            "Verification session expired. Please request a new code."
                         )
-                        try? await notificationClient.sendNotification(notification)
                         await haptics.notification(.error)
                     }
                 }
@@ -302,21 +296,17 @@ struct ProfileFeature {
                         try await sessionClient.endSession()
                         await haptics.notification(.success)
                         
-                        let notification = NotificationItem(
-                            title: "Signed Out",
-                            message: "You have been successfully signed out of your account.",
-                            type: .receiveSystemNotification
+                        try? await notificationClient.sendSystemNotification(
+                            "Signed Out",
+                            "You have been successfully signed out of your account."
                         )
-                        try? await notificationClient.sendNotification(notification)
                     } catch {
                         await haptics.notification(.error)
                         
-                        let notification = NotificationItem(
-                            title: "Sign Out Issue",
-                            message: "There was an issue signing out, but you have been logged out locally.",
-                            type: .receiveSystemNotification
+                        try? await notificationClient.sendSystemNotification(
+                            "Sign Out Issue",
+                            "There was an issue signing out, but you have been logged out locally."
                         )
-                        try? await notificationClient.sendNotification(notification)
                     }
                 }
 
@@ -324,12 +314,10 @@ struct ProfileFeature {
                 let trimmedDescription = state.newDescription.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard var user = state.currentUser else {
                     return .run { [notificationClient, haptics] _ in
-                        let notification = NotificationItem(
-                            title: "Profile Update Issue",
-                            message: "Unable to update emergency note. Please try again.",
-                            type: .receiveSystemNotification
+                        try? await notificationClient.sendSystemNotification(
+                            "Profile Update Issue",
+                            "Unable to update emergency note. Please try again."
                         )
-                        try? await notificationClient.sendNotification(notification)
                         await haptics.notification(.error)
                     }
                 }
@@ -358,12 +346,10 @@ struct ProfileFeature {
                 let validationResult = sessionClient.validateName(trimmedName)
                 guard validationResult.isValid else {
                     return .run { [notificationClient, haptics, errorMessage = validationResult.errorMessage] _ in
-                        let notification = NotificationItem(
-                            title: "Name Validation Issue",
-                            message: errorMessage ?? "Please check your name format.",
-                            type: .receiveSystemNotification
+                        try? await notificationClient.sendSystemNotification(
+                            "Name Validation Issue",
+                            errorMessage ?? "Please check your name format."
                         )
-                        try? await notificationClient.sendNotification(notification)
                         await haptics.notification(.error)
                     }
                 }
@@ -410,12 +396,10 @@ struct ProfileFeature {
                         
                         try await userClient.updateAvatarData(userID, imageData)
                         
-                        let notification = NotificationItem(
-                            title: "Avatar Updated",
-                            message: "Your profile avatar has been successfully updated.",
-                            type: .receiveSystemNotification
+                        try? await notificationClient.sendSystemNotification(
+                            "Avatar Updated",
+                            "Your profile avatar has been successfully updated."
                         )
-                        try? await notificationClient.sendNotification(notification)
                         
                     }))
                 }
@@ -434,12 +418,10 @@ struct ProfileFeature {
                     await send(.updateResponse(Result {
                         try await userClient.deleteAvatarData(userID)
                         
-                        let notification = NotificationItem(
-                            title: "Avatar Deleted",
-                            message: "Your profile avatar has been successfully deleted.",
-                            type: .receiveSystemNotification
+                        try? await notificationClient.sendSystemNotification(
+                            "Avatar Deleted",
+                            "Your profile avatar has been successfully deleted."
                         )
-                        try? await notificationClient.sendNotification(notification)
                         
                     }))
                 }
@@ -472,24 +454,20 @@ struct ProfileFeature {
                 return .run { [haptics, notificationClient] _ in
                     await haptics.notification(.success)
                     
-                    let notification = NotificationItem(
-                        title: "Profile Updated",
-                        message: "Your profile information has been successfully updated.",
-                        type: .receiveSystemNotification
+                    try? await notificationClient.sendSystemNotification(
+                        "Profile Updated",
+                        "Your profile information has been successfully updated."
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
 
             case let .updateResponse(.failure(error)):
                 return .run { [errorMessage = error.localizedDescription, haptics, notificationClient] _ in
                     await haptics.notification(.error)
                     
-                    let notification = NotificationItem(
-                        title: "Profile Update Failed",
-                        message: "Failed to update profile: \(errorMessage)",
-                        type: .receiveSystemNotification
+                    try? await notificationClient.sendSystemNotification(
+                        "Profile Update Failed",
+                        "Failed to update profile: \(errorMessage)"
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
 
             case let .uploadAvatarResponse(.success(url)):
@@ -514,24 +492,20 @@ struct ProfileFeature {
                 return .run { [phoneNumber = state.newPhoneNumber, haptics, notificationClient] _ in
                     await haptics.notification(.success)
                     
-                    let notification = NotificationItem(
-                        title: "Verification Code Sent",
-                        message: "A verification code has been sent to \(phoneNumber)",
-                        type: .receiveSystemNotification
+                    try? await notificationClient.sendSystemNotification(
+                        "Verification Code Sent",
+                        "A verification code has been sent to \(phoneNumber)"
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
                 
             case let .phoneVerificationSent(.failure(error)):
                 return .run { [errorMessage = error.localizedDescription, haptics, notificationClient] _ in
                     await haptics.notification(.error)
                     
-                    let notification = NotificationItem(
-                        title: "Verification Failed",
-                        message: "Failed to send verification code: \(errorMessage)",
-                        type: .receiveSystemNotification
+                    try? await notificationClient.sendSystemNotification(
+                        "Verification Failed",
+                        "Failed to send verification code: \(errorMessage)"
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
                 
             case .phoneNumberChanged(.success):
@@ -544,24 +518,20 @@ struct ProfileFeature {
                 return .run { [haptics, notificationClient] _ in
                     await haptics.notification(.success)
                     
-                    let notification = NotificationItem(
-                        title: "Phone Number Updated",
-                        message: "Your phone number has been successfully changed to \(changedPhoneNumber)",
-                        type: .receiveSystemNotification
+                    try? await notificationClient.sendSystemNotification(
+                        "Phone Number Updated",
+                        "Your phone number has been successfully changed to \(changedPhoneNumber)"
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
                 
             case let .phoneNumberChanged(.failure(error)):
                 return .run { [errorMessage = error.localizedDescription, haptics, notificationClient] _ in
                     await haptics.notification(.error)
                     
-                    let notification = NotificationItem(
-                        title: "Phone Number Change Failed",
-                        message: "Failed to change phone number: \(errorMessage)",
-                        type: .receiveSystemNotification
+                    try? await notificationClient.sendSystemNotification(
+                        "Phone Number Change Failed",
+                        "Failed to change phone number: \(errorMessage)"
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
             }
         }
@@ -658,7 +628,7 @@ struct ProfileView: View {
             store.send(.prepareEditDescription, animation: .default)
         }) {
             HStack(alignment: .top) {
-                Text(user.emergencyNote.isEmpty ? "This is simply a note for contacts." : user.emergencyNote)
+                Text(user.emergencyNote.isEmpty ? "Your emergency note is empty" : user.emergencyNote)
                     .font(.body)
                     .foregroundColor(.primary)
                     .multilineTextAlignment(.leading)

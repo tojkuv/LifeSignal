@@ -24,36 +24,47 @@ struct DependentsFeature {
         @Presents var confirmationAlert: AlertState<DependentsAlert>?
         
         var dependents: [Contact] {
-            let filtered = allContacts.filter { contact in
-                // Filter for contacts marked as dependents
-                contact.isDependent
-            }
+            let filtered = allContacts.filter(\.isDependent)
+            return sortedContacts(filtered, by: sortMode)
+        }
+        
+        private func sortedContacts(_ contacts: [Contact], by mode: SortMode) -> [Contact] {
+            // First group by priority: [manual alert, not responsive, ping status, default]
+            let grouped = Dictionary(grouping: contacts) { getContactPriority($0) }
+            let sortedKeys = grouped.keys.sorted()
             
-            switch sortMode {
-            case .timeLeft:
-                return filtered.sorted { (contact1, contact2) in
-                    // Sort by time remaining until next check-in is due
-                    let now = Date()
-                    
-                    func timeRemaining(for contact: Contact) -> TimeInterval {
-                        guard let lastCheckIn = contact.lastCheckInTimestamp else {
-                            return -Double.infinity // No check-in means expired
-                        }
-                        let timeSince = now.timeIntervalSince(lastCheckIn)
-                        return contact.checkInInterval - timeSince
-                    }
-                    
-                    let remaining1 = timeRemaining(for: contact1)
-                    let remaining2 = timeRemaining(for: contact2)
-                    
-                    // Sort by time remaining (ascending - least time remaining first)
-                    return remaining1 < remaining2
+            var result: [Contact] = []
+            for priority in sortedKeys {
+                let contactsInGroup = grouped[priority] ?? []
+                let sortedGroup: [Contact]
+                
+                // Sort within each priority group by the selected mode
+                switch mode {
+                case .timeLeft:
+                    sortedGroup = contactsInGroup.sorted { timeRemaining(for: $0) < timeRemaining(for: $1) }
+                case .name:
+                    sortedGroup = contactsInGroup.sorted { $0.name < $1.name }
+                case .dateAdded:
+                    sortedGroup = contactsInGroup.sorted { $0.dateAdded > $1.dateAdded }
                 }
-            case .name:
-                return filtered.sorted { $0.name < $1.name }
-            case .dateAdded:
-                return filtered.sorted { $0.lastUpdated > $1.lastUpdated }
+                result.append(contentsOf: sortedGroup)
             }
+            return result
+        }
+        
+        private func getContactPriority(_ contact: Contact) -> Int {
+            if contact.hasManualAlertActive { return 0 }
+            if contact.hasNotResponsiveAlert { return 1 }
+            if contact.hasOutgoingPing { return 2 } // Only outgoing pings for dependents
+            return 3 // default
+        }
+        
+        private func timeRemaining(for contact: Contact) -> TimeInterval {
+            guard let lastCheckIn = contact.lastCheckInTimestamp else {
+                return -Double.infinity
+            }
+            let timeSince = Date().timeIntervalSince(lastCheckIn)
+            return contact.checkInInterval - timeSince
         }
         
         enum SortMode: String, CaseIterable, Equatable {
@@ -82,19 +93,23 @@ struct DependentsFeature {
 
         func statusText(for contact: Contact) -> String {
             if contact.hasManualAlertActive {
-                return "Alert Active"
-            } else if contact.isResponder {
-                return "Responder"
+                return "Sent out an Alert"
+            } else if contact.hasNotResponsiveAlert {
+                return "Non-responsive"
+            } else if contact.hasOutgoingPing {
+                return "You Pinged Them"
             } else {
-                return "Dependent"
+                return ""
             }
         }
 
         func statusColor(for contact: Contact) -> Color {
             if contact.hasManualAlertActive {
                 return .red
-            } else if contact.isResponder {
-                return .green
+            } else if contact.hasNotResponsiveAlert {
+                return .orange
+            } else if contact.hasOutgoingPing {
+                return .blue
             } else {
                 return .secondary
             }
@@ -184,90 +199,81 @@ struct DependentsFeature {
         }
 
         func contactActivityStatus(for contact: Contact) -> (String, Color) {
-            // More detailed activity status
-            let now = Date()
-
-            // Check for active alerts first
             if contact.hasManualAlertActive {
-                if let alertTime = contact.emergencyAlertTimestamp {
-                    let timeSinceAlert = now.timeIntervalSince(alertTime)
-                    if timeSinceAlert < 300 { // 5 minutes
-                        return ("🚨 Alert (Just Now)", .red)
-                    } else if timeSinceAlert < 3600 { // 1 hour
-                        let minutes = Int(timeSinceAlert / 60)
-                        return ("🚨 Alert (\(minutes)m ago)", .red)
-                    } else {
-                        return ("🚨 Alert Active", .red)
-                    }
-                } else {
-                    return ("🚨 Alert Active", .red)
-                }
+                return alertActivityStatus(for: contact, type: "Alert")
             }
-
-            // Check for non-responsive alerts
+            
             if contact.hasNotResponsiveAlert {
-                if let alertTime = contact.notResponsiveAlertTimestamp {
-                    let timeSinceAlert = now.timeIntervalSince(alertTime)
-                    if timeSinceAlert < 300 { // 5 minutes
-                        return ("❌ Not Responsive (Just Now)", .red)
-                    } else if timeSinceAlert < 3600 { // 1 hour
-                        let minutes = Int(timeSinceAlert / 60)
-                        return ("❌ Not Responsive (\(minutes)m ago)", .red)
-                    } else {
-                        return ("❌ Not Responsive", .red)
-                    }
-                } else {
-                    return ("❌ Not Responsive", .red)
-                }
+                return alertActivityStatus(for: contact, type: "Not Responsive")
             }
-
-            // Check for pings
+            
             if contact.hasIncomingPing {
-                if let pingTime = contact.incomingPingTimestamp {
-                    let timeSincePing = now.timeIntervalSince(pingTime)
-                    if timeSincePing < 300 { // 5 minutes
-                        return ("📥 Pinged (Just Now)", .orange)
-                    } else {
-                        let minutes = Int(timeSincePing / 60)
-                        return ("📥 Pinged (\(minutes)m ago)", .orange)
-                    }
-                } else {
-                    return ("📥 Incoming Ping", .orange)
-                }
+                return pingActivityStatus(for: contact, direction: "incoming")
             }
-
+            
             if contact.hasOutgoingPing {
-                if let pingTime = contact.outgoingPingTimestamp {
-                    let timeSincePing = now.timeIntervalSince(pingTime)
-                    if timeSincePing < 300 { // 5 minutes
-                        return ("📤 Sent Ping (Just Now)", .blue)
-                    } else {
-                        let minutes = Int(timeSincePing / 60)
-                        return ("📤 Sent Ping (\(minutes)m ago)", .blue)
-                    }
-                } else {
-                    return ("📤 Outgoing Ping", .blue)
-                }
+                return pingActivityStatus(for: contact, direction: "outgoing")
             }
-
-            // Check check-in status
-            if let lastCheckIn = contact.lastCheckInTimestamp {
-                let timeSinceCheckIn = now.timeIntervalSince(lastCheckIn)
-                let overdueFactor = timeSinceCheckIn / contact.checkInInterval
-
-                if overdueFactor < 0.5 {
-                    return ("✅ Recently Active", .green)
-                } else if overdueFactor < 1.0 {
-                    return ("⏰ Active", .green)
-                } else if overdueFactor < 1.5 {
-                    return ("⚠️ Overdue", .yellow)
-                } else if overdueFactor < 2.0 {
-                    return ("❗ Late Check-in", .orange)
-                } else {
-                    return ("⚠️ Very Overdue", .orange)
-                }
+            
+            return checkInActivityStatus(for: contact)
+        }
+        
+        private func alertActivityStatus(for contact: Contact, type: String) -> (String, Color) {
+            let timestamp = type == "Alert" ? contact.emergencyAlertTimestamp : contact.notResponsiveAlertTimestamp
+            let emoji = type == "Alert" ? "🚨" : "❌"
+            
+            guard let alertTime = timestamp else {
+                return ("\(emoji) \(type) Active", .red)
+            }
+            
+            let timeSince = Date().timeIntervalSince(alertTime)
+            if timeSince < 300 {
+                return ("\(emoji) \(type) (Just Now)", .red)
+            } else if timeSince < 3600 {
+                let minutes = Int(timeSince / 60)
+                return ("\(emoji) \(type) (\(minutes)m ago)", .red)
             } else {
+                return ("\(emoji) \(type) Active", .red)
+            }
+        }
+        
+        private func pingActivityStatus(for contact: Contact, direction: String) -> (String, Color) {
+            let timestamp = direction == "incoming" ? contact.incomingPingTimestamp : contact.outgoingPingTimestamp
+            let emoji = direction == "incoming" ? "📥" : "📤"
+            let text = direction == "incoming" ? "Pinged" : "Sent Ping"
+            let color: Color = direction == "incoming" ? .orange : .blue
+            
+            guard let pingTime = timestamp else {
+                return ("\(emoji) \(text)", color)
+            }
+            
+            let timeSince = Date().timeIntervalSince(pingTime)
+            if timeSince < 300 {
+                return ("\(emoji) \(text) (Just Now)", color)
+            } else {
+                let minutes = Int(timeSince / 60)
+                return ("\(emoji) \(text) (\(minutes)m ago)", color)
+            }
+        }
+        
+        private func checkInActivityStatus(for contact: Contact) -> (String, Color) {
+            guard let lastCheckIn = contact.lastCheckInTimestamp else {
                 return ("❓ No Check-in", .gray)
+            }
+            
+            let timeSinceCheckIn = Date().timeIntervalSince(lastCheckIn)
+            let overdueFactor = timeSinceCheckIn / contact.checkInInterval
+
+            if overdueFactor < 0.5 {
+                return ("✅ Recently Active", .green)
+            } else if overdueFactor < 1.0 {
+                return ("⏰ Active", .green)
+            } else if overdueFactor < 1.5 {
+                return ("⚠️ Overdue", .yellow)
+            } else if overdueFactor < 2.0 {
+                return ("❗ Late Check-in", .orange)
+            } else {
+                return ("⚠️ Very Overdue", .orange)
             }
         }
     }
@@ -414,66 +420,69 @@ struct DependentsFeature {
 
             // Network responses
             case .pingResponse(.success):
-                return .run { _ in
+                return .run { [haptics, notificationClient] _ in
                     await haptics.notification(.success)
+                    try? await notificationClient.sendSystemNotification(
+                        "Ping Sent",
+                        "Check-in ping has been sent successfully to your dependent."
+                    )
                 }
 
             case let .pingResponse(.failure(error)):
-                // Silent handling - send notification for business logic errors
-                return .run { _ in
-                    let notification = NotificationItem(
-                        title: "Ping Failed",
-                        message: "Unable to send ping. Please try again.",
-                        type: .receiveSystemNotification
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.error)
+                    try? await notificationClient.sendSystemNotification(
+                        "Ping Failed",
+                        "Unable to send ping: \(error.localizedDescription)"
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
 
             case .removeResponse(.success):
-                return .run { _ in
+                return .run { [haptics, notificationClient] _ in
                     await haptics.notification(.success)
+                    try? await notificationClient.sendSystemNotification(
+                        "Dependent Removed",
+                        "The dependent has been successfully removed from your list."
+                    )
                 }
 
             case let .removeResponse(.failure(error)):
-                // Silent handling - send notification for business logic errors
-                return .run { _ in
-                    let notification = NotificationItem(
-                        title: "Remove Failed",
-                        message: "Unable to remove dependent status. Please try again.",
-                        type: .receiveSystemNotification
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.error)
+                    try? await notificationClient.sendSystemNotification(
+                        "Remove Failed",
+                        "Unable to remove dependent: \(error.localizedDescription)"
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
 
             case let .dependentStatusResponse(.success(updatedContact)):
-                return .run { [contactsClient, haptics] _ in
+                return .run { [contactsClient, haptics, notificationClient] _ in
                     await contactsClient.updateContact(updatedContact)
                     await haptics.notification(.success)
+                    try? await notificationClient.sendSystemNotification(
+                        "Status Updated",
+                        "Dependent status has been successfully updated."
+                    )
                 }
 
             case let .dependentStatusResponse(.failure(error)):
-                // Silent handling - send notification for business logic errors
-                return .run { _ in
-                    let notification = NotificationItem(
-                        title: "Status Update Failed",
-                        message: "Unable to update dependent status. Please try again.",
-                        type: .receiveSystemNotification
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.error)
+                    try? await notificationClient.sendSystemNotification(
+                        "Status Update Failed",
+                        "Unable to update dependent status: \(error.localizedDescription)"
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
 
             case .refreshResponse(.success):
                 return .none
 
-            case let .refreshResponse(.failure(error)):
-                // Silent handling - send notification for business logic errors
-                return .run { _ in
-                    let notification = NotificationItem(
-                        title: "Sync Issue",
-                        message: "Unable to refresh dependents. Will retry automatically.",
-                        type: .receiveSystemNotification
+            case .refreshResponse(.failure):
+                return .run { [notificationClient] _ in
+                    try? await notificationClient.sendSystemNotification(
+                        "Sync Issue",
+                        "Unable to refresh dependents. Will retry automatically."
                     )
-                    try? await notificationClient.sendNotification(notification)
                 }
             }
         }
@@ -489,185 +498,135 @@ struct DependentsView: View {
     @Bindable var store: StoreOf<DependentsFeature>
     @Environment(\.colorScheme) private var colorScheme
 
-    // MARK: - Computed Properties
-
-    /// Computed property to get sorted dependents from the view model
-    private var sortedDependents: [Contact] {
-        // This will be recalculated when the view model's refreshID changes
-        return store.dependents
-    }
-
+    // MARK: - Body
+    
     var body: some View {
         WithPerceptionTracking {
-            // Simplified scrollable view with direct LazyVStack
-            ScrollView(.vertical, showsIndicators: true) {
-                LazyVStack(spacing: 12) {
-                    if sortedDependents.isEmpty {
-                        Text("No dependents yet")
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.top, 40)
-                    } else {
-                        ForEach(sortedDependents) { dependent in
-                            dependentCardView(for: dependent)
-                        }
-                    }
-
-                    // Add extra padding at the bottom to ensure content doesn't overlap with tab bar
-                    Spacer()
-                        .frame(height: 20)
+            contentView
+                .toolbar { toolbarContent }
+                .onAppear(perform: onAppear)
+                .alert($store.scope(state: \.confirmationAlert, action: \.confirmationAlert))
+                .sheet(item: $store.scope(state: \.contactDetails, action: \.contactDetails)) { store in
+                    ContactDetailsSheetView(store: store)
                 }
-                .padding(.horizontal)
-                .padding(.bottom, 70) // Add padding to ensure content doesn't overlap with tab bar
-            }
-            .background(Color(UIColor.systemGroupedBackground))
-            .edgesIgnoringSafeArea(.bottom) // Extend background to bottom edge
-            .onAppear {
-                store.send(.refreshDependents, animation: .default)
-            }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Menu {
-                        ForEach(DependentsFeature.State.SortMode.allCases, id: \.self) { sortMode in
-                            Button(action: {
-                                store.send(.setSortMode(sortMode), animation: .default)
-                            }) {
-                                Label(sortMode.rawValue, systemImage: store.sortMode == sortMode ? "checkmark" : "")
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.up.arrow.down")
-                            Text(store.sortMode.rawValue)
-                                .font(.caption)
-                        }
-                    }
-                    .accessibilityLabel("Sort Dependents")
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        // TODO: Add notification center navigation
-                    } label: {
-                        Image(systemName: "square.fill.text.grid.1x2")
-                    }
-                }
-            }
-            .alert(
-                $store.scope(state: \.confirmationAlert, action: \.confirmationAlert)
-            )
-            .sheet(
-                item: $store.scope(state: \.contactDetails, action: \.contactDetails)
-            ) { store in
-                ContactDetailsSheetView(store: store)
-            }
         }
-    }
-
-    @ViewBuilder
-    private func dependentCardView(for contact: Contact) -> some View {
-        cardContent(for: contact)
-            .padding() // This padding is inside the card
-            .background(store.state.cardBackgroundColor(for: contact))
-            .cornerRadius(12)
-            .modifier(CardFlashingAnimation(isActive: contact.hasManualAlertActive || contact.hasNotResponsiveAlert))
-            .onTapGesture {
-                store.send(.selectContact(contact), animation: .default)
-            }
-    }
-
-    /// Create the content for a dependent card
-    /// - Parameter contact: The contact to create content for
-    /// - Returns: A view for the card content
-    @ViewBuilder
-    private func cardContent(for contact: Contact) -> some View {
-        HStack(spacing: 12) {
-            // Avatar with badge
-            avatarView(for: contact)
-
-            // Name and status
-            infoView(for: contact)
-
-            Spacer()
-        }
-    }
-
-    /// Create an avatar view for a contact
-    /// - Parameter contact: The contact to create an avatar for
-    /// - Returns: A view for the avatar
-    @ViewBuilder
-    private func avatarView(for contact: Contact) -> some View {
-        ZStack(alignment: .topTrailing) {
-            // Avatar circle
-            Circle()
-                .fill(Color.blue.opacity(0.1))
-                .frame(width: 50, height: 50)
-                .overlay(
-                    Text(String(contact.name.prefix(1)))
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.blue)
-                )
-
-            // Ping badge (only for ping status)
-            if contact.hasOutgoingPing {
-                pingBadge()
-            }
-        }
-    }
-
-    /// Ping badge view
-    @ViewBuilder
-    private func pingBadge() -> some View {
-        Circle()
-            .fill(Color.blue)
-            .frame(width: 20, height: 20)
-            .overlay(
-                Image(systemName: "bell.fill")
-                    .font(.system(size: 10))
-                    .foregroundColor(.white)
-            )
-            .offset(x: 5, y: -5)
-    }
-
-    /// Create an info view for a contact
-    /// - Parameter contact: The contact to create info for
-    /// - Returns: A view for the contact info
-    private func infoView(for contact: Contact) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(contact.name)
-                    .font(.body)
-                    .foregroundColor(.primary)
-            }
-
-            let statusText = store.state.statusText(for: contact)
-            if !statusText.isEmpty {
-                Text(statusText)
-                    .font(.footnote)
-                    .foregroundColor(store.state.statusColor(for: contact))
-            }
-        }
-        .frame(maxHeight: .infinity, alignment: .center)
     }
 }
 
-/// A view modifier that creates a flashing animation for the entire card
-struct CardFlashingAnimation: ViewModifier {
-    let isActive: Bool
-    @State private var isAnimating = false
+// MARK: - Content Views
 
-    func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.red.opacity(isAnimating && isActive ? 0.2 : 0.1))
-            )
-            .onAppear {
-                if isActive {
-                    withAnimation(Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-                        isAnimating = true
-                    }
-                }
+private extension DependentsView {
+    
+    /// Computed property to get sorted dependents from the store
+    var sortedDependents: [Contact] {
+        store.dependents
+    }
+    
+    @ViewBuilder
+    var contentView: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            LazyVStack(spacing: 12) {
+                contactsContent
+                Spacer().frame(height: 20)
             }
+            .padding(.horizontal)
+            .padding(.bottom, 70)
+        }
+        .background(Color(UIColor.systemGroupedBackground))
+        .edgesIgnoringSafeArea(.bottom)
+    }
+    
+    @ViewBuilder
+    var contactsContent: some View {
+        if sortedDependents.isEmpty {
+            emptyStateView
+        } else {
+            contactsListView
+        }
+    }
+    
+    @ViewBuilder
+    var emptyStateView: some View {
+        Text("No dependents yet")
+            .foregroundColor(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 40)
+    }
+    
+    @ViewBuilder
+    var contactsListView: some View {
+        ForEach(sortedDependents) { dependent in
+            ContactCardView(
+                contact: dependent,
+                style: .dependent(
+                    statusText: store.state.statusText(for: dependent),
+                    statusColor: store.state.statusColor(for: dependent)
+                ),
+                onTap: { store.send(.selectContact(dependent), animation: .default) }
+            )
+        }
     }
 }
+
+
+// MARK: - Toolbar
+
+private extension DependentsView {
+    
+    @ToolbarContentBuilder
+    var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            sortMenuButton
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
+            notificationCenterButton
+        }
+    }
+    
+    @ViewBuilder
+    var sortMenuButton: some View {
+        Menu {
+            ForEach(DependentsFeature.State.SortMode.allCases, id: \.self) { sortMode in
+                Button(action: {
+                    store.send(.setSortMode(sortMode), animation: .default)
+                }) {
+                    Label(sortMode.rawValue, systemImage: store.sortMode == sortMode ? "checkmark" : "")
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.up.arrow.down")
+                Text(store.sortMode.rawValue)
+                    .font(.caption)
+            }
+        }
+        .accessibilityLabel("Sort Dependents")
+        .simultaneousGesture(TapGesture().onEnded { _ in
+            store.send(.setSortMode(store.sortMode), animation: .default)
+        })
+    }
+    
+    @ViewBuilder
+    var notificationCenterButton: some View {
+        Button(action: notificationCenterAction) {
+            Image(systemName: "square.fill.text.grid.1x2")
+        }
+        .simultaneousGesture(TapGesture().onEnded { _ in
+            store.send(.refreshDependents, animation: .default)
+        })
+    }
+}
+
+// MARK: - Actions
+
+private extension DependentsView {
+    
+    func onAppear() {
+        store.send(.refreshDependents, animation: .default)
+    }
+    
+    func notificationCenterAction() {
+        // TODO: Add notification center navigation
+    }
+}
+

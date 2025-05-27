@@ -47,8 +47,13 @@ import UserNotifications
 protocol NotificationServiceProtocol: Sendable {
     func getNotifications(_ request: GetNotificationsRequest) async throws -> GetNotificationsResponse
     func addNotification(_ request: AddNotificationRequest) async throws -> Notification_Proto
-    func markAsRead(_ request: MarkNotificationRequest) async throws -> Empty_Proto
+    func markAsRead(_ request: MarkNotificationRequest) async throws -> MarkNotificationReadResponse
+    func markAllAsRead(_ request: MarkAllNotificationsReadRequest) async throws -> Empty_Proto
+    func clearNotificationsByType(_ request: ClearNotificationsByTypeRequest) async throws -> Empty_Proto
+    func sendNotification(_ request: SendNotificationRequest) async throws -> Empty_Proto
+    func scheduleNotification(_ request: ScheduleNotificationRequest) async throws -> Empty_Proto
     func notifyEmergencyAlertToggled(_ request: NotifyEmergencyAlertRequest) async throws -> Empty_Proto
+    func startNotificationStream(_ request: StartNotificationStreamRequest) async throws -> AsyncThrowingStream<NotificationStreamEvent, Error>
 }
 
 // MARK: - gRPC Request/Response Types
@@ -80,10 +85,53 @@ struct MarkNotificationRequest: Sendable {
 }
 
 
+struct MarkAllNotificationsReadRequest: Sendable {
+    let authToken: String
+}
+
+struct ClearNotificationsByTypeRequest: Sendable {
+    let type: NotificationType
+    let authToken: String
+}
+
+struct SendNotificationRequest: Sendable {
+    let notification: NotificationItem
+    let authToken: String
+}
+
+struct ScheduleNotificationRequest: Sendable {
+    let notification: NotificationItem
+    let delay: TimeInterval
+    let authToken: String
+}
+
 struct NotifyEmergencyAlertRequest: Sendable {
     let userId: UUID
     let isEmergencyAlertEnabled: Bool
     let authToken: String
+}
+
+struct MarkNotificationReadResponse: Sendable {
+    let notification: NotificationItem
+}
+
+struct StartNotificationStreamRequest: Sendable {
+    let userId: UUID
+    let loadHistory: Bool
+    let historyDays: Int
+    let authToken: String
+}
+
+struct NotificationStreamEvent: Sendable {
+    let type: StreamEventType
+    let notifications: [NotificationItem]
+    let timestamp: Date
+    
+    enum StreamEventType: String, Codable, Sendable {
+        case initialHistory = "initial_history"
+        case realTimeUpdate = "real_time_update"
+        case bulkUpdate = "bulk_update"
+    }
 }
 
 
@@ -234,8 +282,37 @@ final class MockNotificationService: NotificationServiceProtocol {
         )
     }
 
-    func markAsRead(_ request: MarkNotificationRequest) async throws -> Empty_Proto {
+    func markAsRead(_ request: MarkNotificationRequest) async throws -> MarkNotificationReadResponse {
         try await Task.sleep(for: .milliseconds(200))
+        
+        // Mock finding and updating the notification
+        let updatedNotification = NotificationItem(
+            id: request.notificationId,
+            title: "Mock Notification",
+            message: "This notification has been marked as read",
+            isRead: true
+        )
+        
+        return MarkNotificationReadResponse(notification: updatedNotification)
+    }
+    
+    func markAllAsRead(_ request: MarkAllNotificationsReadRequest) async throws -> Empty_Proto {
+        try await Task.sleep(for: .milliseconds(400))
+        return Empty_Proto()
+    }
+    
+    func clearNotificationsByType(_ request: ClearNotificationsByTypeRequest) async throws -> Empty_Proto {
+        try await Task.sleep(for: .milliseconds(300))
+        return Empty_Proto()
+    }
+    
+    func sendNotification(_ request: SendNotificationRequest) async throws -> Empty_Proto {
+        try await Task.sleep(for: .milliseconds(250))
+        return Empty_Proto()
+    }
+    
+    func scheduleNotification(_ request: ScheduleNotificationRequest) async throws -> Empty_Proto {
+        try await Task.sleep(for: .milliseconds(300))
         return Empty_Proto()
     }
 
@@ -248,6 +325,59 @@ final class MockNotificationService: NotificationServiceProtocol {
         print("[MOCK] Notifying all responders about emergency alert status change...")
         
         return Empty_Proto()
+    }
+    
+    func startNotificationStream(_ request: StartNotificationStreamRequest) async throws -> AsyncThrowingStream<NotificationStreamEvent, Error> {
+        return AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    // 1. If history requested, send initial state first
+                    if request.loadHistory {
+                        try await Task.sleep(for: .milliseconds(500))
+                        
+                        // Generate initial history (reuse existing logic)
+                        let historyRequest = GetNotificationsRequest(
+                            userId: request.userId,
+                            authToken: request.authToken,
+                            fromDate: Calendar.current.date(byAdding: .day, value: -request.historyDays, to: Date()),
+                            toDate: Date()
+                        )
+                        
+                        let historyResponse = try await getNotifications(historyRequest)
+                        let historyNotifications = historyResponse.notifications.map { $0.toDomain() }
+                        
+                        // Send initial history as first stream event
+                        let initialEvent = NotificationStreamEvent(
+                            type: .initialHistory,
+                            notifications: historyNotifications.sorted { $0.timestamp > $1.timestamp },
+                            timestamp: Date()
+                        )
+                        continuation.yield(initialEvent)
+                    }
+                    
+                    // 2. Start real-time updates
+                    while !Task.isCancelled {
+                        try await Task.sleep(for: .seconds(10))
+                        
+                        // Simulate real-time notification
+                        let notification = NotificationItem(
+                            title: "Real-time Notification",
+                            message: "This is a simulated real-time notification from stream",
+                            type: [NotificationType.sendManualAlertActive, .receiveResponderPing, .receiveSystemNotification].randomElement() ?? .receiveSystemNotification
+                        )
+                        
+                        let updateEvent = NotificationStreamEvent(
+                            type: .realTimeUpdate,
+                            notifications: [notification],
+                            timestamp: Date()
+                        )
+                        continuation.yield(updateEvent)
+                    }
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
     }
 }
 
@@ -720,13 +850,10 @@ struct NotificationClient {
     
     // MARK: - Centralized State Management
     
-    /// Initializes the notification client, requests permissions, and loads 30 days of notifications
+    /// Initializes the notification client, requests permissions
     var initialize: @Sendable () async throws -> Void = { }
     
-    /// Loads the past 30 days of notifications from server and updates shared state
-    var loadNotificationHistory: @Sendable () async throws -> Void = { }
-    
-    /// Starts listening for real-time notifications (Firebase stream)
+    /// Starts listening for real-time notifications and loads initial history (combined operation)
     var startListening: @Sendable () async throws -> Void = { }
     
     /// Stops listening for real-time notifications
@@ -735,33 +862,11 @@ struct NotificationClient {
     /// Cleanup method called when session ends
     var cleanup: @Sendable () async throws -> Void = { }
     
-    // CRUD operations that sync with shared state
-    var getNotifications: @Sendable () async -> [NotificationItem] = { [] }
-    var getNotification: @Sendable (UUID) async throws -> NotificationItem? = { _ in nil }
-    var addNotification: @Sendable (NotificationItem) async throws -> NotificationItem = { notification in notification }
-    var updateNotification: @Sendable (NotificationItem) async throws -> NotificationItem = { notification in notification }
-    
-    // Read status operations that sync with shared state
-    var markAsRead: @Sendable (UUID) async throws -> NotificationItem = { _ in
-        throw NotificationClientError.notificationNotFound("Notification not found")
-    }
-    var markAllAsRead: @Sendable () async throws -> [NotificationItem] = { [] }
-    var getUnreadCount: @Sendable () async -> Int = { 0 }
-    var getUnreadNotifications: @Sendable () async -> [NotificationItem] = { [] }
-    
-    // Filtering and search
-    var getNotificationsByType: @Sendable (NotificationType) async -> [NotificationItem] = { _ in [] }
-    var getNotificationsByContact: @Sendable (UUID) async -> [NotificationItem] = { _ in [] }
-    var searchNotifications: @Sendable (String) async -> [NotificationItem] = { _ in [] }
-    
     // Core notification operations
-    var sendNotification: @Sendable (NotificationItem) async throws -> Void = { _ in }
     var scheduleNotification: @Sendable (NotificationItem, TimeInterval) async throws -> String = { _, _ in "" }
-    var getPendingNotifications: @Sendable () async throws -> [NotificationItem] = { [] }
     
-    // Notification scheduling (for local notifications) - moved to ephemeral section
+    // Notification scheduling (for local notifications)
     var cancelScheduledNotification: @Sendable (String) async throws -> Void = { _ in }
-    var cancelAllScheduledNotifications: @Sendable () async throws -> Void = { }
     
     // Permissions
     var requestPermission: @Sendable () async throws -> Bool = { false }
@@ -780,15 +885,21 @@ struct NotificationClient {
     
     // Ping management operations
     var clearAllReceivedPings: @Sendable () async throws -> Void = { }
+    var clearSentPing: @Sendable (UUID) async throws -> Void = { _ in }
     
-    // Contact notification broadcasting
-    var sendContactNotification: @Sendable (NotificationType, String, String, UUID?) async throws -> Void = { _, _, _, _ in throw NotificationClientError.saveFailed("Operation failed") }
+    // Contact notification operations
+    var notifyContactAdded: @Sendable (UUID) async throws -> Void = { _ in }
+    var notifyContactRemoved: @Sendable (UUID) async throws -> Void = { _ in }
+    var notifyContactRoleChanged: @Sendable (UUID) async throws -> Void = { _ in }
     
     // Ping notification methods (explicit feature-driven)
     var sendPingNotification: @Sendable (NotificationType, String, String, UUID) async throws -> Void = { _, _, _, _ in throw NotificationClientError.saveFailed("Operation failed") }
     
     // Local device scheduling (not tracked in history)
     var scheduleLocalCheckInReminder: @Sendable (Date, String) async throws -> Void = { _, _ in }
+    
+    // System notification method for local feedback (not tracked in persistent history)
+    var sendSystemNotification: @Sendable (String, String) async throws -> Void = { _, _ in }
     
 }
 
@@ -809,58 +920,60 @@ extension NotificationClient: DependencyKey {
             let delegate = NotificationDelegate()
             UNUserNotificationCenter.current().delegate = delegate
             
-            // Load 30 days of notification history - handled in mockValue.loadNotificationHistory
-            
-            // Start listening for real-time notifications - handled in mockValue.startListening
-        },
-        
-        loadNotificationHistory: {
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
-            
-            // Get notifications from past 30 days
-            let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-            let request = GetNotificationsRequest(
-                userId: authInfo.user.id,
-                authToken: authInfo.token,
-                fromDate: thirtyDaysAgo,
-                toDate: Date()
-            )
-            
-            let response = try await service.getNotifications(request)
-            let notifications = response.notifications.map { $0.toDomain() }
-            
-            // Update shared state with fetched notifications
-            @Shared(.notifications) var sharedNotifications
-            @Shared(.unreadNotificationCount) var unreadCount
-            
-            $sharedNotifications.withLock { $0 = notifications.sorted { $0.timestamp > $1.timestamp } }
-            $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
+            // Stream setup with initial history load is handled in startListening()
         },
         
         startListening: {
-            // Mock Firebase real-time listener for notifications
-            // In production, this would connect to Firebase Firestore or FCM stream
+            let authInfo = try await Self.getAuthenticatedUserInfo()
+            let service = MockNotificationService()
+            
+            // Combined operation: Setup stream + load initial history
+            let streamRequest = StartNotificationStreamRequest(
+                userId: authInfo.user.id,
+                loadHistory: true,
+                historyDays: 30,
+                authToken: authInfo.token
+            )
+            
+            let stream = try await service.startNotificationStream(streamRequest)
+            
+            // Handle both initial history and real-time updates through single stream
             Task {
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(10))
-                    
-                    // Simulate receiving a real-time notification
-                    let notification = NotificationItem(
-                        title: "Real-time Notification",
-                        message: "This is a simulated real-time notification",
-                        type: [NotificationType.sendManualAlertActive, .receiveResponderPing, .receiveSystemNotification].randomElement() ?? .receiveSystemNotification
-                    )
-                    
-                    // Add to shared state
+                for try await event in stream {
                     @Shared(.notifications) var notifications
                     @Shared(.unreadNotificationCount) var unreadCount
                     
-                    $notifications.withLock { $0.insert(notification, at: 0) }
-                    $unreadCount.withLock { $0 += 1 }
-                    
-                    // Send local notification
-                    // Notification already added to shared state above
+                    switch event.type {
+                    case .initialHistory:
+                        // Bulk load initial state
+                        $notifications.withLock { $0 = event.notifications }
+                        $unreadCount.withLock { $0 = event.notifications.filter { !$0.isRead }.count }
+                        print("[STREAM] Loaded \(event.notifications.count) historical notifications")
+                        
+                    case .realTimeUpdate:
+                        // Single notification updates
+                        for notification in event.notifications {
+                            $notifications.withLock { $0.insert(notification, at: 0) }
+                            if !notification.isRead {
+                                $unreadCount.withLock { $0 += 1 }
+                            }
+                        }
+                        print("[STREAM] Received \(event.notifications.count) real-time notification(s)")
+                        
+                    case .bulkUpdate:
+                        // Server-initiated bulk changes (e.g., mark all as read, clear by type)
+                        for notification in event.notifications {
+                            $notifications.withLock { notifications in
+                                if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
+                                    notifications[index] = notification
+                                } else {
+                                    notifications.insert(notification, at: 0)
+                                }
+                            }
+                        }
+                        $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
+                        print("[STREAM] Applied \(event.notifications.count) bulk update(s)")
+                    }
                 }
             }
         },
@@ -884,191 +997,21 @@ extension NotificationClient: DependencyKey {
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         },
         
-        getNotifications: {
-            @Shared(.notifications) var notifications
-            return notifications
-        },
-        
-        getNotification: { notificationId in
-            // Simulate delay
-            try await Task.sleep(for: .milliseconds(200))
-            
-            @Shared(.notifications) var notifications
-            return notifications.first { $0.id == notificationId }
-        },
-        
-        addNotification: { notification in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
-            
-            let request = AddNotificationRequest(
-                userId: authInfo.user.id,
-                type: notification.type,
-                title: notification.title,
-                message: notification.message,
-                contactId: notification.contactId,
-                metadata: notification.metadata,
-                authToken: authInfo.token
-            )
-            
-            let notificationProto = try await service.addNotification(request)
-            let newNotification = notificationProto.toDomain()
-            
-            @Shared(.notifications) var notifications
-            @Shared(.unreadNotificationCount) var unreadCount
-            
-            $notifications.withLock { $0.insert(newNotification, at: 0) } // Insert at beginning for newest first
-            
-            // Update unread count
-            $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
-            
-            return newNotification
-        },
-        
-        updateNotification: { notification in
-            // Simulate delay
-            try await Task.sleep(for: .milliseconds(250))
-            
-            @Shared(.notifications) var notifications
-            
-            if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
-                $notifications.withLock { $0[index] = notification }
-                return notification
-            }
-            
-            throw NotificationClientError.notificationNotFound("Notification with ID \(notification.id) not found")
-        },
         
         
-        markAsRead: { notificationId in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
-            
-            let request = MarkNotificationRequest(notificationId: notificationId, authToken: authInfo.token)
-            _ = try await service.markAsRead(request)
-            
-            @Shared(.notifications) var notifications
-            @Shared(.unreadNotificationCount) var unreadCount
-            
-            if let index = notifications.firstIndex(where: { $0.id == notificationId }) {
-                $notifications.withLock { $0[index].isRead = true }
-                
-                // Update unread count
-                $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
-                
-                return notifications[index]
-            }
-            
-            throw NotificationClientError.notificationNotFound("Notification with ID \(notificationId) not found")
-        },
         
-        markAllAsRead: {
-            // Simulate delay
-            try await Task.sleep(for: .milliseconds(400))
-            
-            @Shared(.notifications) var notifications
-            @Shared(.unreadNotificationCount) var unreadCount
-            
-            $notifications.withLock {
-                for index in $0.indices {
-                    $0[index].isRead = true
-                }
-            }
-            
-            $unreadCount.withLock { $0 = 0 }
-            
-            return notifications
-        },
-        
-        getUnreadCount: {
-            @Shared(.unreadNotificationCount) var unreadCount
-            return unreadCount
-        },
-        
-        getUnreadNotifications: {
-            @Shared(.notifications) var notifications
-            return notifications.filter { !$0.isRead }
-        },
-        
-        getNotificationsByType: { type in
-            @Shared(.notifications) var notifications
-            return notifications.filter { $0.type == type }
-        },
-        
-        getNotificationsByContact: { contactId in
-            @Shared(.notifications) var notifications
-            return notifications.filter { $0.relatedContactId == contactId }
-        },
-        
-        searchNotifications: { query in
-            @Shared(.notifications) var notifications
-            
-            if query.isEmpty {
-                return notifications
-            }
-            
-            return notifications.filter { notification in
-                notification.title.localizedCaseInsensitiveContains(query) ||
-                notification.message.localizedCaseInsensitiveContains(query)
-            }
-        },
-        
-        sendNotification: { notification in
-            // Add to shared state for app notification center
-            @Shared(.notifications) var notifications
-            @Shared(.unreadNotificationCount) var unreadCount
-            
-            var newNotification = notification
-            newNotification.timestamp = Date()
-            $notifications.withLock { $0.insert(newNotification, at: 0) }
-            
-            // Update unread count
-            $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
-            
-            // Always send to device for immediate display
-            let content = UNMutableNotificationContent()
-            content.title = notification.title
-            content.body = notification.message
-            content.sound = notification.type.sound
-            content.userInfo = [
-                "notification_id": notification.id.uuidString,
-                "type": notification.type.rawValue,
-                "contact_id": notification.contactId?.uuidString ?? "",
-                "user_id": notification.userId?.uuidString ?? "",
-                "timestamp": notification.timestamp.timeIntervalSince1970,
-                "metadata": notification.metadata,
-                "isSystemNotification": notification.type == .receiveSystemNotification
-            ]
-
-            let request = UNNotificationRequest(
-                identifier: notification.id.uuidString,
-                content: content,
-                trigger: nil
-            )
-
-            try await UNUserNotificationCenter.current().add(request)
-            
-            // For system notifications, remove from delivered notifications after showing
-            if notification.type == .receiveSystemNotification {
-                // Remove after a short delay to allow it to be displayed first
-                Task {
-                    try? await Task.sleep(for: .seconds(3))
-                    UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [notification.id.uuidString])
-                }
-            }
-        },
         
         scheduleNotification: { notification, delay in
-            // Add to shared state for app notification center
-            @Shared(.notifications) var notifications
-            @Shared(.unreadNotificationCount) var unreadCount
+            let authInfo = try await Self.getAuthenticatedUserInfo()
+            let service = MockNotificationService()
             
             var newNotification = notification
             newNotification.timestamp = Date().addingTimeInterval(delay)
-            $notifications.withLock { $0.insert(newNotification, at: 0) }
             
-            // Update unread count
-            $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
+            let scheduleRequest = ScheduleNotificationRequest(notification: newNotification, delay: delay, authToken: authInfo.token)
+            _ = try await service.scheduleNotification(scheduleRequest)
+            
+            // Stream will handle updating shared state
             
             // Always schedule device notification
             let content = UNMutableNotificationContent()
@@ -1105,11 +1048,6 @@ extension NotificationClient: DependencyKey {
             return notification.id.uuidString
         },
         
-        getPendingNotifications: {
-            @Shared(.notifications) var notifications
-            // Return future notifications
-            return notifications.filter { $0.timestamp > Date() }
-        },
         
         cancelScheduledNotification: { identifier in
             // Simulate delay
@@ -1117,13 +1055,6 @@ extension NotificationClient: DependencyKey {
             // Mock cancellation always succeeds
         },
         
-        cancelAllScheduledNotifications: {
-            // Simulate delay
-            try await Task.sleep(for: .milliseconds(300))
-            // Mock cancellation always succeeds
-            UNUserNotificationCenter.current().removeAllDeliveredNotifications()
-            UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
-        },
         
         requestPermission: {
             // Mock always grants permission
@@ -1175,98 +1106,140 @@ extension NotificationClient: DependencyKey {
             let title = isEmergencyAlertEnabled ? "Emergency Alert Activated" : "Emergency Alert Deactivated"
             let message = isEmergencyAlertEnabled ? "Your emergency alert has been activated" : "Your emergency alert has been deactivated"
             
-            // Create notification for emergency alert state change
+            // Create notification for emergency alert state change via gRPC
             let notification = NotificationItem(
                 title: title,
                 message: message,
                 type: alertType
             )
             
-            @Shared(.notifications) var notifications
-            @Shared(.unreadNotificationCount) var unreadCount
-            $notifications.withLock { $0.insert(notification, at: 0) }
-            $unreadCount.withLock { $0 += 1 }
+            let addNotificationRequest = AddNotificationRequest(
+                userId: userId,
+                type: alertType,
+                title: title,
+                message: message,
+                contactId: nil,
+                metadata: [:],
+                authToken: authInfo.token
+            )
+            _ = try await service.addNotification(addNotificationRequest)
+            
+            // Stream will handle updating shared state
         },
         
         // Ping management operations
         clearAllReceivedPings: {
             let authInfo = try await Self.getAuthenticatedUserInfo()
             
-            // Clear all received pings from shared state
-            @Shared(.notifications) var notifications
-            $notifications.withLock { 
-                $0.removeAll { $0.type == .receiveResponderPing }
-            }
-            
-            // Send clear all pings notification
-            let notification = NotificationItem(
-                title: "Pings Cleared",
-                message: "All received pings have been cleared",
-                type: .sendClearAllResponderPings
+            // Single gRPC call to clear all received pings
+            // Server handles: 1) Sending acknowledgments to responders, 2) Clearing pings, 3) Updating notification history
+            let service = MockNotificationService()
+            let clearRequest = AddNotificationRequest(
+                userId: authInfo.user.id,
+                type: .sendClearAllResponderPings,
+                title: "Clear All Received Pings",
+                message: "User requested to clear all received responder pings",
+                contactId: nil,
+                metadata: ["action": "clear_all_received_pings"],
+                authToken: authInfo.token
             )
+            _ = try await service.addNotification(clearRequest)
             
-            // Add clear action to history
-            $notifications.withLock { $0.insert(notification, at: 0) }
-            
-            // Update unread count
-            @Shared(.unreadNotificationCount) var unreadCount
-            $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
+            // Server handles all processing atomically:
+            // 1. Server identifies who sent pings and sends them acknowledgment notifications
+            // 2. Server clears user's received ping notifications  
+            // 3. Server adds clear action to user's notification history
+            // 4. Server streams all updates back to clients
+            //
+            // Stream will handle updating all shared state - no direct manipulation here
         },
         
-        // Contact notification broadcasting 
-        sendContactNotification: { notificationType, title, message, contactId in
+        clearSentPing: { contactId in
             let authInfo = try await Self.getAuthenticatedUserInfo()
-            
-            // Create notification for the current user
-            let notification = NotificationItem(
-                title: title,
-                message: message,
-                type: notificationType,
-                contactId: contactId
-            )
-            
-            // All notification types are tracked in history
-            @Shared(.notifications) var notifications
-            @Shared(.unreadNotificationCount) var unreadCount
-            
-            $notifications.withLock { $0.insert(notification, at: 0) }
-            $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
-            
-            // Send gRPC notification to affected contacts
             let service = MockNotificationService()
+            
+            // Single gRPC call to clear sent ping to specific contact
+            // Server handles: 1) Removing ping from contact's received pings, 2) Updating user's sent ping history
+            let clearRequest = AddNotificationRequest(
+                userId: authInfo.user.id,
+                type: .sendClearAllResponderPings, // Reuse existing type or create new one for single ping
+                title: "Ping Retracted",
+                message: "You retracted a ping sent to a contact",
+                contactId: contactId,
+                metadata: ["action": "clear_sent_ping", "target_contact": contactId.uuidString],
+                authToken: authInfo.token
+            )
+            _ = try await service.addNotification(clearRequest)
+            
+            // Server handles all processing atomically:
+            // 1. Server removes the ping from the contact's received pings
+            // 2. Server adds retraction to user's notification history
+            // 3. Server notifies the contact that the ping was retracted
+            // 4. Server streams all updates back to clients
+            //
+            // Stream will handle updating all shared state - no direct manipulation here
+        },
+        
+        // Contact notification operations
+        notifyContactAdded: { contactId in
+            let authInfo = try await Self.getAuthenticatedUserInfo()
+            let service = MockNotificationService()
+            
             let request = AddNotificationRequest(
                 userId: authInfo.user.id,
-                type: notificationType,
-                title: title,
-                message: message,
+                type: .receiveContactAdded,
+                title: "Contact Added",
+                message: "A new contact was added to your network",
                 contactId: contactId,
-                metadata: ["broadcast": "true"],
+                metadata: ["action": "contact_added"],
                 authToken: authInfo.token
             )
             
             _ = try await service.addNotification(request)
+            // Stream will handle updating shared state
+        },
+        
+        notifyContactRemoved: { contactId in
+            let authInfo = try await Self.getAuthenticatedUserInfo()
+            let service = MockNotificationService()
+            
+            let request = AddNotificationRequest(
+                userId: authInfo.user.id,
+                type: .receiveContactRemoved,
+                title: "Contact Removed",
+                message: "A contact was removed from your network",
+                contactId: contactId,
+                metadata: ["action": "contact_removed"],
+                authToken: authInfo.token
+            )
+            
+            _ = try await service.addNotification(request)
+            // Stream will handle updating shared state
+        },
+        
+        notifyContactRoleChanged: { contactId in
+            let authInfo = try await Self.getAuthenticatedUserInfo()
+            let service = MockNotificationService()
+            
+            let request = AddNotificationRequest(
+                userId: authInfo.user.id,
+                type: .receiveContactRoleChanged,
+                title: "Role Changed",
+                message: "A contact's role has been updated",
+                contactId: contactId,
+                metadata: ["action": "role_changed"],
+                authToken: authInfo.token
+            )
+            
+            _ = try await service.addNotification(request)
+            // Stream will handle updating shared state
         },
         
         // Ping notification methods (explicit feature-driven)
         sendPingNotification: { notificationType, title, message, contactId in
             let authInfo = try await Self.getAuthenticatedUserInfo()
             
-            // Create notification for ping tracking
-            let notification = NotificationItem(
-                title: title,
-                message: message,
-                type: notificationType,
-                contactId: contactId
-            )
-            
-            // Ping notifications are always tracked in history
-            @Shared(.notifications) var notifications
-            @Shared(.unreadNotificationCount) var unreadCount
-            
-            $notifications.withLock { $0.insert(notification, at: 0) }
-            $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
-            
-            // Send gRPC notification for ping operations
+            // Send gRPC notification for ping operations and track in user's history
             let service = MockNotificationService()
             let request = AddNotificationRequest(
                 userId: authInfo.user.id,
@@ -1280,14 +1253,7 @@ extension NotificationClient: DependencyKey {
             
             _ = try await service.addNotification(request)
             
-            // Send local notification to user's device (only for received pings)
-            if [.receiveResponderPing, .sendResponderPingResponded].contains(notificationType) {
-                // Add notification to shared state
-            @Shared(.notifications) var notifications
-            @Shared(.unreadNotificationCount) var unreadCount
-            $notifications.withLock { $0.insert(notification, at: 0) }
-            $unreadCount.withLock { $0 += 1 }
-            }
+            // Stream will handle updating shared state for all ping notifications
         },
         
         // Local device scheduling (not tracked in history)
@@ -1310,6 +1276,38 @@ extension NotificationClient: DependencyKey {
                 )
                 
                 try await UNUserNotificationCenter.current().add(request)
+            }
+        },
+        
+        // System notification method for local feedback (shows immediately, not tracked in persistent history)
+        sendSystemNotification: { title, message in
+            // Create immediate local system notification for user feedback
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = message
+            content.sound = .none
+            content.userInfo = [
+                "notification_id": UUID().uuidString,
+                "type": NotificationType.receiveSystemNotification.rawValue,
+                "timestamp": Date().timeIntervalSince1970,
+                "isSystemNotification": true,
+                "isTemporary": true  // Mark as temporary so it doesn't persist
+            ]
+            
+            // Schedule immediate notification
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
+            let request = UNNotificationRequest(
+                identifier: "system_notification_\(UUID().uuidString)",
+                content: content,
+                trigger: trigger
+            )
+            
+            try await UNUserNotificationCenter.current().add(request)
+            
+            // Auto-remove after 3 seconds to keep notification center clean
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [request.identifier])
             }
         }
         

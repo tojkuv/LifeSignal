@@ -49,6 +49,7 @@ struct QRScannerFeature {
             notResponsiveAlertTimestamp: nil,
             profileImageURL: nil,
             profileImageData: nil,
+            dateAdded: Date(),
             lastUpdated: Date()
         )
         
@@ -358,12 +359,9 @@ struct QRScannerFeature {
         state.isLoading = false
         state.errorMessage = error.localizedDescription
         return .run { [notificationClient] _ in
-            try? await notificationClient.sendNotification(
-                NotificationItem(
-                    title: "QR Code Error",
-                    message: "Unable to process QR code: \(error.localizedDescription)",
-                    type: .receiveSystemNotification
-                )
+            try? await notificationClient.sendSystemNotification(
+                "QR Code Error",
+                "Unable to process QR code: \(error.localizedDescription)"
             )
         }
     }
@@ -371,24 +369,18 @@ struct QRScannerFeature {
     private func contactAddSuccessEffect(state: inout State) -> Effect<Action> {
         state.showAddContactSheet = false
         return .run { [notificationClient, contactName = state.contact.name] _ in
-            try? await notificationClient.sendNotification(
-                NotificationItem(
-                    title: "Contact Added",
-                    message: "Successfully added \(contactName) to your contacts",
-                    type: .receiveContactAdded
-                )
+            try? await notificationClient.sendSystemNotification(
+                "Contact Added",
+                "Successfully added \(contactName) to your contacts"
             )
         }
     }
     
     private func contactAddFailureEffect(error: Error) -> Effect<Action> {
         .run { [notificationClient] _ in
-            try? await notificationClient.sendNotification(
-                NotificationItem(
-                    title: "Add Contact Failed",
-                    message: "Unable to add contact: \(error.localizedDescription)",
-                    type: .receiveSystemNotification
-                )
+            try? await notificationClient.sendSystemNotification(
+                "Add Contact Failed",
+                "Unable to add contact: \(error.localizedDescription)"
             )
         }
     }

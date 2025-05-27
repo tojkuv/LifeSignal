@@ -61,6 +61,7 @@ struct CheckInFeature {
         // Core check-in functionality
         case checkIn
         case checkInResponse(Result<Void, Error>)
+        case checkInCooldownNotification
         
         // Alert system
         case activateAlert
@@ -110,6 +111,12 @@ struct CheckInFeature {
             // Core check-in functionality
             case .checkIn:
                 guard state.canCheckIn else { return .none }
+                
+                // Check if in cooldown period
+                if state.isCheckInButtonCoolingDown {
+                    return .send(.checkInCooldownNotification)
+                }
+                
                 state.isCheckingIn = true
                 
                 return .run { [currentUser = state.currentUser] send in
@@ -127,13 +134,11 @@ struct CheckInFeature {
                         // Call updateUser to persist the check-in
                         try await userClient.updateUser(updatedUser)
                         
-                        // Send success notification
-                        let notification = NotificationItem(
-                            title: "Check-in Complete",
-                            message: "You've successfully checked in",
-                            type: .receiveSystemNotification
+                        // Send success system notification
+                        try? await notificationClient.sendSystemNotification(
+                            "Check-in Complete",
+                            "You've successfully checked in"
                         )
-                        try await notificationClient.sendNotification(notification)
                         
                         await send(.checkInResponse(.success(())))
                     } catch {
@@ -151,15 +156,35 @@ struct CheckInFeature {
             case let .checkInResponse(.failure(error)):
                 state.isCheckingIn = false
                 
-                return .run { _ in
-                    // Silent handling - send notification for business logic errors
-                    let notification = NotificationItem(
-                        title: "Check-in Issue",
-                        message: "Unable to complete check-in. Will retry automatically.",
-                        type: .receiveSystemNotification
+                return .run { [notificationClient] _ in
+                    // Send error system notification
+                    try? await notificationClient.sendSystemNotification(
+                        "Check-in Issue",
+                        "Unable to complete check-in. Will retry automatically."
                     )
-                    try? await notificationClient.sendNotification(notification)
                     await haptics.notification(.error)
+                }
+                
+            case .checkInCooldownNotification:
+                return .run { [lastCheckIn = state.currentUser?.lastCheckedIn] _ in
+                    let timeRemaining: Int
+                    if let lastCheckIn = lastCheckIn {
+                        let elapsed = Date().timeIntervalSince(lastCheckIn)
+                        timeRemaining = max(0, Int(300 - elapsed)) // 5 minutes = 300 seconds
+                    } else {
+                        timeRemaining = 0
+                    }
+                    
+                    let minutes = timeRemaining / 60
+                    let seconds = timeRemaining % 60
+                    let timeText = minutes > 0 ? "\(minutes)m \(seconds)s" : "\(seconds)s"
+                    
+                    // Send cooldown system notification
+                    try? await notificationClient.sendSystemNotification(
+                        "Check-in Too Soon",
+                        "You checked in recently. Please wait \(timeText) before checking in again."
+                    )
+                    await haptics.notification(.warning)
                 }
                 
             // Alert system
@@ -183,13 +208,8 @@ struct CheckInFeature {
                         // Notify contacts about emergency alert
                         try await notificationClient.notifyEmergencyAlertToggled(user.id, true)
                         
-                        // Send local notification
-                        let notification = NotificationItem(
-                            title: "Emergency Alert Activated",
-                            message: "Your contacts have been notified",
-                            type: .sendManualAlertActive
-                        )
-                        try await notificationClient.sendNotification(notification)
+                        // Emergency alert notification is handled via notifyEmergencyAlertToggled
+                        // which creates proper notification history via stream
                         
                         await haptics.notification(.warning)
                         await send(.alertResponse(.success(())))
@@ -217,13 +237,8 @@ struct CheckInFeature {
                         // Notify contacts about emergency alert deactivation
                         try await notificationClient.notifyEmergencyAlertToggled(user.id, false)
                         
-                        // Send local notification
-                        let notification = NotificationItem(
-                            title: "Emergency Alert Cancelled",
-                            message: "The emergency alert has been cancelled",
-                            type: .sendManualAlertInactive
-                        )
-                        try await notificationClient.sendNotification(notification)
+                        // Emergency alert deactivation is handled via notifyEmergencyAlertToggled
+                        // which creates proper notification history via stream
                         
                         await haptics.notification(.success)
                         await send(.alertResponse(.success(())))
@@ -241,14 +256,13 @@ struct CheckInFeature {
                 return .none
 
             case let .alertResponse(.failure(error)):
-                // Silent handling - send notification for business logic errors
-                return .run { _ in
-                    let notification = NotificationItem(
-                        title: "Emergency Alert Issue",
-                        message: "Unable to update emergency alert status. Please try again.",
-                        type: .receiveSystemNotification
+                // Emergency alert errors with system notification
+                return .run { [notificationClient] _ in
+                    try? await notificationClient.sendSystemNotification(
+                        "Emergency Alert Issue",
+                        "Unable to update emergency alert status. Please try again."
                     )
-                    try? await notificationClient.sendNotification(notification)
+                    await haptics.notification(.error)
                 }
                 
             // Alert button interactions
@@ -668,7 +682,6 @@ struct CheckInView: View {
                 .background(store.checkInButtonBackgroundColor)
                 .cornerRadius(12)
         }
-        .disabled(store.isCheckInButtonCoolingDown)
     }
     
     #if DEBUG
@@ -677,14 +690,18 @@ struct CheckInView: View {
         Button(action: {
             store.send(.debugCycleCheckInState)
         }) {
-            Text("DEBUG: Cycle Check-in State")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white)
+            Text("🔄 DEBUG: Cycle Check-in State")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundColor(.primary)
                 .frame(maxWidth: .infinity)
-                .frame(height: 40)
-                .background(Color.purple)
-                .cornerRadius(8)
+                .frame(height: 44)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(.quaternary, lineWidth: 0.5)
+                )
         }
+        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
     }
     #endif
 }

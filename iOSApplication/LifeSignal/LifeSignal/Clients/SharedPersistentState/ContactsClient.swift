@@ -66,6 +66,7 @@ struct Contact_Proto: Sendable {
     var emergencyAlertTimestamp: Int64?
     var notResponsiveAlertTimestamp: Int64?
     var profileImageURL: String?
+    var dateAdded: Int64
     var lastUpdated: Int64
 }
 
@@ -94,6 +95,7 @@ final class MockContactService: ContactServiceProtocol {
                 emergencyAlertTimestamp: nil,
                 notResponsiveAlertTimestamp: nil,
                 profileImageURL: "https://example.com/profile/john_doe.jpg",
+                dateAdded: Int64(Date().addingTimeInterval(-604800).timeIntervalSince1970), // 1 week ago
                 lastUpdated: Int64(Date().timeIntervalSince1970)
             ),
             Contact_Proto(
@@ -114,6 +116,7 @@ final class MockContactService: ContactServiceProtocol {
                 emergencyAlertTimestamp: nil,
                 notResponsiveAlertTimestamp: Int64(Date().addingTimeInterval(-7200).timeIntervalSince1970),
                 profileImageURL: nil,
+                dateAdded: Int64(Date().addingTimeInterval(-259200).timeIntervalSince1970), // 3 days ago
                 lastUpdated: Int64(Date().timeIntervalSince1970)
             )
         ]
@@ -141,6 +144,7 @@ final class MockContactService: ContactServiceProtocol {
             emergencyAlertTimestamp: nil,
             notResponsiveAlertTimestamp: nil,
             profileImageURL: nil,
+            dateAdded: Int64(Date().timeIntervalSince1970),
             lastUpdated: Int64(Date().timeIntervalSince1970)
         )
     }
@@ -174,6 +178,7 @@ final class MockContactService: ContactServiceProtocol {
                         emergencyAlertTimestamp: nil,
                         notResponsiveAlertTimestamp: nil,
                         profileImageURL: nil,
+                        dateAdded: Int64(Date().timeIntervalSince1970),
                         lastUpdated: Int64(Date().timeIntervalSince1970)
                     )
                     continuation.yield(contact)
@@ -215,6 +220,7 @@ extension Contact_Proto {
             notResponsiveAlertTimestamp: notResponsiveAlertTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
             profileImageURL: profileImageURL,
             profileImageData: nil, // Would be populated separately from image service
+            dateAdded: Date(timeIntervalSince1970: TimeInterval(dateAdded)),
             lastUpdated: Date(timeIntervalSince1970: TimeInterval(lastUpdated))
         )
     }
@@ -267,6 +273,7 @@ struct Contact: Codable, Equatable, Identifiable, Sendable {
     var profileImageData: Data?   // Local cache only (not in proto)
     
     // MARK: - Metadata (matches Contact_Proto)
+    var dateAdded: Date
     var lastUpdated: Date
     
     // MARK: - Computed Properties
@@ -404,6 +411,7 @@ extension ContactsClient: DependencyKey {
                 notResponsiveAlertTimestamp: nil,
                 profileImageURL: nil,
                 profileImageData: nil,
+                dateAdded: Date(),
                 lastUpdated: Date()
             )
             
@@ -455,6 +463,18 @@ extension ContactsClient: DependencyKey {
         },
         
         refreshContacts: {
+            // For MVP/mock stage, ensure we have a current user set up
+            @Shared(.currentUser) var currentUser
+            @Shared(.authenticationToken) var authToken
+            @Shared(.internalAuthUID) var authUID
+            
+            // If no user exists, set up mock user for visual testing
+            if currentUser == nil {
+                $currentUser.withLock { $0 = User.mock }
+                $authToken.withLock { $0 = "mock-token" }
+                $authUID.withLock { $0 = User.mock.id.uuidString }
+            }
+            
             let authInfo = try await Self.getAuthenticatedUserInfo()
             let service = MockContactService()
             
@@ -464,8 +484,11 @@ extension ContactsClient: DependencyKey {
                 proto.toDomain()
             }
             
+            // Also include our comprehensive mock data for visual testing
+            let allContacts = contacts + Contact.mockData
+            
             @Shared(.contacts) var sharedContacts
-            $sharedContacts.withLock { $0 = contacts }
+            $sharedContacts.withLock { $0 = allContacts }
         },
         
         startContactUpdatesStream: {
@@ -506,6 +529,7 @@ extension ContactsClient: DependencyKey {
                                 notResponsiveAlertTimestamp: contact.notResponsiveAlertTimestamp,
                                 profileImageURL: contact.profileImageURL,
                                 profileImageData: contact.profileImageData,
+                                dateAdded: contact.dateAdded,
                                 lastUpdated: Date()
                             )
                             
@@ -531,5 +555,301 @@ extension DependencyValues {
     var contactsClient: ContactsClient {
         get { self[ContactsClient.self] }
         set { self[ContactsClient.self] = newValue }
+    }
+}
+
+// MARK: - Mock Data Extensions
+
+extension Contact {
+    /// Mock contact data for testing various scenarios
+    static let mockData: [Contact] = [
+        // Active responder - recently checked in
+        Contact(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            name: "Alice Johnson",
+            phoneNumber: "+12345678901",
+            isResponder: true,
+            isDependent: false,
+            emergencyNote: "Primary emergency contact",
+            lastCheckInTimestamp: Date().addingTimeInterval(-1800), // 30 minutes ago
+            checkInInterval: 86400, // 24 hours
+            hasIncomingPing: false,
+            hasOutgoingPing: false,
+            incomingPingTimestamp: nil,
+            outgoingPingTimestamp: nil,
+            hasManualAlertActive: false,
+            emergencyAlertTimestamp: nil,
+            hasNotResponsiveAlert: false,
+            notResponsiveAlertTimestamp: nil,
+            profileImageURL: "https://example.com/alice.jpg",
+            profileImageData: nil,
+            dateAdded: Date().addingTimeInterval(-1209600), // 14 days ago
+            lastUpdated: Date()
+        ),
+        
+        // Dependent with active alert
+        Contact(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            name: "Bob Smith",
+            phoneNumber: "+12345678902",
+            isResponder: false,
+            isDependent: true,
+            emergencyNote: "Lives alone, requires daily check-ins",
+            lastCheckInTimestamp: Date().addingTimeInterval(-7200), // 2 hours ago
+            checkInInterval: 43200, // 12 hours
+            hasIncomingPing: false,
+            hasOutgoingPing: false,
+            incomingPingTimestamp: nil,
+            outgoingPingTimestamp: nil,
+            hasManualAlertActive: true,
+            emergencyAlertTimestamp: Date().addingTimeInterval(-600), // 10 minutes ago
+            hasNotResponsiveAlert: false,
+            notResponsiveAlertTimestamp: nil,
+            profileImageURL: nil,
+            profileImageData: nil,
+            dateAdded: Date().addingTimeInterval(-1728000), // 20 days ago
+            lastUpdated: Date()
+        ),
+        
+        // Dependent - overdue check-in
+        Contact(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
+            name: "Carol Davis",
+            phoneNumber: "+12345678903",
+            isResponder: false,
+            isDependent: true,
+            emergencyNote: "Weekly check-ins required",
+            lastCheckInTimestamp: Date().addingTimeInterval(-172800), // 2 days ago
+            checkInInterval: 86400, // 24 hours (overdue)
+            hasIncomingPing: false,
+            hasOutgoingPing: true,
+            incomingPingTimestamp: nil,
+            outgoingPingTimestamp: Date().addingTimeInterval(-300), // 5 minutes ago
+            hasManualAlertActive: false,
+            emergencyAlertTimestamp: nil,
+            hasNotResponsiveAlert: false,
+            notResponsiveAlertTimestamp: nil,
+            profileImageURL: nil,
+            profileImageData: nil,
+            dateAdded: Date().addingTimeInterval(-518400), // 6 days ago
+            lastUpdated: Date()
+        ),
+        
+        // Both responder and dependent - incoming ping
+        Contact(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000004")!,
+            name: "David Wilson",
+            phoneNumber: "+12345678904",
+            isResponder: true,
+            isDependent: true,
+            emergencyNote: "Family member - backup contact",
+            lastCheckInTimestamp: Date().addingTimeInterval(-14400), // 4 hours ago
+            checkInInterval: 28800, // 8 hours
+            hasIncomingPing: true,
+            hasOutgoingPing: false,
+            incomingPingTimestamp: Date().addingTimeInterval(-180), // 3 minutes ago
+            outgoingPingTimestamp: nil,
+            hasManualAlertActive: false,
+            emergencyAlertTimestamp: nil,
+            hasNotResponsiveAlert: false,
+            notResponsiveAlertTimestamp: nil,
+            profileImageURL: "https://example.com/david.jpg",
+            profileImageData: nil,
+            dateAdded: Date().addingTimeInterval(-432000), // 5 days ago
+            lastUpdated: Date()
+        ),
+        
+        // Not responsive alert
+        Contact(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000005")!,
+            name: "Emma Brown",
+            phoneNumber: "+12345678905",
+            isResponder: false,
+            isDependent: true,
+            emergencyNote: "Elderly dependent - medical conditions",
+            lastCheckInTimestamp: Date().addingTimeInterval(-259200), // 3 days ago
+            checkInInterval: 86400, // 24 hours (very overdue)
+            hasIncomingPing: false,
+            hasOutgoingPing: false,
+            incomingPingTimestamp: nil,
+            outgoingPingTimestamp: nil,
+            hasManualAlertActive: false,
+            emergencyAlertTimestamp: nil,
+            hasNotResponsiveAlert: true,
+            notResponsiveAlertTimestamp: Date().addingTimeInterval(-3600), // 1 hour ago
+            profileImageURL: nil,
+            profileImageData: nil,
+            dateAdded: Date().addingTimeInterval(-345600), // 4 days ago
+            lastUpdated: Date()
+        ),
+        
+        // Responder - no recent check-in
+        Contact(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000006")!,
+            name: "Frank Miller",
+            phoneNumber: "+12345678906",
+            isResponder: true,
+            isDependent: false,
+            emergencyNote: "Backup emergency contact",
+            lastCheckInTimestamp: nil, // Never checked in
+            checkInInterval: 86400, // 24 hours
+            hasIncomingPing: false,
+            hasOutgoingPing: false,
+            incomingPingTimestamp: nil,
+            outgoingPingTimestamp: nil,
+            hasManualAlertActive: false,
+            emergencyAlertTimestamp: nil,
+            hasNotResponsiveAlert: false,
+            notResponsiveAlertTimestamp: nil,
+            profileImageURL: nil,
+            profileImageData: nil,
+            dateAdded: Date().addingTimeInterval(-345600), // 4 days ago
+            lastUpdated: Date()
+        ),
+        
+        // Recently active dependent
+        Contact(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000007")!,
+            name: "Grace Taylor",
+            phoneNumber: "+12345678907",
+            isResponder: false,
+            isDependent: true,
+            emergencyNote: "College student - needs monitoring",
+            lastCheckInTimestamp: Date().addingTimeInterval(-300), // 5 minutes ago
+            checkInInterval: 21600, // 6 hours
+            hasIncomingPing: false,
+            hasOutgoingPing: false,
+            incomingPingTimestamp: nil,
+            outgoingPingTimestamp: nil,
+            hasManualAlertActive: false,
+            emergencyAlertTimestamp: nil,
+            hasNotResponsiveAlert: false,
+            notResponsiveAlertTimestamp: nil,
+            profileImageURL: "https://example.com/grace.jpg",
+            profileImageData: nil,
+            dateAdded: Date().addingTimeInterval(-172800), // 2 days ago
+            lastUpdated: Date()
+        ),
+        
+        // Contact with both incoming and outgoing pings (edge case)
+        Contact(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000008")!,
+            name: "Henry Anderson",
+            phoneNumber: "+12345678908",
+            isResponder: true,
+            isDependent: true,
+            emergencyNote: "Family member with high activity",
+            lastCheckInTimestamp: Date().addingTimeInterval(-10800), // 3 hours ago
+            checkInInterval: 43200, // 12 hours
+            hasIncomingPing: true,
+            hasOutgoingPing: true,
+            incomingPingTimestamp: Date().addingTimeInterval(-120), // 2 minutes ago
+            outgoingPingTimestamp: Date().addingTimeInterval(-600), // 10 minutes ago
+            hasManualAlertActive: false,
+            emergencyAlertTimestamp: nil,
+            hasNotResponsiveAlert: false,
+            notResponsiveAlertTimestamp: nil,
+            profileImageURL: nil,
+            profileImageData: nil,
+            dateAdded: Date().addingTimeInterval(-259200), // 3 days ago
+            lastUpdated: Date()
+        ),
+        
+        // Dependent with very old check-in (testing edge cases)
+        Contact(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000009")!,
+            name: "Ivy Chen",
+            phoneNumber: "+12345678909",
+            isResponder: false,
+            isDependent: true,
+            emergencyNote: "International contact",
+            lastCheckInTimestamp: Date().addingTimeInterval(-2678400), // 31 days ago
+            checkInInterval: 604800, // 7 days (very overdue)
+            hasIncomingPing: false,
+            hasOutgoingPing: false,
+            incomingPingTimestamp: nil,
+            outgoingPingTimestamp: nil,
+            hasManualAlertActive: false,
+            emergencyAlertTimestamp: nil,
+            hasNotResponsiveAlert: false,
+            notResponsiveAlertTimestamp: nil,
+            profileImageURL: nil,
+            profileImageData: nil,
+            dateAdded: Date().addingTimeInterval(-604800), // 7 days ago
+            lastUpdated: Date()
+        ),
+        
+        // Contact with all alerts active (stress test)
+        Contact(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000010")!,
+            name: "Jack Robinson",
+            phoneNumber: "+12345678910",
+            isResponder: true,
+            isDependent: true,
+            emergencyNote: "High-priority contact - all alerts active",
+            lastCheckInTimestamp: Date().addingTimeInterval(-432000), // 5 days ago
+            checkInInterval: 86400, // 24 hours (very overdue)
+            hasIncomingPing: true,
+            hasOutgoingPing: true,
+            incomingPingTimestamp: Date().addingTimeInterval(-60), // 1 minute ago
+            outgoingPingTimestamp: Date().addingTimeInterval(-300), // 5 minutes ago
+            hasManualAlertActive: true,
+            emergencyAlertTimestamp: Date().addingTimeInterval(-1800), // 30 minutes ago
+            hasNotResponsiveAlert: true,
+            notResponsiveAlertTimestamp: Date().addingTimeInterval(-7200), // 2 hours ago
+            profileImageURL: "https://example.com/jack.jpg",
+            profileImageData: nil,
+            dateAdded: Date().addingTimeInterval(-86400), // 1 day ago
+            lastUpdated: Date()
+        )
+    ]
+    
+    /// Filtered mock data for dependents only
+    static var mockDependents: [Contact] {
+        mockData.filter { $0.isDependent }
+    }
+    
+    /// Filtered mock data for responders only
+    static var mockResponders: [Contact] {
+        mockData.filter { $0.isResponder }
+    }
+    
+    /// Mock contact with specific characteristics for targeted testing
+    static func mockContact(
+        id: UUID = UUID(),
+        name: String = "Test Contact",
+        phoneNumber: String = "+1234567890",
+        isResponder: Bool = false,
+        isDependent: Bool = true,
+        emergencyNote: String = "Test note",
+        lastCheckInTimestamp: Date? = nil,
+        checkInInterval: TimeInterval = 86400,
+        hasIncomingPing: Bool = false,
+        hasOutgoingPing: Bool = false,
+        hasManualAlertActive: Bool = false,
+        hasNotResponsiveAlert: Bool = false
+    ) -> Contact {
+        Contact(
+            id: id,
+            name: name,
+            phoneNumber: phoneNumber,
+            isResponder: isResponder,
+            isDependent: isDependent,
+            emergencyNote: emergencyNote,
+            lastCheckInTimestamp: lastCheckInTimestamp,
+            checkInInterval: checkInInterval,
+            hasIncomingPing: hasIncomingPing,
+            hasOutgoingPing: hasOutgoingPing,
+            incomingPingTimestamp: hasIncomingPing ? Date().addingTimeInterval(-300) : nil,
+            outgoingPingTimestamp: hasOutgoingPing ? Date().addingTimeInterval(-300) : nil,
+            hasManualAlertActive: hasManualAlertActive,
+            emergencyAlertTimestamp: hasManualAlertActive ? Date().addingTimeInterval(-600) : nil,
+            hasNotResponsiveAlert: hasNotResponsiveAlert,
+            notResponsiveAlertTimestamp: hasNotResponsiveAlert ? Date().addingTimeInterval(-3600) : nil,
+            profileImageURL: nil,
+            profileImageData: nil,
+            dateAdded: Date(),
+            lastUpdated: Date()
+        )
     }
 }

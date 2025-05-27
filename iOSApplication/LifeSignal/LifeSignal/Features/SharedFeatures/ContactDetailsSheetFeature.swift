@@ -216,24 +216,18 @@ struct ContactDetailsSheetFeature {
                 state.isLoading = false
                 state.contact = contact
                 return .run { _ in
-                    try? await notificationClient.sendNotification(
-                        NotificationItem(
-                            title: "Contact Updated",
-                            message: "Successfully updated \(contact.name)'s roles",
-                            type: .receiveContactRoleChanged
-                        )
+                    try? await notificationClient.sendSystemNotification(
+                        "Contact Updated",
+                        "Successfully updated \(contact.name)'s roles"
                     )
                 }
                 
             case .contactUpdateResponse(.failure(let error)):
                 state.isLoading = false
                 return .run { _ in
-                    try? await notificationClient.sendNotification(
-                        NotificationItem(
-                            title: "Update Failed",
-                            message: "Unable to update contact: \(error.localizedDescription)",
-                            type: .receiveSystemNotification
-                        )
+                    try? await notificationClient.sendSystemNotification(
+                        "Update Failed",
+                        "Unable to update contact: \(error.localizedDescription)"
                     )
                 }
                 
@@ -241,24 +235,18 @@ struct ContactDetailsSheetFeature {
                 state.isLoading = false
                 state.shouldDismiss = true
                 return .run { [contact = state.contact] _ in
-                    try? await notificationClient.sendNotification(
-                        NotificationItem(
-                            title: "Contact Deleted",
-                            message: "Successfully deleted \(contact.name)",
-                            type: .receiveContactRemoved
-                        )
+                    try? await notificationClient.sendSystemNotification(
+                        "Contact Deleted",
+                        "Successfully deleted \(contact.name)"
                     )
                 }
                 
             case .contactDeleteResponse(.failure(let error)):
                 state.isLoading = false
                 return .run { _ in
-                    try? await notificationClient.sendNotification(
-                        NotificationItem(
-                            title: "Delete Failed",
-                            message: "Unable to delete contact: \(error.localizedDescription)",
-                            type: .receiveSystemNotification
-                        )
+                    try? await notificationClient.sendSystemNotification(
+                        "Delete Failed",
+                        "Unable to delete contact: \(error.localizedDescription)"
                     )
                 }
                 
@@ -269,12 +257,9 @@ struct ContactDetailsSheetFeature {
                 
             case .pingResponse(.failure(let error)):
                 return .run { _ in
-                    try? await notificationClient.sendNotification(
-                        NotificationItem(
-                            title: "Ping Failed",
-                            message: "Unable to send ping: \(error.localizedDescription)",
-                            type: .receiveSystemNotification
-                        )
+                    try? await notificationClient.sendSystemNotification(
+                        "Ping Failed",
+                        "Unable to send ping: \(error.localizedDescription)"
                     )
                 }
                 
@@ -391,7 +376,7 @@ struct ContactDetailsSheetView: View {
                 store.send(.callContact)
             }) {
                 VStack(spacing: 6) {
-                    Image(systemName: "phone.fill")
+                    Image(systemName: "phone")
                         .font(.system(size: 20))
                         .foregroundColor(.blue)
                     
@@ -411,7 +396,7 @@ struct ContactDetailsSheetView: View {
                 store.send(.messageContact)
             }) {
                 VStack(spacing: 6) {
-                    Image(systemName: "message.fill")
+                    Image(systemName: "message")
                         .font(.system(size: 20))
                         .foregroundColor(.blue)
                     
@@ -431,7 +416,7 @@ struct ContactDetailsSheetView: View {
                 store.send(.pingContact)
             }) {
                 VStack(spacing: 6) {
-                    Image(systemName: store.contact.hasOutgoingPing ? "bell.badge.fill" : "bell.fill")
+                    Image(systemName: store.contact.hasOutgoingPing ? "bell.badge" : "bell")
                         .font(.system(size: 20))
                         .foregroundColor(store.contact.hasOutgoingPing ? Color.blue.opacity(0.7) : .blue)
                     

@@ -223,12 +223,10 @@ struct HomeFeature {
                     await send(.userLoaded(user))
                 }
             } catch {
-                let notification = NotificationItem(
-                    title: "Profile Sync Issue",
-                    message: "Unable to load latest profile data. Will retry automatically.",
-                    type: .receiveSystemNotification
+                try? await notificationClient.sendSystemNotification(
+                    "Profile Sync Issue",
+                    "Unable to load latest profile data. Will retry automatically."
                 )
-                try? await notificationClient.sendNotification(notification)
             }
         }
     }
@@ -366,12 +364,10 @@ struct HomeFeature {
                 try await userClient.updateUser(user)
                 await send(.initializeIntervalPicker)
             } catch {
-                let notification = NotificationItem(
-                    title: "Settings Update Issue",
-                    message: "Check-in interval update failed. Please try again.",
-                    type: .receiveSystemNotification
+                try? await notificationClient.sendSystemNotification(
+                    "Settings Update Issue",
+                    "Check-in interval update failed. Please try again."
                 )
-                try? await notificationClient.sendNotification(notification)
             }
         }
     }
@@ -454,19 +450,15 @@ struct HomeFeature {
                 user.lastModified = Date()
                 try await userClient.updateUser(user)
                 
-                let notification = NotificationItem(
-                    title: "Notification Settings Updated",
-                    message: "Your notification settings have been successfully updated.",
-                    type: .receiveSystemNotification
+                try? await notificationClient.sendSystemNotification(
+                    "Notification Settings Updated",
+                    "Your notification settings have been successfully updated."
                 )
-                try? await notificationClient.sendNotification(notification)
             } catch {
-                let notification = NotificationItem(
-                    title: "Notification Settings Issue",
-                    message: "Unable to update notification preferences. Please try again.",
-                    type: .receiveSystemNotification
+                try? await notificationClient.sendSystemNotification(
+                    "Notification Settings Issue",
+                    "Unable to update notification preferences. Please try again."
                 )
-                try? await notificationClient.sendNotification(notification)
             }
         }
     }
@@ -624,20 +616,16 @@ struct HomeFeature {
                 user.lastModified = Date()
                 try await userClient.updateUser(user)
                 
-                let notification = NotificationItem(
-                    title: "QR Code Reset",
-                    message: "Your QR code has been reset. Previous QR codes are no longer valid.",
-                    type: .receiveSystemNotification
+                try? await notificationClient.sendSystemNotification(
+                    "QR Code Reset",
+                    "Your QR code has been reset. Previous QR codes are no longer valid."
                 )
-                try? await notificationClient.sendNotification(notification)
                 await send(.generateQRCode)
             } catch {
-                let notification = NotificationItem(
-                    title: "QR Code Reset Issue",
-                    message: "Unable to reset QR code. Please try again.",
-                    type: .receiveSystemNotification
+                try? await notificationClient.sendSystemNotification(
+                    "QR Code Reset Issue",
+                    "Unable to reset QR code. Please try again."
                 )
-                try? await notificationClient.sendNotification(notification)
             }
         }
     }
@@ -662,6 +650,7 @@ struct HomeFeature {
             notResponsiveAlertTimestamp: nil,
             profileImageURL: nil,
             profileImageData: nil,
+            dateAdded: Date(),
             lastUpdated: Date()
         )
         return .send(.contactCreated(contact))
@@ -685,12 +674,10 @@ struct HomeFeature {
         .run { [qrCodeId = state.currentUser?.qrCodeId.uuidString ?? "", haptics, notificationClient] send in
             UIPasteboard.general.string = qrCodeId
             await haptics.notification(.success)
-            let notification = NotificationItem(
-                title: "QR Code ID Copied",
-                message: "Your QR code ID has been copied to the clipboard.",
-                type: .receiveSystemNotification
+            try? await notificationClient.sendSystemNotification(
+                "QR Code ID Copied",
+                "Your QR code ID has been copied to the clipboard."
             )
-            try? await notificationClient.sendNotification(notification)
         }
     }
 }
