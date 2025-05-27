@@ -6,7 +6,7 @@ struct MainTabsFeature: Sendable {
     @ObservableState
     struct State: Equatable {
         @Shared(.currentUser) var currentUser: User? = nil
-        @Shared(.contacts) var contacts: [Contact] = []
+        @Shared(.contacts) var contactsState: ReadOnlyContactsState
         @Shared(.isNetworkConnected) var isOnline: Bool = true
         
         var selectedTab: Tab = .home
@@ -32,19 +32,19 @@ struct MainTabsFeature: Sendable {
 
         // Computed properties for tab badges
         var alertingContactsCount: Int {
-            contacts.filter { $0.hasManualAlertActive }.count
+            contactsState.contacts.filter { $0.hasManualAlertActive }.count
         }
 
         var respondersCount: Int {
-            contacts.filter { $0.isResponder }.count
+            contactsState.contacts.filter { $0.isResponder }.count
         }
 
         var dependentsCount: Int {
-            contacts.filter { $0.isDependent }.count
+            contactsState.contacts.filter { $0.isDependent }.count
         }
 
         var activeAlertsCount: Int {
-            contacts.filter { contact in
+            contactsState.contacts.filter { contact in
                 contact.hasManualAlertActive || contact.hasIncomingPing || contact.hasOutgoingPing
             }.count
         }

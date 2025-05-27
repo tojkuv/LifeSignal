@@ -339,6 +339,41 @@ extension User {
 
 // MARK: - User Shared State
 
+// 1. Mutable internal state (private to Client)
+struct UserState: Equatable {
+    var currentUser: User?
+    var isLoading: Bool
+    var lastSyncTimestamp: Date?
+    
+    init(currentUser: User? = nil, isLoading: Bool = false, lastSyncTimestamp: Date? = nil) {
+        self.currentUser = currentUser
+        self.isLoading = isLoading
+        self.lastSyncTimestamp = lastSyncTimestamp
+    }
+}
+
+// 2. Read-only wrapper (prevents direct mutation)
+struct ReadOnlyUserState: Equatable {
+    private let _state: UserState
+    
+    // 🔑 Only Client can access this init (same file = fileprivate access)
+    fileprivate init(_ state: UserState) {
+        self._state = state
+    }
+    
+    // Read-only accessors
+    var currentUser: User? { _state.currentUser }
+    var isLoading: Bool { _state.isLoading }
+    var lastSyncTimestamp: Date? { _state.lastSyncTimestamp }
+}
+
+extension SharedReaderKey where Self == InMemoryKey<ReadOnlyUserState>.Default {
+    static var userState: Self {
+        Self[.inMemory("userState"), default: ReadOnlyUserState(UserState())]
+    }
+}
+
+// Legacy currentUser accessor for Features that read individual user
 extension SharedReaderKey where Self == InMemoryKey<User?>.Default {
     static var currentUser: Self {
         Self[.inMemory("currentUser"), default: nil]
@@ -666,7 +701,16 @@ extension UserClient: DependencyKey {
             let userProto = try await service.getUser(request)
             let user = userProto.toDomain()
             
-            // Update shared state
+            // Update shared state using read-only wrapper pattern
+            @Shared(.userState) var sharedUserState
+            let mutableState = UserState(
+                currentUser: user,
+                isLoading: false,
+                lastSyncTimestamp: Date()
+            )
+            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+            
+            // Update legacy shared state for Features
             @Shared(.currentUser) var currentUser
             $currentUser.withLock { $0 = user }
             
@@ -713,7 +757,16 @@ extension UserClient: DependencyKey {
             // Generate QR code images for new user
             newUser.generateAndCacheQRCodeImages()
             
-            // Update shared state
+            // Update shared state using read-only wrapper pattern
+            @Shared(.userState) var sharedUserState
+            let mutableState = UserState(
+                currentUser: newUser,
+                isLoading: false,
+                lastSyncTimestamp: Date()
+            )
+            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+            
+            // Update legacy shared state for Features
             @Shared(.currentUser) var currentUser
             $currentUser.withLock { $0 = newUser }
         },
@@ -739,7 +792,16 @@ extension UserClient: DependencyKey {
             let userProto = try await service.updateUser(request)
             let updatedUser = userProto.toDomain()
             
-            // Update shared state
+            // Update shared state using read-only wrapper pattern
+            @Shared(.userState) var sharedUserState
+            let mutableState = UserState(
+                currentUser: updatedUser,
+                isLoading: false,
+                lastSyncTimestamp: Date()
+            )
+            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+            
+            // Update legacy shared state for Features
             @Shared(.currentUser) var currentUser
             $currentUser.withLock { $0 = updatedUser }
         },
@@ -751,7 +813,16 @@ extension UserClient: DependencyKey {
             
             _ = try await service.deleteUser(request)
             
-            // Clear shared state
+            // Clear shared state using read-only wrapper pattern
+            @Shared(.userState) var sharedUserState
+            let mutableState = UserState(
+                currentUser: nil,
+                isLoading: false,
+                lastSyncTimestamp: Date()
+            )
+            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+            
+            // Clear legacy shared state for Features
             @Shared(.currentUser) var currentUser
             $currentUser.withLock { $0 = nil }
         },
@@ -772,7 +843,16 @@ extension UserClient: DependencyKey {
                 $0 = AvatarImageWithMetadata(image: imageData, metadata: metadata)
             }
             
-            // Update shared state with new user data
+            // Update shared state using read-only wrapper pattern
+            @Shared(.userState) var sharedUserState
+            let mutableState = UserState(
+                currentUser: updatedUser,
+                isLoading: false,
+                lastSyncTimestamp: Date()
+            )
+            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+            
+            // Update legacy shared state for Features
             @Shared(.currentUser) var currentUser
             $currentUser.withLock { $0 = updatedUser }
         },
@@ -806,7 +886,16 @@ extension UserClient: DependencyKey {
             @Shared(.userAvatarImage) var avatarImage
             $avatarImage.withLock { $0 = nil }
             
-            // Update shared state with updated user
+            // Update shared state using read-only wrapper pattern
+            @Shared(.userState) var sharedUserState
+            let mutableState = UserState(
+                currentUser: updatedUser,
+                isLoading: false,
+                lastSyncTimestamp: Date()
+            )
+            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+            
+            // Update legacy shared state for Features
             @Shared(.currentUser) var currentUser
             $currentUser.withLock { $0 = updatedUser }
         },
@@ -848,7 +937,16 @@ extension UserClient: DependencyKey {
             // Generate fresh QR code images after reset
             updatedUser.generateAndCacheQRCodeImages()
             
-            // Update shared state with new user data and fresh QR images
+            // Update shared state using read-only wrapper pattern
+            @Shared(.userState) var sharedUserState
+            let mutableState = UserState(
+                currentUser: updatedUser,
+                isLoading: false,
+                lastSyncTimestamp: Date()
+            )
+            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+            
+            // Update legacy shared state for Features
             $currentUser.withLock { $0 = updatedUser }
         },
         

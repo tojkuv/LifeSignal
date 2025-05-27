@@ -5,6 +5,46 @@ import Dependencies
 import DependenciesMacros
 @_exported import Sharing
 
+// MARK: - Shared State (Read-Only Wrapper Pattern)
+
+// 1. Mutable internal state (private to Client)
+struct ContactsState: Equatable {
+    var contacts: [Contact] = []
+    var lastSyncTimestamp: Date? = nil
+    var isLoading: Bool = false
+}
+
+// 2. Read-only wrapper (prevents direct mutation)
+struct ReadOnlyContactsState: Equatable {
+    private let _state: ContactsState
+    fileprivate init(_ state: ContactsState) { self._state = state }  // 🔑 Client can access (same file)
+    
+    // Read-only access
+    var contacts: [Contact] { _state.contacts }
+    var lastSyncTimestamp: Date? { _state.lastSyncTimestamp }
+    var isLoading: Bool { _state.isLoading }
+    var count: Int { _state.contacts.count }
+    
+    // Computed properties
+    var responders: [Contact] { _state.contacts.filter(\.isResponder) }
+    var dependents: [Contact] { _state.contacts.filter(\.isDependent) }
+    
+    func contact(by id: UUID) -> Contact? {
+        _state.contacts.first { $0.id == id }
+    }
+    
+    func contactIndex(for id: UUID) -> Int? {
+        _state.contacts.firstIndex { $0.id == id }
+    }
+}
+
+// 3. Shared key stores read-only wrapper
+extension SharedReaderKey where Self == InMemoryKey<ReadOnlyContactsState>.Default {
+    static var contacts: Self {
+        Self[.inMemory("contacts"), default: ReadOnlyContactsState(ContactsState())]
+    }
+}
+
 // MARK: - gRPC Protocol Integration
 
 protocol ContactServiceProtocol: Sendable {
@@ -34,7 +74,6 @@ struct AddContactRequest: Sendable {
     let authToken: String
 }
 
-
 struct RemoveContactRequest: Sendable {
     let contactId: UUID
     let authToken: String
@@ -44,7 +83,6 @@ struct StreamContactUpdatesRequest: Sendable {
     let userId: UUID
     let authToken: String
 }
-
 
 // MARK: - gRPC Proto Types
 
@@ -95,7 +133,7 @@ final class MockContactService: ContactServiceProtocol {
                 emergencyAlertTimestamp: nil,
                 notResponsiveAlertTimestamp: nil,
                 profileImageURL: "https://example.com/profile/john_doe.jpg",
-                dateAdded: Int64(Date().addingTimeInterval(-604800).timeIntervalSince1970), // 1 week ago
+                dateAdded: Int64(Date().addingTimeInterval(-604800).timeIntervalSince1970),
                 lastUpdated: Int64(Date().timeIntervalSince1970)
             ),
             Contact_Proto(
@@ -116,7 +154,7 @@ final class MockContactService: ContactServiceProtocol {
                 emergencyAlertTimestamp: nil,
                 notResponsiveAlertTimestamp: Int64(Date().addingTimeInterval(-7200).timeIntervalSince1970),
                 profileImageURL: nil,
-                dateAdded: Int64(Date().addingTimeInterval(-259200).timeIntervalSince1970), // 3 days ago
+                dateAdded: Int64(Date().addingTimeInterval(-259200).timeIntervalSince1970),
                 lastUpdated: Int64(Date().timeIntervalSince1970)
             )
         ]
@@ -148,7 +186,6 @@ final class MockContactService: ContactServiceProtocol {
             lastUpdated: Int64(Date().timeIntervalSince1970)
         )
     }
-
 
     func removeContact(_ request: RemoveContactRequest) async throws -> Empty_Proto {
         try await Task.sleep(for: .milliseconds(500))
@@ -190,14 +227,6 @@ final class MockContactService: ContactServiceProtocol {
 }
 
 // MARK: - Proto Mapping Extensions
-//
-// Converts Contact_Proto (gRPC) to Contact (domain model)
-// 
-// Key conversions:
-// - id: String -> UUID  
-// - timestamps: Int64 -> Date
-// - checkInInterval: Int64 -> TimeInterval
-// - profileImageData: Not in proto (local cache only)
 
 extension Contact_Proto {
     func toDomain() -> Contact {
@@ -219,30 +248,17 @@ extension Contact_Proto {
             hasNotResponsiveAlert: hasNotResponsiveAlert,
             notResponsiveAlertTimestamp: notResponsiveAlertTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
             profileImageURL: profileImageURL,
-            profileImageData: nil, // Would be populated separately from image service
+            profileImageData: nil,
             dateAdded: Date(timeIntervalSince1970: TimeInterval(dateAdded)),
             lastUpdated: Date(timeIntervalSince1970: TimeInterval(lastUpdated))
         )
     }
 }
 
-// MARK: - Contacts Shared State
-
-extension SharedReaderKey where Self == InMemoryKey<[Contact]>.Default {
-    static var contacts: Self {
-        Self[.inMemory("contacts"), default: []]
-    }
-}
-
-
 // MARK: - Contact Domain Model
-//
-// This model exactly matches Contact_Proto with these additions:
-// - profileImageData: Local cache of profile image (not sent over gRPC)
-// - Computed properties for enhanced functionality
 
 struct Contact: Codable, Equatable, Identifiable, Sendable {
-    // MARK: - Core Properties (matches Contact_Proto)
+    // MARK: - Core Properties
     let id: UUID
     var name: String
     var phoneNumber: String
@@ -250,35 +266,33 @@ struct Contact: Codable, Equatable, Identifiable, Sendable {
     var isDependent: Bool
     var emergencyNote: String
     
-    // MARK: - Check-in Properties (matches Contact_Proto)
+    // MARK: - Check-in Properties
     var lastCheckInTimestamp: Date?
     var checkInInterval: TimeInterval
     
-    // MARK: - Ping Status Properties (matches Contact_Proto)
+    // MARK: - Ping Status Properties
     var hasIncomingPing: Bool
     var hasOutgoingPing: Bool
     var incomingPingTimestamp: Date?
     var outgoingPingTimestamp: Date?
     
-    // MARK: - Emergency Alert Properties (matches Contact_Proto)
+    // MARK: - Emergency Alert Properties
     var hasManualAlertActive: Bool
     var emergencyAlertTimestamp: Date?
     
-    // MARK: - Non-Responsive Alert Properties (matches Contact_Proto)
+    // MARK: - Non-Responsive Alert Properties
     var hasNotResponsiveAlert: Bool
     var notResponsiveAlertTimestamp: Date?
     
     // MARK: - Profile Image Properties
-    var profileImageURL: String? // From Contact_Proto
-    var profileImageData: Data?   // Local cache only (not in proto)
+    var profileImageURL: String?
+    var profileImageData: Data?
     
-    // MARK: - Metadata (matches Contact_Proto)
+    // MARK: - Metadata
     var dateAdded: Date
     var lastUpdated: Date
     
     // MARK: - Computed Properties
-    
-    /// Returns the contact's profile image from cached data
     var profileImage: UIImage? {
         guard let imageData = profileImageData else { return nil }
         return UIImage(data: imageData)
@@ -313,19 +327,9 @@ enum ContactsClientError: Error, LocalizedError {
     }
 }
 
-
-// MARK: - Contacts Client
-//
-// The ContactsClient provides a simplified interface for contact management where:
-// - CRUD operations (create, read, delete) are handled via standard API calls
-// - Contact updates are received via gRPC streaming (no direct update API)
-// - The streaming connection automatically updates shared state when contacts change
-// - Features subscribe to shared state changes via @Shared(.contacts) for reactivity
-
 // MARK: - ContactsClient Internal Helpers
 
 extension ContactsClient {
-    /// Gets the authenticated user info for ContactsClient operations
     private static func getAuthenticatedUserInfo() async throws -> (token: String, userId: UUID) {
         @Shared(.authenticationToken) var authToken
         @Shared(.currentUser) var currentUser
@@ -341,6 +345,8 @@ extension ContactsClient {
         return (token: token, userId: user.id)
     }
 }
+
+// MARK: - ContactsClient (TCA Shared State Pattern)
 
 @DependencyClient
 struct ContactsClient {
@@ -366,7 +372,6 @@ struct ContactsClient {
     var contactUpdates: @Sendable () -> AsyncStream<Contact> = {
         AsyncStream { _ in }
     }
-    
 }
 
 extension ContactsClient: DependencyKey {
@@ -376,22 +381,19 @@ extension ContactsClient: DependencyKey {
     static let mockValue = ContactsClient(
         getContacts: {
             @Shared(.contacts) var contacts
-            return contacts
+            return contacts.contacts
         },
         
         getContact: { contactId in
-            // Simulate delay
             try await Task.sleep(for: .milliseconds(300))
             
             @Shared(.contacts) var contacts
-            return contacts.first { $0.id == contactId }
+            return contacts.contact(by: contactId)
         },
         
         getContactByQRCode: { qrCodeId in
-            // Simulate delay
             try await Task.sleep(for: .milliseconds(500))
             
-            // Mock contact based on QR code ID
             let contact = Contact(
                 id: UUID(),
                 name: "John Doe",
@@ -434,13 +436,17 @@ extension ContactsClient: DependencyKey {
             let contactProto = try await service.addContact(request)
             let newContact = contactProto.toDomain()
             
-            // Update shared state
-            @Shared(.contacts) var contacts
-            $contacts.withLock { $0.append(newContact) }
+            // Update shared state via fileprivate init (ONLY Clients can do this)
+            @Shared(.contacts) var sharedContactsState
+            let mutableState = ContactsState(
+                contacts: sharedContactsState.contacts + [newContact],
+                lastSyncTimestamp: Date(),
+                isLoading: false
+            )
+            $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
             
             return newContact
         },
-        
         
         removeContact: { contactId in
             let authInfo = try await Self.getAuthenticatedUserInfo()
@@ -449,32 +455,36 @@ extension ContactsClient: DependencyKey {
             let request = RemoveContactRequest(contactId: contactId, authToken: authInfo.token)
             _ = try await service.removeContact(request)
             
-            @Shared(.contacts) var contacts
-            $contacts.withLock { $0.removeAll { $0.id == contactId } }
+            // Update shared state via fileprivate init
+            @Shared(.contacts) var sharedContactsState
+            let updatedContacts = sharedContactsState.contacts.filter { $0.id != contactId }
+            let mutableState = ContactsState(
+                contacts: updatedContacts,
+                lastSyncTimestamp: Date(),
+                isLoading: false
+            )
+            $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
         },
         
         updateContact: { updatedContact in
-            @Shared(.contacts) var contacts
-            $contacts.withLock { contacts in
-                if let index = contacts.firstIndex(where: { $0.id == updatedContact.id }) {
-                    contacts[index] = updatedContact
-                }
+            // Update shared state via fileprivate init
+            @Shared(.contacts) var sharedContactsState
+            var contacts = sharedContactsState.contacts
+            if let index = contacts.firstIndex(where: { $0.id == updatedContact.id }) {
+                contacts[index] = updatedContact
             }
+            
+            let mutableState = ContactsState(
+                contacts: contacts,
+                lastSyncTimestamp: Date(),
+                isLoading: false
+            )
+            $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
         },
         
         refreshContacts: {
-            // For MVP/mock stage, ensure we have a current user set up
-            @Shared(.currentUser) var currentUser
-            @Shared(.authenticationToken) var authToken
-            @Shared(.internalAuthUID) var authUID
-            
-            // If no user exists, set up mock user for visual testing
-            if currentUser == nil {
-                $currentUser.withLock { $0 = User.mock }
-                $authToken.withLock { $0 = "mock-token" }
-                $authUID.withLock { $0 = User.mock.id.uuidString }
-            }
-            
+            // ContactsClient should NOT mutate SessionClient's state
+            // If no authentication, SessionClient should handle this
             let authInfo = try await Self.getAuthenticatedUserInfo()
             let service = MockContactService()
             
@@ -487,17 +497,22 @@ extension ContactsClient: DependencyKey {
             // Also include our comprehensive mock data for visual testing
             let allContacts = contacts + Contact.mockData
             
-            @Shared(.contacts) var sharedContacts
-            $sharedContacts.withLock { $0 = allContacts }
+            // Update shared state via fileprivate init
+            @Shared(.contacts) var sharedContactsState
+            let mutableState = ContactsState(
+                contacts: allContacts,
+                lastSyncTimestamp: Date(),
+                isLoading: false
+            )
+            $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
         },
         
         startContactUpdatesStream: {
-            // Mock gRPC streaming start - establishes bidirectional stream
-            // In production, this would connect to the gRPC streaming endpoint
+            // Mock gRPC streaming start
         },
         
         stopContactUpdatesStream: {
-            // Mock gRPC streaming stop - closes the stream connection
+            // Mock gRPC streaming stop
         },
         
         contactUpdates: {
@@ -507,8 +522,8 @@ extension ContactsClient: DependencyKey {
                     for i in 0..<3 {
                         try? await Task.sleep(for: .seconds(5))
                         
-                        @Shared(.contacts) var contacts
-                        if let contact = contacts.first {
+                        @Shared(.contacts) var sharedContactsState
+                        if let contact = sharedContactsState.contacts.first {
                             // Simulate a contact update from gRPC stream
                             let updatedContact = Contact(
                                 id: contact.id,
@@ -533,12 +548,18 @@ extension ContactsClient: DependencyKey {
                                 lastUpdated: Date()
                             )
                             
-                            // Update shared state with streamed contact
-                            $contacts.withLock { 
-                                if let index = $0.firstIndex(where: { $0.id == contact.id }) {
-                                    $0[index] = updatedContact
-                                }
+                            // Update shared state with streamed contact via fileprivate init
+                            var contacts = sharedContactsState.contacts
+                            if let index = contacts.firstIndex(where: { $0.id == contact.id }) {
+                                contacts[index] = updatedContact
                             }
+                            
+                            let mutableState = ContactsState(
+                                contacts: contacts,
+                                lastSyncTimestamp: Date(),
+                                isLoading: false
+                            )
+                            $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
                             
                             continuation.yield(updatedContact)
                         }
@@ -547,7 +568,6 @@ extension ContactsClient: DependencyKey {
                 }
             }
         }
-        
     )
 }
 
@@ -561,7 +581,6 @@ extension DependencyValues {
 // MARK: - Mock Data Extensions
 
 extension Contact {
-    /// Mock contact data for testing various scenarios
     static let mockData: [Contact] = [
         // Active responder - recently checked in
         Contact(
@@ -571,8 +590,8 @@ extension Contact {
             isResponder: true,
             isDependent: false,
             emergencyNote: "Primary emergency contact",
-            lastCheckInTimestamp: Date().addingTimeInterval(-1800), // 30 minutes ago
-            checkInInterval: 86400, // 24 hours
+            lastCheckInTimestamp: Date().addingTimeInterval(-1800),
+            checkInInterval: 86400,
             hasIncomingPing: false,
             hasOutgoingPing: false,
             incomingPingTimestamp: nil,
@@ -583,7 +602,7 @@ extension Contact {
             notResponsiveAlertTimestamp: nil,
             profileImageURL: "https://example.com/alice.jpg",
             profileImageData: nil,
-            dateAdded: Date().addingTimeInterval(-1209600), // 14 days ago
+            dateAdded: Date().addingTimeInterval(-1209600),
             lastUpdated: Date()
         ),
         
@@ -595,19 +614,19 @@ extension Contact {
             isResponder: false,
             isDependent: true,
             emergencyNote: "Lives alone, requires daily check-ins",
-            lastCheckInTimestamp: Date().addingTimeInterval(-7200), // 2 hours ago
-            checkInInterval: 43200, // 12 hours
+            lastCheckInTimestamp: Date().addingTimeInterval(-7200),
+            checkInInterval: 43200,
             hasIncomingPing: false,
             hasOutgoingPing: false,
             incomingPingTimestamp: nil,
             outgoingPingTimestamp: nil,
             hasManualAlertActive: true,
-            emergencyAlertTimestamp: Date().addingTimeInterval(-600), // 10 minutes ago
+            emergencyAlertTimestamp: Date().addingTimeInterval(-600),
             hasNotResponsiveAlert: false,
             notResponsiveAlertTimestamp: nil,
             profileImageURL: nil,
             profileImageData: nil,
-            dateAdded: Date().addingTimeInterval(-1728000), // 20 days ago
+            dateAdded: Date().addingTimeInterval(-1728000),
             lastUpdated: Date()
         ),
         
@@ -619,19 +638,19 @@ extension Contact {
             isResponder: false,
             isDependent: true,
             emergencyNote: "Weekly check-ins required",
-            lastCheckInTimestamp: Date().addingTimeInterval(-172800), // 2 days ago
-            checkInInterval: 86400, // 24 hours (overdue)
+            lastCheckInTimestamp: Date().addingTimeInterval(-172800),
+            checkInInterval: 86400,
             hasIncomingPing: false,
             hasOutgoingPing: true,
             incomingPingTimestamp: nil,
-            outgoingPingTimestamp: Date().addingTimeInterval(-300), // 5 minutes ago
+            outgoingPingTimestamp: Date().addingTimeInterval(-300),
             hasManualAlertActive: false,
             emergencyAlertTimestamp: nil,
             hasNotResponsiveAlert: false,
             notResponsiveAlertTimestamp: nil,
             profileImageURL: nil,
             profileImageData: nil,
-            dateAdded: Date().addingTimeInterval(-518400), // 6 days ago
+            dateAdded: Date().addingTimeInterval(-518400),
             lastUpdated: Date()
         ),
         
@@ -643,11 +662,11 @@ extension Contact {
             isResponder: true,
             isDependent: true,
             emergencyNote: "Family member - backup contact",
-            lastCheckInTimestamp: Date().addingTimeInterval(-14400), // 4 hours ago
-            checkInInterval: 28800, // 8 hours
+            lastCheckInTimestamp: Date().addingTimeInterval(-14400),
+            checkInInterval: 28800,
             hasIncomingPing: true,
             hasOutgoingPing: false,
-            incomingPingTimestamp: Date().addingTimeInterval(-180), // 3 minutes ago
+            incomingPingTimestamp: Date().addingTimeInterval(-180),
             outgoingPingTimestamp: nil,
             hasManualAlertActive: false,
             emergencyAlertTimestamp: nil,
@@ -655,7 +674,7 @@ extension Contact {
             notResponsiveAlertTimestamp: nil,
             profileImageURL: "https://example.com/david.jpg",
             profileImageData: nil,
-            dateAdded: Date().addingTimeInterval(-432000), // 5 days ago
+            dateAdded: Date().addingTimeInterval(-432000),
             lastUpdated: Date()
         ),
         
@@ -667,8 +686,8 @@ extension Contact {
             isResponder: false,
             isDependent: true,
             emergencyNote: "Elderly dependent - medical conditions",
-            lastCheckInTimestamp: Date().addingTimeInterval(-259200), // 3 days ago
-            checkInInterval: 86400, // 24 hours (very overdue)
+            lastCheckInTimestamp: Date().addingTimeInterval(-259200),
+            checkInInterval: 86400,
             hasIncomingPing: false,
             hasOutgoingPing: false,
             incomingPingTimestamp: nil,
@@ -676,145 +695,22 @@ extension Contact {
             hasManualAlertActive: false,
             emergencyAlertTimestamp: nil,
             hasNotResponsiveAlert: true,
-            notResponsiveAlertTimestamp: Date().addingTimeInterval(-3600), // 1 hour ago
+            notResponsiveAlertTimestamp: Date().addingTimeInterval(-3600),
             profileImageURL: nil,
             profileImageData: nil,
-            dateAdded: Date().addingTimeInterval(-345600), // 4 days ago
-            lastUpdated: Date()
-        ),
-        
-        // Responder - no recent check-in
-        Contact(
-            id: UUID(uuidString: "00000000-0000-0000-0000-000000000006")!,
-            name: "Frank Miller",
-            phoneNumber: "+12345678906",
-            isResponder: true,
-            isDependent: false,
-            emergencyNote: "Backup emergency contact",
-            lastCheckInTimestamp: nil, // Never checked in
-            checkInInterval: 86400, // 24 hours
-            hasIncomingPing: false,
-            hasOutgoingPing: false,
-            incomingPingTimestamp: nil,
-            outgoingPingTimestamp: nil,
-            hasManualAlertActive: false,
-            emergencyAlertTimestamp: nil,
-            hasNotResponsiveAlert: false,
-            notResponsiveAlertTimestamp: nil,
-            profileImageURL: nil,
-            profileImageData: nil,
-            dateAdded: Date().addingTimeInterval(-345600), // 4 days ago
-            lastUpdated: Date()
-        ),
-        
-        // Recently active dependent
-        Contact(
-            id: UUID(uuidString: "00000000-0000-0000-0000-000000000007")!,
-            name: "Grace Taylor",
-            phoneNumber: "+12345678907",
-            isResponder: false,
-            isDependent: true,
-            emergencyNote: "College student - needs monitoring",
-            lastCheckInTimestamp: Date().addingTimeInterval(-300), // 5 minutes ago
-            checkInInterval: 21600, // 6 hours
-            hasIncomingPing: false,
-            hasOutgoingPing: false,
-            incomingPingTimestamp: nil,
-            outgoingPingTimestamp: nil,
-            hasManualAlertActive: false,
-            emergencyAlertTimestamp: nil,
-            hasNotResponsiveAlert: false,
-            notResponsiveAlertTimestamp: nil,
-            profileImageURL: "https://example.com/grace.jpg",
-            profileImageData: nil,
-            dateAdded: Date().addingTimeInterval(-172800), // 2 days ago
-            lastUpdated: Date()
-        ),
-        
-        // Contact with both incoming and outgoing pings (edge case)
-        Contact(
-            id: UUID(uuidString: "00000000-0000-0000-0000-000000000008")!,
-            name: "Henry Anderson",
-            phoneNumber: "+12345678908",
-            isResponder: true,
-            isDependent: true,
-            emergencyNote: "Family member with high activity",
-            lastCheckInTimestamp: Date().addingTimeInterval(-10800), // 3 hours ago
-            checkInInterval: 43200, // 12 hours
-            hasIncomingPing: true,
-            hasOutgoingPing: true,
-            incomingPingTimestamp: Date().addingTimeInterval(-120), // 2 minutes ago
-            outgoingPingTimestamp: Date().addingTimeInterval(-600), // 10 minutes ago
-            hasManualAlertActive: false,
-            emergencyAlertTimestamp: nil,
-            hasNotResponsiveAlert: false,
-            notResponsiveAlertTimestamp: nil,
-            profileImageURL: nil,
-            profileImageData: nil,
-            dateAdded: Date().addingTimeInterval(-259200), // 3 days ago
-            lastUpdated: Date()
-        ),
-        
-        // Dependent with very old check-in (testing edge cases)
-        Contact(
-            id: UUID(uuidString: "00000000-0000-0000-0000-000000000009")!,
-            name: "Ivy Chen",
-            phoneNumber: "+12345678909",
-            isResponder: false,
-            isDependent: true,
-            emergencyNote: "International contact",
-            lastCheckInTimestamp: Date().addingTimeInterval(-2678400), // 31 days ago
-            checkInInterval: 604800, // 7 days (very overdue)
-            hasIncomingPing: false,
-            hasOutgoingPing: false,
-            incomingPingTimestamp: nil,
-            outgoingPingTimestamp: nil,
-            hasManualAlertActive: false,
-            emergencyAlertTimestamp: nil,
-            hasNotResponsiveAlert: false,
-            notResponsiveAlertTimestamp: nil,
-            profileImageURL: nil,
-            profileImageData: nil,
-            dateAdded: Date().addingTimeInterval(-604800), // 7 days ago
-            lastUpdated: Date()
-        ),
-        
-        // Contact with all alerts active (stress test)
-        Contact(
-            id: UUID(uuidString: "00000000-0000-0000-0000-000000000010")!,
-            name: "Jack Robinson",
-            phoneNumber: "+12345678910",
-            isResponder: true,
-            isDependent: true,
-            emergencyNote: "High-priority contact - all alerts active",
-            lastCheckInTimestamp: Date().addingTimeInterval(-432000), // 5 days ago
-            checkInInterval: 86400, // 24 hours (very overdue)
-            hasIncomingPing: true,
-            hasOutgoingPing: true,
-            incomingPingTimestamp: Date().addingTimeInterval(-60), // 1 minute ago
-            outgoingPingTimestamp: Date().addingTimeInterval(-300), // 5 minutes ago
-            hasManualAlertActive: true,
-            emergencyAlertTimestamp: Date().addingTimeInterval(-1800), // 30 minutes ago
-            hasNotResponsiveAlert: true,
-            notResponsiveAlertTimestamp: Date().addingTimeInterval(-7200), // 2 hours ago
-            profileImageURL: "https://example.com/jack.jpg",
-            profileImageData: nil,
-            dateAdded: Date().addingTimeInterval(-86400), // 1 day ago
+            dateAdded: Date().addingTimeInterval(-345600),
             lastUpdated: Date()
         )
     ]
     
-    /// Filtered mock data for dependents only
     static var mockDependents: [Contact] {
         mockData.filter { $0.isDependent }
     }
     
-    /// Filtered mock data for responders only
     static var mockResponders: [Contact] {
         mockData.filter { $0.isResponder }
     }
     
-    /// Mock contact with specific characteristics for targeted testing
     static func mockContact(
         id: UUID = UUID(),
         name: String = "Test Contact",

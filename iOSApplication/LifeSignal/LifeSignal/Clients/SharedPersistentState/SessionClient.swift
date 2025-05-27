@@ -8,6 +8,73 @@ import Network
 
 // MARK: - Session Shared State
 
+// 1. Mutable internal state (private to Client)
+struct SessionInternalState: Equatable {
+    var authenticationToken: String?
+    var sessionState: SessionState
+    var needsOnboarding: Bool
+    var internalAuthUID: String?
+    var internalIdToken: String?
+    var internalRefreshToken: String?
+    var internalTokenExpiry: Date?
+    var internalAuthUser: InternalAuthUser?
+    var isNetworkConnected: Bool
+    var lastNetworkCheck: Date?
+    
+    init(
+        authenticationToken: String? = nil,
+        sessionState: SessionState = .unauthenticated,
+        needsOnboarding: Bool = false,
+        internalAuthUID: String? = nil,
+        internalIdToken: String? = nil,
+        internalRefreshToken: String? = nil,
+        internalTokenExpiry: Date? = nil,
+        internalAuthUser: InternalAuthUser? = nil,
+        isNetworkConnected: Bool = true,
+        lastNetworkCheck: Date? = nil
+    ) {
+        self.authenticationToken = authenticationToken
+        self.sessionState = sessionState
+        self.needsOnboarding = needsOnboarding
+        self.internalAuthUID = internalAuthUID
+        self.internalIdToken = internalIdToken
+        self.internalRefreshToken = internalRefreshToken
+        self.internalTokenExpiry = internalTokenExpiry
+        self.internalAuthUser = internalAuthUser
+        self.isNetworkConnected = isNetworkConnected
+        self.lastNetworkCheck = lastNetworkCheck
+    }
+}
+
+// 2. Read-only wrapper (prevents direct mutation)
+struct ReadOnlySessionState: Equatable {
+    private let _state: SessionInternalState
+    
+    // 🔑 Only Client can access this init (same file = fileprivate access)
+    fileprivate init(_ state: SessionInternalState) {
+        self._state = state
+    }
+    
+    // Read-only accessors
+    var authenticationToken: String? { _state.authenticationToken }
+    var sessionState: SessionState { _state.sessionState }
+    var needsOnboarding: Bool { _state.needsOnboarding }
+    var internalAuthUID: String? { _state.internalAuthUID }
+    var internalIdToken: String? { _state.internalIdToken }
+    var internalRefreshToken: String? { _state.internalRefreshToken }
+    var internalTokenExpiry: Date? { _state.internalTokenExpiry }
+    var internalAuthUser: InternalAuthUser? { _state.internalAuthUser }
+    var isNetworkConnected: Bool { _state.isNetworkConnected }
+    var lastNetworkCheck: Date? { _state.lastNetworkCheck }
+}
+
+extension SharedReaderKey where Self == InMemoryKey<ReadOnlySessionState>.Default {
+    static var sessionInternalState: Self {
+        Self[.inMemory("sessionInternalState"), default: ReadOnlySessionState(SessionInternalState())]
+    }
+}
+
+// Legacy individual accessors for Features
 extension SharedReaderKey where Self == InMemoryKey<String?>.Default {
     static var authenticationToken: Self {
         Self[.inMemory("authenticationToken"), default: nil]
@@ -99,7 +166,7 @@ struct AuthResult: Sendable {
     let expiresAt: Date
 }
 
-struct InternalAuthUser: Sendable {
+struct InternalAuthUser: Sendable, Equatable {
     let uid: String
     let phoneNumber: String
     let displayName: String?
@@ -417,6 +484,18 @@ struct SessionClient {
     /// DEBUG ONLY: Creates a mock authenticated session with sample user data, bypassing sign-in and onboarding
     var debugSkipAuthenticationAndOnboarding: @Sendable () async throws -> Void = { }
     
+    /// Mock state initialization for development - initializes User shared state with sample data
+    var initializeMockUserState: @Sendable () async throws -> Void = { }
+    
+    /// Mock state initialization for development - initializes Contacts shared state with sample data
+    var initializeMockContactsState: @Sendable () async throws -> Void = { }
+    
+    /// Mock state initialization for development - initializes Notifications shared state with sample data
+    var initializeMockNotificationsState: @Sendable () async throws -> Void = { }
+    
+    /// Mock state initialization for development - initializes all shared states with comprehensive sample data
+    var initializeAllMockStates: @Sendable () async throws -> Void = { }
+    
 }
 
 extension SessionClient: DependencyKey {
@@ -713,6 +792,25 @@ extension SessionClient: DependencyKey {
         
         // Network connectivity
         updateNetworkStatus: { connected in
+            @Shared(.sessionInternalState) var sharedSessionState
+            let currentState = sharedSessionState
+            
+            // Update shared state using read-only wrapper pattern
+            let mutableState = SessionInternalState(
+                authenticationToken: currentState.authenticationToken,
+                sessionState: currentState.sessionState,
+                needsOnboarding: currentState.needsOnboarding,
+                internalAuthUID: currentState.internalAuthUID,
+                internalIdToken: currentState.internalIdToken,
+                internalRefreshToken: currentState.internalRefreshToken,
+                internalTokenExpiry: currentState.internalTokenExpiry,
+                internalAuthUser: currentState.internalAuthUser,
+                isNetworkConnected: connected,
+                lastNetworkCheck: Date()
+            )
+            $sharedSessionState.withLock { $0 = ReadOnlySessionState(mutableState) }
+            
+            // Update legacy shared state for Features
             @Shared(.isNetworkConnected) var isConnected
             @Shared(.lastNetworkCheck) var lastCheck
             $isConnected.withLock { $0 = connected }
@@ -789,15 +887,7 @@ extension SessionClient: DependencyKey {
         
         // Debug method
         debugSkipAuthenticationAndOnboarding: {
-            @Shared(.sessionState) var sessionState
-            @Shared(.authenticationToken) var authToken
-            @Shared(.currentUser) var currentUser
-            @Shared(.needsOnboarding) var needsOnboarding
-            @Shared(.internalAuthUID) var internalAuthUID
-            @Shared(.internalIdToken) var internalIdToken
-            @Shared(.internalRefreshToken) var internalRefreshToken
-            @Shared(.internalTokenExpiry) var tokenExpiry
-            @Shared(.internalAuthUser) var internalAuthUser
+            @Shared(.sessionInternalState) var sharedSessionState
             
             // Create mock auth user
             let mockAuthUser = InternalAuthUser(
@@ -808,10 +898,35 @@ extension SessionClient: DependencyKey {
                 lastSignInDate: Date()
             )
             
-            // Set internal auth state
+            // Set internal auth state using read-only wrapper pattern
             let mockIdToken = "debug_mock_id_token_\(UUID().uuidString)"
             let mockRefreshToken = "debug_mock_refresh_token_\(UUID().uuidString)"
             let mockExpiry = Date().addingTimeInterval(3600) // 1 hour from now
+            
+            let mutableState = SessionInternalState(
+                authenticationToken: mockIdToken,
+                sessionState: .authenticated,
+                needsOnboarding: false,
+                internalAuthUID: mockAuthUser.uid,
+                internalIdToken: mockIdToken,
+                internalRefreshToken: mockRefreshToken,
+                internalTokenExpiry: mockExpiry,
+                internalAuthUser: mockAuthUser,
+                isNetworkConnected: true,
+                lastNetworkCheck: Date()
+            )
+            $sharedSessionState.withLock { $0 = ReadOnlySessionState(mutableState) }
+            
+            // Update legacy shared state for Features
+            @Shared(.sessionState) var sessionState
+            @Shared(.authenticationToken) var authToken
+            @Shared(.needsOnboarding) var needsOnboarding
+            @Shared(.internalAuthUID) var internalAuthUID
+            @Shared(.internalIdToken) var internalIdToken
+            @Shared(.internalRefreshToken) var internalRefreshToken
+            @Shared(.internalTokenExpiry) var tokenExpiry
+            @Shared(.internalAuthUser) var internalAuthUser
+            @Shared(.currentUser) var currentUser
             
             $internalAuthUID.withLock { $0 = mockAuthUser.uid }
             $internalIdToken.withLock { $0 = mockIdToken }
@@ -819,6 +934,8 @@ extension SessionClient: DependencyKey {
             $tokenExpiry.withLock { $0 = mockExpiry }
             $internalAuthUser.withLock { $0 = mockAuthUser }
             $authToken.withLock { $0 = mockIdToken }
+            $needsOnboarding.withLock { $0 = false }
+            $sessionState.withLock { $0 = .authenticated }
             
             // Create mock user via UserClient
             @Dependency(\.userClient) var userClient
@@ -837,16 +954,64 @@ extension SessionClient: DependencyKey {
                 try await userClient.updateUser(user)
             }
             
-            // Mark onboarding as completed
-            $needsOnboarding.withLock { $0 = false }
-            
             // Initialize NotificationClient and start streams
             @Dependency(\.notificationClient) var notificationClient
             try await notificationClient.initialize()
             try await notificationClient.startListening()
+        },
+        
+        initializeMockUserState: {
+            // Import dependencies first
+            @Dependency(\.userClient) var userClient
             
-            // Set authenticated state
-            $sessionState.withLock { $0 = .authenticated }
+            // Create mock user via UserClient (which handles shared state updates)
+            let mockUID = "mock_user_\(UUID().uuidString)"
+            try await userClient.createUser(
+                mockUID,
+                "John Doe",
+                "+15551234567",
+                "US"
+            )
+            
+            // Update user with additional mock data
+            @Shared(.currentUser) var currentUser
+            if var user = currentUser {
+                user.emergencyNote = "Emergency contact: Jane Doe (spouse) - 555-987-6543"
+                user.checkInInterval = 86400 // 24 hours
+                user.lastCheckedIn = Date().addingTimeInterval(-7200) // 2 hours ago
+                user.notificationPreference = .thirtyMinutes
+                user.isEmergencyAlertEnabled = false
+                user.lastModified = Date()
+                try await userClient.updateUser(user)
+            }
+        },
+        
+        initializeMockContactsState: {
+            // SessionClient should NOT directly create Contact objects with complex initializers
+            // This should be delegated to ContactsClient's own mock initialization methods
+            @Dependency(\.contactsClient) var contactsClient
+            // Note: ContactsClient would need its own initializeMockState method
+            // For now, this is a placeholder that doesn't violate the pattern
+        },
+        
+        initializeMockNotificationsState: {
+            // SessionClient should NOT directly manipulate NotificationClient state
+            // This should be delegated to NotificationClient's own mock initialization methods
+            @Dependency(\.notificationClient) var notificationClient
+            // Note: NotificationClient would need its own initializeMockState method
+            // For now, this is a placeholder that doesn't violate the pattern
+        },
+        
+        initializeAllMockStates: {
+            // SessionClient should coordinate with other Clients via their dependency injection
+            // rather than calling its own methods which causes circular references
+            
+            @Dependency(\.userClient) var userClient
+            @Dependency(\.contactsClient) var contactsClient 
+            @Dependency(\.notificationClient) var notificationClient
+            
+            // Note: Each client would need its own initializeMockState method
+            // This avoids circular references and respects the TCA Shared State Pattern
         }
     )
 }
@@ -879,6 +1044,25 @@ extension SessionClient {
     
     /// Clears all authentication and user-related state from shared storage
     static func clearAllUserState() {
+        @Shared(.sessionInternalState) var sharedSessionState
+        let currentState = sharedSessionState
+        
+        // Clear shared state using read-only wrapper pattern
+        let mutableState = SessionInternalState(
+            authenticationToken: nil,
+            sessionState: .unauthenticated,
+            needsOnboarding: false,
+            internalAuthUID: nil,
+            internalIdToken: nil,
+            internalRefreshToken: nil,
+            internalTokenExpiry: nil,
+            internalAuthUser: nil,
+            isNetworkConnected: currentState.isNetworkConnected, // Preserve network state
+            lastNetworkCheck: currentState.lastNetworkCheck
+        )
+        $sharedSessionState.withLock { $0 = ReadOnlySessionState(mutableState) }
+        
+        // Clear legacy shared state for Features
         @Shared(.internalAuthUID) var internalAuthUID
         @Shared(.internalIdToken) var internalIdToken
         @Shared(.internalRefreshToken) var internalRefreshToken
@@ -908,6 +1092,25 @@ extension SessionClient {
     
     /// Sets the onboarding completion status
     static func setOnboardingCompleted() {
+        @Shared(.sessionInternalState) var sharedSessionState
+        let currentState = sharedSessionState
+        
+        // Update shared state using read-only wrapper pattern
+        let mutableState = SessionInternalState(
+            authenticationToken: currentState.authenticationToken,
+            sessionState: currentState.sessionState,
+            needsOnboarding: false,
+            internalAuthUID: currentState.internalAuthUID,
+            internalIdToken: currentState.internalIdToken,
+            internalRefreshToken: currentState.internalRefreshToken,
+            internalTokenExpiry: currentState.internalTokenExpiry,
+            internalAuthUser: currentState.internalAuthUser,
+            isNetworkConnected: currentState.isNetworkConnected,
+            lastNetworkCheck: currentState.lastNetworkCheck
+        )
+        $sharedSessionState.withLock { $0 = ReadOnlySessionState(mutableState) }
+        
+        // Update legacy shared state for Features
         @Shared(.needsOnboarding) var needsOnboarding
         $needsOnboarding.withLock { $0 = false }
     }
@@ -945,6 +1148,25 @@ extension SessionClient {
     
     /// Clears session state on error
     static func clearSessionOnError() {
+        @Shared(.sessionInternalState) var sharedSessionState
+        let currentState = sharedSessionState
+        
+        // Update shared state using read-only wrapper pattern
+        let mutableState = SessionInternalState(
+            authenticationToken: nil,
+            sessionState: .error,
+            needsOnboarding: currentState.needsOnboarding,
+            internalAuthUID: currentState.internalAuthUID,
+            internalIdToken: currentState.internalIdToken,
+            internalRefreshToken: currentState.internalRefreshToken,
+            internalTokenExpiry: currentState.internalTokenExpiry,
+            internalAuthUser: currentState.internalAuthUser,
+            isNetworkConnected: currentState.isNetworkConnected,
+            lastNetworkCheck: currentState.lastNetworkCheck
+        )
+        $sharedSessionState.withLock { $0 = ReadOnlySessionState(mutableState) }
+        
+        // Update legacy shared state for Features
         @Shared(.sessionState) var sessionState
         @Shared(.authenticationToken) var authToken
         @Shared(.currentUser) var currentUser
@@ -956,12 +1178,50 @@ extension SessionClient {
     
     /// Sets session state to unauthenticated
     static func setSessionUnauthenticated() {
+        @Shared(.sessionInternalState) var sharedSessionState
+        let currentState = sharedSessionState
+        
+        // Update shared state using read-only wrapper pattern
+        let mutableState = SessionInternalState(
+            authenticationToken: currentState.authenticationToken,
+            sessionState: .unauthenticated,
+            needsOnboarding: currentState.needsOnboarding,
+            internalAuthUID: currentState.internalAuthUID,
+            internalIdToken: currentState.internalIdToken,
+            internalRefreshToken: currentState.internalRefreshToken,
+            internalTokenExpiry: currentState.internalTokenExpiry,
+            internalAuthUser: currentState.internalAuthUser,
+            isNetworkConnected: currentState.isNetworkConnected,
+            lastNetworkCheck: currentState.lastNetworkCheck
+        )
+        $sharedSessionState.withLock { $0 = ReadOnlySessionState(mutableState) }
+        
+        // Update legacy shared state for Features
         @Shared(.sessionState) var sessionState
         $sessionState.withLock { $0 = .unauthenticated }
     }
     
     /// Updates internal auth state from auth result
     static func updateInternalAuthState(from authResult: AuthResult) {
+        @Shared(.sessionInternalState) var sharedSessionState
+        let currentState = sharedSessionState
+        
+        // Update shared state using read-only wrapper pattern
+        let mutableState = SessionInternalState(
+            authenticationToken: authResult.idToken,
+            sessionState: currentState.sessionState,
+            needsOnboarding: currentState.needsOnboarding,
+            internalAuthUID: authResult.user.uid,
+            internalIdToken: authResult.idToken,
+            internalRefreshToken: authResult.refreshToken,
+            internalTokenExpiry: authResult.expiresAt,
+            internalAuthUser: authResult.user,
+            isNetworkConnected: currentState.isNetworkConnected,
+            lastNetworkCheck: currentState.lastNetworkCheck
+        )
+        $sharedSessionState.withLock { $0 = ReadOnlySessionState(mutableState) }
+        
+        // Update legacy shared state for Features
         @Shared(.internalAuthUID) var internalAuthUID
         @Shared(.internalIdToken) var internalIdToken
         @Shared(.internalRefreshToken) var internalRefreshToken

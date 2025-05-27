@@ -217,12 +217,13 @@ struct HomeFeature {
     // MARK: - Effect Functions
     
     private func loadUserEffect() -> Effect<Action> {
-        .run { [userClient, notificationClient] send in
+        .run { [userClient, haptics, notificationClient] send in
             do {
                 if let user = try await userClient.getUser() {
                     await send(.userLoaded(user))
                 }
             } catch {
+                await haptics.notification(.warning)
                 try? await notificationClient.sendSystemNotification(
                     "Profile Sync Issue",
                     "Unable to load latest profile data. Will retry automatically."
@@ -356,7 +357,7 @@ struct HomeFeature {
     }
     
     private func updateCheckInIntervalEffect(state: State, interval: TimeInterval) -> Effect<Action> {
-        .run { [currentUser = state.currentUser, userClient, notificationClient] send in
+        .run { [currentUser = state.currentUser, userClient, haptics, notificationClient] send in
             do {
                 guard var user = currentUser else { return }
                 user.checkInInterval = interval
@@ -364,6 +365,7 @@ struct HomeFeature {
                 try await userClient.updateUser(user)
                 await send(.initializeIntervalPicker)
             } catch {
+                await haptics.notification(.error)
                 try? await notificationClient.sendSystemNotification(
                     "Settings Update Issue",
                     "Check-in interval update failed. Please try again."
@@ -435,7 +437,7 @@ struct HomeFeature {
     }
     
     private func updateNotificationSettingsEffect(state: State, enabled: Bool, notify30Min: Bool, notify2Hours: Bool) -> Effect<Action> {
-        .run { [currentUser = state.currentUser, userClient, notificationClient] send in
+        .run { [currentUser = state.currentUser, userClient, haptics, notificationClient] send in
             do {
                 guard var user = currentUser else { return }
                 
@@ -450,11 +452,13 @@ struct HomeFeature {
                 user.lastModified = Date()
                 try await userClient.updateUser(user)
                 
+                await haptics.notification(.success)
                 try? await notificationClient.sendSystemNotification(
                     "Notification Settings Updated",
                     "Your notification settings have been successfully updated."
                 )
             } catch {
+                await haptics.notification(.error)
                 try? await notificationClient.sendSystemNotification(
                     "Notification Settings Issue",
                     "Unable to update notification preferences. Please try again."
@@ -609,19 +613,21 @@ struct HomeFeature {
     private func handleResetQRConfirmation(state: inout State) -> Effect<Action> {
         state.shareableImage = nil
         
-        return .run { [currentUser = state.currentUser, userClient, notificationClient] send in
+        return .run { [currentUser = state.currentUser, userClient, haptics, notificationClient] send in
             do {
                 guard var user = currentUser else { return }
                 user.qrCodeId = UUID()
                 user.lastModified = Date()
                 try await userClient.updateUser(user)
                 
+                await haptics.notification(.success)
                 try? await notificationClient.sendSystemNotification(
                     "QR Code Reset",
                     "Your QR code has been reset. Previous QR codes are no longer valid."
                 )
                 await send(.generateQRCode)
             } catch {
+                await haptics.notification(.error)
                 try? await notificationClient.sendSystemNotification(
                     "QR Code Reset Issue",
                     "Unable to reset QR code. Please try again."

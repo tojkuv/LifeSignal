@@ -13,7 +13,7 @@ struct ApplicationFeature {
         @Shared(.currentUser) var currentUser: User? = nil
         @Shared(.sessionState) var sessionState: SessionState = .unauthenticated
         @Shared(.needsOnboarding) var needsOnboarding: Bool = false
-        @Shared(.contacts) var contacts: [Contact] = []
+        @Shared(.contacts) var contactsState: ReadOnlyContactsState
         @Shared(.isNetworkConnected) var isNetworkConnected: Bool = true
         @Shared(.authenticationToken) var authenticationToken: String? = nil
 
@@ -202,6 +202,8 @@ struct ApplicationFeature {
                     
                     // Show system notification for connection state changes
                     if wasConnected != isConnected {
+                        @Dependency(\.hapticClient) var haptics
+                        await haptics.notification(isConnected ? .success : .warning)
                         try? await notificationClient.sendSystemNotification(
                             isConnected ? "Connection Restored" : "No Internet Connection",
                             isConnected ? 

@@ -16,7 +16,7 @@ enum DependentsAlert: Equatable {
 struct DependentsFeature {
     @ObservableState
     struct State: Equatable {
-        @Shared(.contacts) var allContacts: [Contact] = []
+        @Shared(.contacts) var contactsState: ReadOnlyContactsState
         @Shared(.currentUser) var currentUser: User? = nil
         
         var sortMode: SortMode = .timeLeft
@@ -24,7 +24,7 @@ struct DependentsFeature {
         @Presents var confirmationAlert: AlertState<DependentsAlert>?
         
         var dependents: [Contact] {
-            let filtered = allContacts.filter(\.isDependent)
+            let filtered = contactsState.contacts.filter(\.isDependent)
             return sortedContacts(filtered, by: sortMode)
         }
         
@@ -478,7 +478,8 @@ struct DependentsFeature {
                 return .none
 
             case .refreshResponse(.failure):
-                return .run { [notificationClient] _ in
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.warning)
                     try? await notificationClient.sendSystemNotification(
                         "Sync Issue",
                         "Unable to refresh dependents. Will retry automatically."

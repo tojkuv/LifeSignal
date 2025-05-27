@@ -358,7 +358,8 @@ struct QRScannerFeature {
     private func codeProcessingFailureEffect(state: inout State, error: Error) -> Effect<Action> {
         state.isLoading = false
         state.errorMessage = error.localizedDescription
-        return .run { [notificationClient] _ in
+        return .run { [haptics, notificationClient] _ in
+            await haptics.notification(.error)
             try? await notificationClient.sendSystemNotification(
                 "QR Code Error",
                 "Unable to process QR code: \(error.localizedDescription)"
@@ -368,7 +369,8 @@ struct QRScannerFeature {
     
     private func contactAddSuccessEffect(state: inout State) -> Effect<Action> {
         state.showAddContactSheet = false
-        return .run { [notificationClient, contactName = state.contact.name] _ in
+        return .run { [haptics, notificationClient, contactName = state.contact.name] _ in
+            await haptics.notification(.success)
             try? await notificationClient.sendSystemNotification(
                 "Contact Added",
                 "Successfully added \(contactName) to your contacts"
@@ -377,7 +379,8 @@ struct QRScannerFeature {
     }
     
     private func contactAddFailureEffect(error: Error) -> Effect<Action> {
-        .run { [notificationClient] _ in
+        .run { [haptics, notificationClient] _ in
+            await haptics.notification(.error)
             try? await notificationClient.sendSystemNotification(
                 "Add Contact Failed",
                 "Unable to add contact: \(error.localizedDescription)"

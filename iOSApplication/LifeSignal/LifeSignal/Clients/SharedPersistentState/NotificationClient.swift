@@ -510,6 +510,53 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate, @u
 
 // MARK: - Notification Shared State
 
+// 1. Mutable internal state (private to Client)
+struct NotificationState: Equatable {
+    var notifications: [NotificationItem]
+    var unreadNotificationCount: Int
+    var pendingNotificationActions: [PendingNotificationAction]
+    var isListening: Bool
+    var lastSyncTimestamp: Date?
+    
+    init(
+        notifications: [NotificationItem] = [],
+        unreadNotificationCount: Int = 0,
+        pendingNotificationActions: [PendingNotificationAction] = [],
+        isListening: Bool = false,
+        lastSyncTimestamp: Date? = nil
+    ) {
+        self.notifications = notifications
+        self.unreadNotificationCount = unreadNotificationCount
+        self.pendingNotificationActions = pendingNotificationActions
+        self.isListening = isListening
+        self.lastSyncTimestamp = lastSyncTimestamp
+    }
+}
+
+// 2. Read-only wrapper (prevents direct mutation)
+struct ReadOnlyNotificationState: Equatable {
+    private let _state: NotificationState
+    
+    // 🔑 Only Client can access this init (same file = fileprivate access)
+    fileprivate init(_ state: NotificationState) {
+        self._state = state
+    }
+    
+    // Read-only accessors
+    var notifications: [NotificationItem] { _state.notifications }
+    var unreadNotificationCount: Int { _state.unreadNotificationCount }
+    var pendingNotificationActions: [PendingNotificationAction] { _state.pendingNotificationActions }
+    var isListening: Bool { _state.isListening }
+    var lastSyncTimestamp: Date? { _state.lastSyncTimestamp }
+}
+
+extension SharedReaderKey where Self == InMemoryKey<ReadOnlyNotificationState>.Default {
+    static var notificationState: Self {
+        Self[.inMemory("notificationState"), default: ReadOnlyNotificationState(NotificationState())]
+    }
+}
+
+// Legacy individual accessors for Features
 extension SharedReaderKey where Self == InMemoryKey<[NotificationItem]>.Default {
     static var notifications: Self {
         Self[.inMemory("notifications"), default: []]
@@ -802,12 +849,26 @@ extension NotificationClient {
     }
     
     static func addPendingNotificationAction(_ operation: PendingNotificationAction.NotificationOperation, payload: Data, priority: PendingNotificationAction.ActionPriority) async {
-        @Shared(.pendingNotificationActions) var pending
+        @Shared(.notificationState) var sharedNotificationState
         let action = PendingNotificationAction(
             operation: operation,
             payload: payload,
             priority: priority
         )
+        
+        // Update shared state using read-only wrapper pattern
+        let currentState = sharedNotificationState
+        let mutableState = NotificationState(
+            notifications: currentState.notifications,
+            unreadNotificationCount: currentState.unreadNotificationCount,
+            pendingNotificationActions: currentState.pendingNotificationActions + [action],
+            isListening: currentState.isListening,
+            lastSyncTimestamp: Date()
+        )
+        $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
+        
+        // Update legacy shared state for Features
+        @Shared(.pendingNotificationActions) var pending
         $pending.withLock { $0.append(action) }
     }
     
@@ -940,18 +1001,52 @@ extension NotificationClient: DependencyKey {
             // Handle both initial history and real-time updates through single stream
             Task {
                 for try await event in stream {
-                    @Shared(.notifications) var notifications
-                    @Shared(.unreadNotificationCount) var unreadCount
+                    @Shared(.notificationState) var sharedNotificationState
                     
                     switch event.type {
                     case .initialHistory:
-                        // Bulk load initial state
+                        // Bulk load initial state using read-only wrapper pattern
+                        let mutableState = NotificationState(
+                            notifications: event.notifications,
+                            unreadNotificationCount: event.notifications.filter { !$0.isRead }.count,
+                            pendingNotificationActions: sharedNotificationState.pendingNotificationActions,
+                            isListening: true,
+                            lastSyncTimestamp: Date()
+                        )
+                        $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
+                        
+                        // Update legacy shared state for Features
+                        @Shared(.notifications) var notifications
+                        @Shared(.unreadNotificationCount) var unreadCount
                         $notifications.withLock { $0 = event.notifications }
                         $unreadCount.withLock { $0 = event.notifications.filter { !$0.isRead }.count }
                         print("[STREAM] Loaded \(event.notifications.count) historical notifications")
                         
                     case .realTimeUpdate:
-                        // Single notification updates
+                        // Single notification updates using read-only wrapper pattern
+                        let currentState = sharedNotificationState
+                        var updatedNotifications = currentState.notifications
+                        var updatedUnreadCount = currentState.unreadNotificationCount
+                        
+                        for notification in event.notifications {
+                            updatedNotifications.insert(notification, at: 0)
+                            if !notification.isRead {
+                                updatedUnreadCount += 1
+                            }
+                        }
+                        
+                        let mutableState = NotificationState(
+                            notifications: updatedNotifications,
+                            unreadNotificationCount: updatedUnreadCount,
+                            pendingNotificationActions: currentState.pendingNotificationActions,
+                            isListening: currentState.isListening,
+                            lastSyncTimestamp: Date()
+                        )
+                        $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
+                        
+                        // Update legacy shared state for Features
+                        @Shared(.notifications) var notifications
+                        @Shared(.unreadNotificationCount) var unreadCount
                         for notification in event.notifications {
                             $notifications.withLock { $0.insert(notification, at: 0) }
                             if !notification.isRead {
@@ -961,7 +1056,30 @@ extension NotificationClient: DependencyKey {
                         print("[STREAM] Received \(event.notifications.count) real-time notification(s)")
                         
                     case .bulkUpdate:
-                        // Server-initiated bulk changes (e.g., mark all as read, clear by type)
+                        // Server-initiated bulk changes using read-only wrapper pattern
+                        let currentState = sharedNotificationState
+                        var updatedNotifications = currentState.notifications
+                        
+                        for notification in event.notifications {
+                            if let index = updatedNotifications.firstIndex(where: { $0.id == notification.id }) {
+                                updatedNotifications[index] = notification
+                            } else {
+                                updatedNotifications.insert(notification, at: 0)
+                            }
+                        }
+                        
+                        let mutableState = NotificationState(
+                            notifications: updatedNotifications,
+                            unreadNotificationCount: updatedNotifications.filter { !$0.isRead }.count,
+                            pendingNotificationActions: currentState.pendingNotificationActions,
+                            isListening: currentState.isListening,
+                            lastSyncTimestamp: Date()
+                        )
+                        $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
+                        
+                        // Update legacy shared state for Features
+                        @Shared(.notifications) var notifications
+                        @Shared(.unreadNotificationCount) var unreadCount
                         for notification in event.notifications {
                             $notifications.withLock { notifications in
                                 if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
@@ -971,7 +1089,7 @@ extension NotificationClient: DependencyKey {
                                 }
                             }
                         }
-                        $unreadCount.withLock { $0 = notifications.filter { !$0.isRead }.count }
+                        $unreadCount.withLock { $0 = updatedNotifications.filter { !$0.isRead }.count }
                         print("[STREAM] Applied \(event.notifications.count) bulk update(s)")
                     }
                 }
@@ -983,12 +1101,20 @@ extension NotificationClient: DependencyKey {
         },
         
         cleanup: {
-            // Stop listening - mock implementation doesn't need cleanup
+            // Clear shared state using read-only wrapper pattern
+            @Shared(.notificationState) var sharedNotificationState
+            let mutableState = NotificationState(
+                notifications: [],
+                unreadNotificationCount: 0,
+                pendingNotificationActions: [],
+                isListening: false,
+                lastSyncTimestamp: Date()
+            )
+            $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
             
-            // Clear shared state
+            // Clear legacy shared state for Features
             @Shared(.notifications) var notifications
             @Shared(.unreadNotificationCount) var unreadCount
-            
             $notifications.withLock { $0.removeAll() }
             $unreadCount.withLock { $0 = 0 }
             

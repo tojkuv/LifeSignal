@@ -215,7 +215,8 @@ struct ContactDetailsSheetFeature {
             case .contactUpdateResponse(.success(let contact)):
                 state.isLoading = false
                 state.contact = contact
-                return .run { _ in
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.success)
                     try? await notificationClient.sendSystemNotification(
                         "Contact Updated",
                         "Successfully updated \(contact.name)'s roles"
@@ -224,7 +225,8 @@ struct ContactDetailsSheetFeature {
                 
             case .contactUpdateResponse(.failure(let error)):
                 state.isLoading = false
-                return .run { _ in
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.error)
                     try? await notificationClient.sendSystemNotification(
                         "Update Failed",
                         "Unable to update contact: \(error.localizedDescription)"
@@ -234,7 +236,8 @@ struct ContactDetailsSheetFeature {
             case .contactDeleteResponse(.success):
                 state.isLoading = false
                 state.shouldDismiss = true
-                return .run { [contact = state.contact] _ in
+                return .run { [contact = state.contact, haptics, notificationClient] _ in
+                    await haptics.notification(.success)
                     try? await notificationClient.sendSystemNotification(
                         "Contact Deleted",
                         "Successfully deleted \(contact.name)"
@@ -243,7 +246,8 @@ struct ContactDetailsSheetFeature {
                 
             case .contactDeleteResponse(.failure(let error)):
                 state.isLoading = false
-                return .run { _ in
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.error)
                     try? await notificationClient.sendSystemNotification(
                         "Delete Failed",
                         "Unable to delete contact: \(error.localizedDescription)"
@@ -256,7 +260,8 @@ struct ContactDetailsSheetFeature {
                 }
                 
             case .pingResponse(.failure(let error)):
-                return .run { _ in
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.error)
                     try? await notificationClient.sendSystemNotification(
                         "Ping Failed",
                         "Unable to send ping: \(error.localizedDescription)"

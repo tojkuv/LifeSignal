@@ -19,7 +19,7 @@ enum RespondersAlert: Equatable {
 struct RespondersFeature {
     @ObservableState
     struct State: Equatable {
-        @Shared(.contacts) var allContacts: [Contact] = []
+        @Shared(.contacts) var contactsState: ReadOnlyContactsState
         @Shared(.currentUser) var currentUser: User? = nil
         
         var isLoading = false
@@ -31,7 +31,7 @@ struct RespondersFeature {
         
         // Computed property for responders
         var responders: [Contact] {
-            allContacts.filter { contact in
+            contactsState.contacts.filter { contact in
                 // Filter contacts that are marked as responders
                 contact.isResponder
             }
@@ -290,7 +290,7 @@ struct RespondersFeature {
                 state.showClearAllPingsConfirmation = false
 
                 // Get contacts that need ping clearing before updating them
-                let contactsToNotify = state.allContacts.filter { $0.isResponder && $0.hasIncomingPing }
+                let contactsToNotify = state.contactsState.contacts.filter { $0.isResponder && $0.hasIncomingPing }
                 let contactsToUpdate = contactsToNotify.map { contact in
                     var updatedContact = contact
                     updatedContact.hasIncomingPing = false
@@ -377,7 +377,8 @@ struct RespondersFeature {
 
             case let .refreshResponse(.failure(error)):
                 state.isLoading = false
-                return .run { [notificationClient] _ in
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.error)
                     try? await notificationClient.sendSystemNotification(
                         "Refresh Failed",
                         "Unable to refresh responders: \(error.localizedDescription)"
