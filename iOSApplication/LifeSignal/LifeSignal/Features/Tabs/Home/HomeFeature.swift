@@ -239,7 +239,8 @@ struct HomeFeature {
     }
     
     private func generateQRCodeEffect(state: inout State) -> Effect<Action> {
-        state.isQRCodeReady = false
+        // Don't show loading state during QR code refresh - keep existing QR visible
+        // state.isQRCodeReady = false
         return .run { [currentUser = state.currentUser] send in
             await send(._qrCodeGenerationStarted)
             
@@ -248,6 +249,7 @@ struct HomeFeature {
                 return
             }
             
+            // First check if we already have a cached QR code in shared state
             @Shared(.userQRCodeImage) var qrCodeImage
             if let cached = qrCodeImage,
                cached.metadata.qrCodeId == user.qrCodeId,
@@ -256,16 +258,23 @@ struct HomeFeature {
                 return
             }
             
+            // If no valid cached image, generate new one and cache it
             let image: UIImage
-            #if DEBUG
-            image = UserClient.generateMockQRCodeImage(data: user.qrCodeId.uuidString, size: 300)
-            #else
             do {
                 image = try UserClient.generateQRCodeImage(from: user.qrCodeId.uuidString, size: 300)
             } catch {
+                // Fallback to mock only on error
                 image = UserClient.generateMockQRCodeImage(data: user.qrCodeId.uuidString, size: 300)
             }
-            #endif
+            
+            // Cache the generated image in shared state
+            if let imageData = image.pngData() {
+                Task { @MainActor in
+                    let metadata = ImageMetadata(qrCodeId: user.qrCodeId)
+                    let cachedImage = QRImageWithMetadata(image: imageData, metadata: metadata)
+                    $qrCodeImage.withLock { $0 = cachedImage }
+                }
+            }
             
             await send(.qrCodeGenerated(image))
         }
@@ -320,15 +329,12 @@ struct HomeFeature {
             }
             
             let image: UIImage
-            #if DEBUG
-            image = UserClient.generateMockShareableQRCodeImage(qrImage: qrImage, userName: user.name)
-            #else
             do {
                 image = try UserClient.generateShareableQRCodeImage(qrImage: qrImage, userName: user.name)
             } catch {
+                // Fallback to mock only on error
                 image = UserClient.generateMockShareableQRCodeImage(qrImage: qrImage, userName: user.name)
             }
-            #endif
             
             await send(.shareableQRCodeGenerated(image))
         }
@@ -537,9 +543,14 @@ struct HomeFeature {
                 state.alert = AlertState {
                     TextState("Reset QR Code")
                 } actions: {
+                    ButtonState(role: .destructive, action: .resetQRConfirmation) {
+                        TextState("Reset")
+                    }
                     ButtonState(role: .cancel) {
                         TextState("Cancel")
                     }
+                } message: {
+                    TextState("This will invalidate your current QR code. Existing contacts will need to scan your new code.")
                 }
             } else {
                 state.alert = nil
@@ -552,11 +563,16 @@ struct HomeFeature {
             
         case let .setShowIntervalChangeConfirmation(show):
             if show, let interval = state.pendingIntervalChange {
-                let notificationText = switch Int(interval) {
-                case 0: "disable check-in notifications"
-                case 30: "notify you 30 minutes before check-in expires"
-                case 120: "notify you 2 hours before check-in expires"
-                default: "change notification settings"
+                let notificationText: String
+                switch Int(interval) {
+                case 0: 
+                    notificationText = "disable check-in notifications"
+                case 30: 
+                    notificationText = "notify you 30 minutes before check-in expires"
+                case 120: 
+                    notificationText = "notify you 2 hours before check-in expires"
+                default: 
+                    notificationText = "change notification settings"
                 }
                 
                 state.alert = AlertState {
@@ -646,20 +662,22 @@ struct HomeFeature {
     
     private func handleResetQRConfirmation(state: inout State) -> Effect<Action> {
         state.shareableImage = nil
+        // Keep existing QR code visible during reset - don't clear or show loading
+        // state.qrCodeImage = nil
+        // state.isQRCodeReady = false
         
-        return .run { [currentUser = state.currentUser, userClient, haptics, notificationClient] send in
+        return .run { [userClient, haptics, notificationClient] send in
             do {
-                guard var user = currentUser else { return }
-                user.qrCodeId = UUID()
-                user.lastModified = Date()
-                try await userClient.updateUser(user)
-                // UserClient automatically updates shared state and persists changes
+                // Use UserClient's resetQRCode method which handles everything properly
+                try await userClient.resetQRCode()
                 
                 await haptics.notification(.success)
                 try? await notificationClient.sendSystemNotification(
                     "QR Code Reset",
                     "Your QR code has been reset. Previous QR codes are no longer valid."
                 )
+                
+                // Regenerate QR code with new ID
                 await send(.generateQRCode)
             } catch {
                 await haptics.notification(.error)
@@ -884,9 +902,7 @@ struct HomeView: View {
     @Bindable var store: StoreOf<HomeFeature>
 
     var body: some View {
-        @Bindable var bindableStore = store
-        
-        WithPerceptionTracking {
+        let baseView = WithPerceptionTracking {
             mainContent()
         }
         .background(Color(UIColor.systemGroupedBackground))
@@ -895,43 +911,39 @@ struct HomeView: View {
         .onAppear {
             store.send(.generateQRCode)
         }
-        .sheet(item: $bindableStore.scope(state: \.qrScanner, action: \.qrScanner)) { qrStore in
-            QRScannerView(store: qrStore)
-        }
-        .sheet(item: $bindableStore.scope(state: \.qrShareSheet, action: \.qrShareSheet)) { shareStore in
-            QRCodeShareSheetView(store: shareStore)
-        }
-        .sheet(isPresented: $bindableStore.showIntervalPicker) {
-            IntervalPickerView(store: store)
-                .presentationDetents([.medium])
-        }
-        .sheet(isPresented: $bindableStore.showInstructions) {
-            InstructionsView(store: store)
-        }
-        .sheet(isPresented: $bindableStore.showShareSheet) {
-            if let shareImage = store.shareableImage {
-                ActivityShareSheet(items: ["My LifeSignal QR Code", shareImage])
+        
+        let viewWithSheets = baseView
+            .sheet(item: $store.scope(state: \.qrScanner, action: \.qrScanner)) { qrStore in
+                QRScannerView(store: qrStore)
             }
-        }
-        .alert(item: $bindableStore.scope(state: \.alert, action: \.alert))
-        .alert("Camera Access Denied", isPresented: $bindableStore.showCameraDeniedAlert) {
-            Button("OK", role: .cancel) { }
-            Button("Open Settings") {
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
+            .sheet(item: $store.scope(state: \.qrShareSheet, action: \.qrShareSheet)) { shareStore in
+                QRCodeShareSheetView(store: shareStore)
+            }
+            .sheet(isPresented: $store.showIntervalPicker) {
+                IntervalPickerView(store: store)
+                    .presentationDetents([.medium])
+            }
+            .sheet(isPresented: $store.showInstructions) {
+                InstructionsView(store: store)
+            }
+            .sheet(isPresented: $store.showShareSheet) {
+                if let shareImage = store.shareableImage {
+                    ActivityShareSheet(items: ["My LifeSignal QR Code", shareImage])
                 }
             }
-        } message: {
-            Text("Please allow camera access in Settings to scan QR codes.")
-        }
-        .alert("Reset QR Code", isPresented: $bindableStore.showResetQRConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Reset") {
-                store.send(.resetQRCode)
+        
+        return viewWithSheets
+            .alert($store.scope(state: \.alert, action: \.alert))
+            .alert("Camera Access Denied", isPresented: $store.showCameraDeniedAlert) {
+                Button("OK", role: .cancel) { }
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+            } message: {
+                Text("Please allow camera access in Settings to scan QR codes.")
             }
-        } message: {
-            Text("Are you sure you want to reset your QR code? This will invalidate any previously shared QR codes.")
-        }
     }
 
     // MARK: - Main Content
@@ -1003,7 +1015,7 @@ struct HomeView: View {
         HStack(alignment: .top, spacing: 16) {
             // QR Code
             ZStack {
-                if store.isQRCodeReady, let qrImage = store.qrCodeImage {
+                if let qrImage = store.qrCodeImage {
                     Image(uiImage: qrImage)
                         .resizable()
                         .interpolation(.none)
@@ -1146,10 +1158,14 @@ struct HomeView: View {
                     }
                 },
                 set: { (newValue: Int) in
-                    let currentValue = switch store.currentUser?.notificationPreference ?? .thirtyMinutes {
-                    case .disabled: 0
-                    case .thirtyMinutes: 30
-                    case .twoHours: 120
+                    let currentValue: Int
+                    switch store.currentUser?.notificationPreference ?? .thirtyMinutes {
+                    case .disabled: 
+                        currentValue = 0
+                    case .thirtyMinutes: 
+                        currentValue = 30
+                    case .twoHours: 
+                        currentValue = 120
                     }
                     
                     // Only show confirmation if value actually changed

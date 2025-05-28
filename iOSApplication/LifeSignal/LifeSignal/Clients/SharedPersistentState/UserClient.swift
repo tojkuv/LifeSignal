@@ -301,27 +301,21 @@ extension User {
         
         // Generate basic QR code image
         let qrImage: UIImage
-        #if DEBUG
-        qrImage = UserClient.generateMockQRCodeImage(data: qrData, size: 300)
-        #else
         do {
             qrImage = try UserClient.generateQRCodeImage(from: qrData, size: 300)
         } catch {
+            // Fallback to mock only on error
             qrImage = UserClient.generateMockQRCodeImage(data: qrData, size: 300)
         }
-        #endif
         
         // Generate styled shareable QR code image
         let shareableImage: UIImage
-        #if DEBUG
-        shareableImage = UserClient.generateMockShareableQRCodeImage(qrImage: qrImage, userName: name)
-        #else
         do {
             shareableImage = try UserClient.generateShareableQRCodeImage(qrImage: qrImage, userName: name)
         } catch {
+            // Fallback to mock only on error
             shareableImage = UserClient.generateMockShareableQRCodeImage(qrImage: qrImage, userName: name)
         }
-        #endif
         
         // Store in shared state with metadata
         @Shared(.userQRCodeImage) var qrCodeImage
