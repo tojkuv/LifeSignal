@@ -424,7 +424,8 @@ struct ContactsClient {
 }
 
 extension ContactsClient: DependencyKey {
-    static let liveValue: ContactsClient = ContactsClient()
+    static let liveValue = ContactsClient()
+    
     static let testValue = ContactsClient()
     
     static let mockValue = ContactsClient(
@@ -443,14 +444,28 @@ extension ContactsClient: DependencyKey {
         getContactByQRCode: { qrCodeId in
             try await Task.sleep(for: .milliseconds(500))
             
+            // Validate QR code format first
+            guard UUID(uuidString: qrCodeId) != nil else {
+                throw ContactsClientError.contactNotFound("Invalid QR code format")
+            }
+            
+            // Mock: Simulate 80% chance of finding a LifeSignal user
+            let userFound = Double.random(in: 0...1) < 0.8
+            
+            if !userFound {
+                // QR code is valid but no LifeSignal user found
+                throw ContactsClientError.contactNotFound("QR code found but no LifeSignal user was found")
+            }
+            
+            // Generate realistic mock contact data for the found user
             let contact = Contact(
-                id: UUID(),
-                name: "John Doe",
-                phoneNumber: "+1234567890",
+                id: UUID(uuidString: qrCodeId) ?? UUID(),
+                name: ["Sarah Johnson", "Mike Chen", "Emma Wilson", "David Rodriguez", "Lisa Thompson"].randomElement() ?? "John Doe",
+                phoneNumber: "+1 \(Int.random(in: 100...999))-\(Int.random(in: 100...999))-\(Int.random(in: 1000...9999))",
                 isResponder: true,
                 isDependent: false,
-                emergencyNote: "Emergency contact information",
-                lastCheckInTimestamp: Date(),
+                emergencyNote: ["Has severe allergies to peanuts", "Takes medication for heart condition", "Contact work if not reachable", "Lives alone - check neighbor if needed", "Has emergency key under flowerpot"].randomElement() ?? "No emergency information provided",
+                lastCheckInTimestamp: nil,
                 checkInInterval: 24 * 60 * 60,
                 hasIncomingPing: false,
                 hasOutgoingPing: false,

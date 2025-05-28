@@ -84,6 +84,7 @@ struct SignInFeature {
 
     @Dependency(\.sessionClient) var sessionClient
     @Dependency(\.hapticClient) var haptics
+    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -228,6 +229,8 @@ struct SignInView: View {
     @Bindable var store: StoreOf<SignInFeature>
     @FocusState private var phoneNumberFieldFocused: Bool
     @FocusState private var verificationCodeFieldFocused: Bool
+    
+    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
 
     var body: some View {
         WithPerceptionTracking {
@@ -258,19 +261,12 @@ struct SignInView: View {
     @ViewBuilder
     private func phoneEntryView() -> some View {
         VStack(spacing: 24) {
-            // App logo placeholder
-            ZStack {
-                Circle()
-                    .fill(Color(UIColor.secondarySystemGroupedBackground))
-                    .frame(width: 120, height: 120)
-
-                Image(systemName: "shield.checkered")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 60, height: 60)
-                    .foregroundColor(.blue)
-            }
-            .padding(.top, 40)
+            // App logo
+            Image("LifeSignalLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 120, height: 120)
+                .padding(.top, 40)
 
             // Debug button (only shown in debug builds)
             #if DEBUG
@@ -356,7 +352,8 @@ struct SignInView: View {
                     .focused($phoneNumberFieldFocused)
                     .disabled(store.isLoading)
                     .onChange(of: store.phoneNumber) { _, newValue in
-                        store.send(.handlePhoneNumberChange(newValue))
+                        let formattedValue = phoneNumberFormatter.formatAsYouType(newValue)
+                        store.send(.handlePhoneNumberChange(formattedValue))
                     }
 
                 Button(action: {
@@ -370,7 +367,7 @@ struct SignInView: View {
                 }
                 .disabled(store.isLoading)
                 .background(store.isLoading || !store.canSendCode ? Color.gray : Color.blue)
-                .cornerRadius(10)
+                .cornerRadius(12)
                 .disabled(store.isLoading || !store.canSendCode)
             }
             .padding(.horizontal)
@@ -382,19 +379,12 @@ struct SignInView: View {
     @ViewBuilder
     private func verificationView() -> some View {
         VStack(spacing: 24) {
-            // App logo placeholder
-            ZStack {
-                Circle()
-                    .fill(Color(UIColor.secondarySystemGroupedBackground))
-                    .frame(width: 120, height: 120)
-
-                Image(systemName: "shield.checkered")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 60, height: 60)
-                    .foregroundColor(.blue)
-            }
-            .padding(.top, 40)
+            // App logo
+            Image("LifeSignalLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 120, height: 120)
+                .padding(.top, 40)
 
 
             Text("Enter verification code")

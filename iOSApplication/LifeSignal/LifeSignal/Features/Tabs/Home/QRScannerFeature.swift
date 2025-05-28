@@ -23,6 +23,7 @@ struct QRScannerFeature {
         var isShowingManualEntry = false
         var isShowingGallery = false
         var showNoQRCodeAlert = false
+        var showQRCodeFoundButNoUserAlert = false
         var showInvalidUUIDAlert = false
         var showAddContactSheet = false
         var showErrorAlert = false
@@ -34,7 +35,7 @@ struct QRScannerFeature {
             id: UUID(),
             name: "",
             phoneNumber: "",
-            isResponder: true,
+            isResponder: false,
             isDependent: false,
             emergencyNote: "",
             lastCheckInTimestamp: nil,
@@ -95,24 +96,29 @@ struct QRScannerFeature {
         case updateIsDependent(Bool)
         case closeAddContactSheet
         case addContact
+        case cancelAddContact
         case loadGalleryThumbnails
         case galleryThumbnailsLoaded([UIImage])
-        case dismissScanner
+        case dismiss
         case permissionResponse(AVAuthorizationStatus)
         case codeProcessingResponse(Result<Contact, Error>)
         case contactAddResponse(Result<Contact, Error>)
         
         // Missing actions
         case showNoQRCodeAlert(Bool)
+        case showQRCodeFoundButNoUserAlert(Bool)
         case showInvalidUUIDAlert(Bool)
         case showAddContactSheet(Bool)
         case dismissErrorAlert
+        case showGalleryWithPermission
+        case processImageForQRCode(UIImage)
     }
 
     @Dependency(\.contactsClient) var contactsClient
     @Dependency(\.notificationClient) var notificationClient
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.cameraClient) var cameraClient
+    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -161,8 +167,8 @@ struct QRScannerFeature {
         case .handlePasteButtonTapped:
             return handlePasteButtonEffect()
             
-        case .processGalleryImage(_):
-            return processGalleryImageEffect(state: &state)
+        case let .processGalleryImage(index):
+            return processGalleryImageEffect(state: &state, index: index)
             
         case let .updateIsResponder(isResponder):
             state.contact.isResponder = isResponder
@@ -179,6 +185,12 @@ struct QRScannerFeature {
         case .addContact:
             return addContactEffect(state: state)
             
+        case .cancelAddContact:
+            state.showAddContactSheet = false
+            return .run { send in
+                await send(.dismiss)
+            }
+            
         case .loadGalleryThumbnails:
             return loadGalleryThumbnailsEffect()
             
@@ -186,7 +198,7 @@ struct QRScannerFeature {
             state.galleryThumbnails = thumbnails
             return .none
             
-        case .dismissScanner:
+        case .dismiss:
             return .none
             
         case let .permissionResponse(status):
@@ -209,6 +221,10 @@ struct QRScannerFeature {
             state.showNoQRCodeAlert = show
             return .none
             
+        case let .showQRCodeFoundButNoUserAlert(show):
+            state.showQRCodeFoundButNoUserAlert = show
+            return .none
+            
         case let .showInvalidUUIDAlert(show):
             state.showInvalidUUIDAlert = show
             return .none
@@ -221,6 +237,13 @@ struct QRScannerFeature {
             state.showErrorAlert = false
             state.errorMessage = nil
             return .none
+            
+        case .showGalleryWithPermission:
+            state.isShowingGallery = true
+            return .none
+            
+        case let .processImageForQRCode(image):
+            return processImageForQRCodeEffect(state: &state, image: image)
         }
     }
     
@@ -245,7 +268,6 @@ struct QRScannerFeature {
         state.scannedCode = code
         
         return .run { [contactsClient, haptics] send in
-            await haptics.notification(.success)
             await send(.codeProcessingResponse(Result {
                 let qrCodeId: String
                 if code.hasPrefix("lifesignal://") {
@@ -254,11 +276,9 @@ struct QRScannerFeature {
                     qrCodeId = code
                 }
                 
-                guard UUID(uuidString: qrCodeId) != nil else {
-                    throw NSError(domain: "QRScanner", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid QR code format"])
-                }
-                
+                // Use ContactsClient to handle the QR code processing logic
                 let contact = try await contactsClient.getContactByQRCode(qrCodeId)
+                await haptics.notification(.success)
                 return contact
             }))
         }
@@ -304,11 +324,49 @@ struct QRScannerFeature {
         }
     }
     
-    private func processGalleryImageEffect(state: inout State) -> Effect<Action> {
-        .run { [haptics] send in
+    private func processGalleryImageEffect(state: inout State, index: Int) -> Effect<Action> {
+        guard state.galleryThumbnails.indices.contains(index) else {
+            return .run { send in
+                await send(.showNoQRCodeAlert(true))
+            }
+        }
+        
+        return .run { [haptics, cameraClient] send in
             await haptics.impact(.light)
             await send(.toggleGallery(false))
-            await send(.showNoQRCodeAlert(true))
+            
+            // Load full resolution image for the selected index instead of using thumbnail
+            if let fullResImage = await cameraClient.getFullResolutionRecentPhoto(index) {
+                await send(.processImageForQRCode(fullResImage))
+            } else {
+                await send(.showNoQRCodeAlert(true))
+            }
+        }
+    }
+    
+    private func processImageForQRCodeEffect(state: inout State, image: UIImage) -> Effect<Action> {
+        .run { [haptics, cameraClient] send in
+            await haptics.impact(.light)
+            
+            // Use CameraClient to detect QR code in the image
+            let qrCodeString = await cameraClient.detectQRCode(image)
+            
+            if let qrCode = qrCodeString {
+                // QR code found - now validate if it's a valid LifeSignal QR code
+                let cleanedCode = qrCode.hasPrefix("lifesignal://") ? String(qrCode.dropFirst("lifesignal://".count)) : qrCode
+                
+                // Validate UUID format
+                if UUID(uuidString: cleanedCode) != nil {
+                    // Valid UUID format - process it (this will handle 80%/20% logic in ContactsClient)
+                    await send(.processScannedCode(qrCode))
+                } else {
+                    // QR code found but not a valid LifeSignal UUID format
+                    await send(.showInvalidUUIDAlert(true))
+                }
+            } else {
+                // No QR code found in image
+                await send(.showNoQRCodeAlert(true))
+            }
         }
     }
     
@@ -343,7 +401,13 @@ struct QRScannerFeature {
         state.cameraPermissionStatus = status
         if status == .authorized {
             state.isScanning = true
-            return .send(.loadGalleryThumbnails)
+            // Request photo library permission and then load gallery thumbnails
+            return .run { [cameraClient] send in
+                // Request photo library permission first
+                _ = await cameraClient.requestPhotoLibraryPermission()
+                // Then load gallery thumbnails
+                await send(.loadGalleryThumbnails)
+            }
         }
         return .none
     }
@@ -357,24 +421,64 @@ struct QRScannerFeature {
     
     private func codeProcessingFailureEffect(state: inout State, error: Error) -> Effect<Action> {
         state.isLoading = false
-        state.errorMessage = error.localizedDescription
-        return .run { [haptics, notificationClient] _ in
-            await haptics.notification(.error)
-            try? await notificationClient.sendSystemNotification(
-                "QR Code Error",
-                "Unable to process QR code: \(error.localizedDescription)"
-            )
+        
+        if let contactsError = error as? ContactsClientError {
+            switch contactsError {
+            case .contactNotFound(let details):
+                if details.contains("QR code found but no LifeSignal user was found") {
+                    // QR code found but no LifeSignal user found
+                    state.showQRCodeFoundButNoUserAlert = true
+                    return .run { [haptics] _ in
+                        await haptics.notification(.warning)
+                    }
+                } else {
+                    // Invalid QR code format or other contact not found errors
+                    state.errorMessage = error.localizedDescription
+                    state.showErrorAlert = true
+                    return .run { [haptics, notificationClient] _ in
+                        await haptics.notification(.error)
+                        try? await notificationClient.sendSystemNotification(
+                            "QR Code Error",
+                            "Unable to process QR code: \(error.localizedDescription)"
+                        )
+                    }
+                }
+            default:
+                // Other ContactsClient errors
+                state.errorMessage = error.localizedDescription
+                state.showErrorAlert = true
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.error)
+                    try? await notificationClient.sendSystemNotification(
+                        "QR Code Error",
+                        "Unable to process QR code: \(error.localizedDescription)"
+                    )
+                }
+            }
+        } else {
+            // Other non-ContactsClient errors
+            state.errorMessage = error.localizedDescription
+            state.showErrorAlert = true
+            return .run { [haptics, notificationClient] _ in
+                await haptics.notification(.error)
+                try? await notificationClient.sendSystemNotification(
+                    "QR Code Error",
+                    "Unable to process QR code: \(error.localizedDescription)"
+                )
+            }
         }
     }
     
     private func contactAddSuccessEffect(state: inout State) -> Effect<Action> {
         state.showAddContactSheet = false
-        return .run { [haptics, notificationClient, contactName = state.contact.name] _ in
+        return .run { [haptics, notificationClient, contactName = state.contact.name] send in
             await haptics.notification(.success)
             try? await notificationClient.sendSystemNotification(
                 "Contact Added",
                 "Successfully added \(contactName) to your contacts"
             )
+            // Dismiss the QR scanner after successfully adding contact
+            await send(.dismiss)
         }
     }
     
@@ -522,11 +626,13 @@ struct PhotoPickerView: UIViewControllerRepresentable {
 
             if provider.canLoadObject(ofClass: UIImage.self) {
                 provider.loadObject(ofClass: UIImage.self) { image, error in
-                    if image as? UIImage != nil {
+                    if let image = image as? UIImage {
                         DispatchQueue.main.async {
                             // Process the selected image for QR code scanning
-                            // This would need to be implemented in the feature
-                            // For now, just show an alert if no QR code is found
+                            self.parent.store.send(.processImageForQRCode(image))
+                        }
+                    } else {
+                        DispatchQueue.main.async {
                             self.parent.store.send(.showNoQRCodeAlert(true))
                         }
                     }
@@ -543,6 +649,8 @@ struct QRScannerView: View {
 
     /// The TCA store for the QR scanner
     @Bindable var store: StoreOf<QRScannerFeature>
+    
+    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
 
     // MARK: - Body
 
@@ -588,21 +696,29 @@ struct QRScannerView: View {
             )) {
                 addContactSheetView()
             }
-            .alert("No QR Code Found", isPresented: Binding(
+            .alert("No QR Code", isPresented: Binding(
                 get: { store.showNoQRCodeAlert },
                 set: { store.send(.showNoQRCodeAlert($0)) }
             )) {
                 Button("OK", role: .cancel) { }
             } message: {
-                Text("The selected image does not contain a valid QR code. Please try another image.")
+                Text("No QR code found in this image.")
             }
-            .alert("Invalid UUID Format", isPresented: Binding(
+            .alert("Invalid QR Code", isPresented: Binding(
                 get: { store.showInvalidUUIDAlert },
                 set: { store.send(.showInvalidUUIDAlert($0)) }
             )) {
                 Button("OK", role: .cancel) { }
             } message: {
-                Text("The clipboard content is not a valid UUID format.")
+                Text("This is not a valid LifeSignal QR code.")
+            }
+            .alert("User Not Found", isPresented: Binding(
+                get: { store.showQRCodeFoundButNoUserAlert },
+                set: { store.send(.showQRCodeFoundButNoUserAlert($0)) }
+            )) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("No LifeSignal user found for this QR code.")
             }
         }
     }
@@ -618,26 +734,22 @@ struct QRScannerView: View {
                     VStack(spacing: 24) {
                         // Header (avatar, name, phone) - centered, stacked
                         VStack(spacing: 12) {
-                            Circle()
-                                .fill(Color.blue.opacity(0.1))
-                                .frame(width: 100, height: 100)
-                                .overlay(
-                                    Text(String(store.contact.name.isEmpty ? "?" : store.contact.name.prefix(1)))
-                                        .foregroundColor(.blue)
-                                        .font(.title)
-                                )
-                                .overlay(
-                                    Circle()
-                                        .stroke(Color.blue, lineWidth: 2)
-                                )
+                            CommonAvatarView(
+                                name: store.contact.name.isEmpty ? "?" : store.contact.name,
+                                size: 100,
+                                backgroundColor: Color.blue.opacity(0.1),
+                                textColor: .blue,
+                                strokeWidth: 2,
+                                strokeColor: .blue
+                            )
 
                             // Name field - now non-editable
                             Text(store.contact.name.isEmpty ? "Unknown" : store.contact.name)
                                 .font(.title3)
                                 .multilineTextAlignment(.center)
 
-                            // Phone field - now non-editable
-                            Text(store.contact.phoneNumber.isEmpty ? "No phone number" : store.contact.phoneNumber)
+                            // Phone field - now non-editable with formatting
+                            Text(store.contact.phoneNumber.isEmpty ? "No phone number" : phoneNumberFormatter.formatPhoneNumberForDisplay(store.contact.phoneNumber))
                                 .font(.subheadline)
                                 .multilineTextAlignment(.center)
                                 .foregroundColor(.secondary)
@@ -672,7 +784,7 @@ struct QRScannerView: View {
                             .toggleStyle(SwitchToggleStyle(tint: .blue))
                             .padding()
                             .background(Color(UIColor.secondarySystemGroupedBackground))
-                            .cornerRadius(10)
+                            .cornerRadius(12)
 
                             // Dependent toggle
                             Toggle(isOn: Binding(
@@ -697,7 +809,35 @@ struct QRScannerView: View {
                             .toggleStyle(SwitchToggleStyle(tint: .blue))
                             .padding()
                             .background(Color(UIColor.secondarySystemGroupedBackground))
-                            .cornerRadius(10)
+                            .cornerRadius(12)
+                            
+                            // Role selection warning card (shown when no role is selected)
+                            if !store.contact.isResponder && !store.contact.isDependent {
+                                VStack(spacing: 0) {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack {
+                                                Image(systemName: "exclamationmark.triangle.fill")
+                                                    .foregroundColor(.orange)
+                                                    .font(.caption)
+                                                
+                                                Text("Please Select a Role")
+                                                    .font(.body)
+                                                    .foregroundColor(.orange)
+                                            }
+                                            
+                                            Text("You must select at least one role (Responder or Dependent) to add this contact.")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 12)
+                                    .padding(.horizontal)
+                                }
+                                .background(Color.orange.opacity(0.1))
+                                .cornerRadius(12)
+                            }
                         }
                         .padding(.horizontal)
 
@@ -710,11 +850,17 @@ struct QRScannerView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
 
-                            Text(store.contact.emergencyNote.isEmpty ? "No emergency note provided" : store.contact.emergencyNote)
-                                .frame(maxWidth: .infinity, minHeight: 100, alignment: .leading)
-                                .padding(12)
-                                .background(Color(UIColor.secondarySystemGroupedBackground))
-                                .cornerRadius(10)
+                            HStack {
+                                Text(store.contact.emergencyNote.isEmpty ? "No emergency note provided" : store.contact.emergencyNote)
+                                    .font(.body)
+                                    .foregroundColor(.primary)
+                                    .multilineTextAlignment(.leading)
+                                Spacer()
+                            }
+                            .padding(.vertical, 12)
+                            .padding(.horizontal)
+                            .background(Color(UIColor.secondarySystemGroupedBackground))
+                            .cornerRadius(12)
                         }
                         .padding(.horizontal)
                     }
@@ -727,7 +873,7 @@ struct QRScannerView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
-                        store.send(.closeAddContactSheet)
+                        store.send(.cancelAddContact)
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -756,7 +902,7 @@ struct QRScannerView: View {
         HStack {
             // Close button
             Button(action: {
-                store.send(.dismissScanner)
+                store.send(.dismiss)
             }) {
                 Image(systemName: "xmark")
                     .font(.title2)
@@ -814,7 +960,7 @@ struct QRScannerView: View {
                         .foregroundColor(.white)
                         .padding(.vertical, 8)
                         .padding(.horizontal, 12)
-                        .cornerRadius(8)
+                        .cornerRadius(12)
                 }
 
                 Spacer()
@@ -827,7 +973,7 @@ struct QRScannerView: View {
                         .font(.system(size: 24))
                         .foregroundColor(.white)
                         .padding(12)
-                        .cornerRadius(8)
+                        .cornerRadius(12)
                 }
             }
             .padding(.horizontal)
@@ -874,7 +1020,7 @@ struct QRScannerView: View {
                         .foregroundColor(.white)
                         .padding()
                         .background(Color.blue)
-                        .cornerRadius(10)
+                        .cornerRadius(12)
                 }
 
                 Button(action: {
@@ -885,7 +1031,7 @@ struct QRScannerView: View {
                         .foregroundColor(.white)
                         .padding()
                         .background(Color.gray)
-                        .cornerRadius(10)
+                        .cornerRadius(12)
                 }
             }
             .padding()

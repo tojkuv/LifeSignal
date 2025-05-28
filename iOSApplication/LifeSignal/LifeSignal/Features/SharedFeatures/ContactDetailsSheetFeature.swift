@@ -316,6 +316,8 @@ struct ContactDetailsSheetView: View {
     @Bindable var store: StoreOf<ContactDetailsSheetFeature>
     @Environment(\.colorScheme) private var colorScheme
     
+    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
+    
     private var hasAlertCards: Bool {
         store.contact.hasManualAlertActive || 
         store.contact.hasNotResponsiveAlert || 
@@ -367,14 +369,14 @@ struct ContactDetailsSheetView: View {
                 strokeWidth: 2,
                 strokeColor: .blue
             )
-            .padding(.top, 24)
+            .padding(.top)
                 
             Text(store.contact.name)
                 .font(.headline)
                 .bold()
                 .foregroundColor(.primary)
                 
-            Text(store.contact.phoneNumber)
+            Text(phoneNumberFormatter.formatPhoneNumberForDisplay(store.contact.phoneNumber))
                 .font(.subheadline)
                 .foregroundColor(.secondary)
         }
@@ -430,13 +432,13 @@ struct ContactDetailsSheetView: View {
                 store.send(.pingContact)
             }) {
                 VStack(spacing: 6) {
-                    Image(systemName: store.contact.hasOutgoingPing ? "bell.badge" : "bell")
+                    Image(systemName: store.contact.hasOutgoingPing ? "bell.slash" : "bell.badge.waveform")
                         .font(.system(size: 20))
-                        .foregroundColor(store.contact.hasOutgoingPing ? Color.blue.opacity(0.7) : .blue)
+                        .foregroundColor(.blue)
                     
-                    Text(store.contact.hasOutgoingPing ? "Clear Ping" : "Ping")
+                    Text(store.contact.hasOutgoingPing ? "Clear" : "Ping")
                         .font(.body)
-                        .foregroundColor(store.contact.hasOutgoingPing ? Color.blue.opacity(0.7) : .primary)
+                        .foregroundColor(.primary)
                 }
                 .padding(8)
                 .frame(maxWidth: .infinity)

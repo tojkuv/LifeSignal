@@ -509,6 +509,10 @@ struct HomeFeature {
             state.qrScanner = nil
             return .none
             
+        case .qrScanner(.presented(.dismiss)):
+            state.qrScanner = nil
+            return .none
+            
         case .qrScanner(.presented(_)):
             return .none
             
@@ -905,7 +909,7 @@ struct InstructionsView: View {
                     .padding()
                     .background(Color.blue)
                     .foregroundColor(.white)
-                    .cornerRadius(10)
+                    .cornerRadius(12)
             }
             .padding(.top)
         }
@@ -1061,7 +1065,7 @@ struct HomeView: View {
             }
             .padding(12)
             .background(Color.white)
-            .cornerRadius(10)
+            .cornerRadius(12)
             .shadow(color: Color.black.opacity(0.15),
                     radius: 4,
                     x: 0,
@@ -1090,7 +1094,7 @@ struct HomeView: View {
                         .padding(.vertical, 5)
                         .padding(.horizontal, 10)
                         .background(Color(UIColor.tertiarySystemGroupedBackground))
-                        .cornerRadius(10)
+                        .cornerRadius(12)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

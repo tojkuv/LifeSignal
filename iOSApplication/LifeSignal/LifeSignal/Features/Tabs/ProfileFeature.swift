@@ -159,6 +159,7 @@ struct ProfileFeature {
     @Dependency(\.sessionClient) var sessionClient
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.notificationClient) var notificationClient
+    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
     
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -600,32 +601,10 @@ struct ProfileView: View {
     @FocusState private var nameFieldFocused: Bool
     @FocusState private var phoneNumberFieldFocused: Bool
     @FocusState private var phoneVerificationCodeFieldFocused: Bool
+    @State private var textEditorHeight: CGFloat = 72
+    
+    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
 
-    private func formatPhoneNumber(_ phoneNumber: String) -> String {
-        // Remove all non-digit characters
-        let digits = phoneNumber.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
-        
-        // Handle different phone number lengths
-        if digits.count == 10 {
-            // US format: (xxx) xxx-xxxx
-            let areaCode = String(digits.prefix(3))
-            let prefix = String(digits.dropFirst(3).prefix(3))
-            let suffix = String(digits.dropFirst(6))
-            return "(\(areaCode)) \(prefix)-\(suffix)"
-        } else if digits.count == 11 && digits.hasPrefix("1") {
-            // US format with country code: +1 (xxx) xxx-xxxx
-            let areaCode = String(digits.dropFirst(1).prefix(3))
-            let prefix = String(digits.dropFirst(4).prefix(3))
-            let suffix = String(digits.dropFirst(7))
-            return "+1 (\(areaCode)) \(prefix)-\(suffix)"
-        } else if digits.count > 10 {
-            // International format: +xx xxx xxx xxxx (basic formatting)
-            return "+\(digits)"
-        } else {
-            // Return original if it doesn't match common patterns
-            return phoneNumber
-        }
-    }
 
     @ViewBuilder
     private func profileHeader() -> some View {
@@ -634,15 +613,16 @@ struct ProfileView: View {
                 CommonAvatarView(
                     name: user.name,
                     image: store.currentAvatarImage,
-                    size: 80,
+                    size: 100,
                     backgroundColor: Color.blue.opacity(0.1),
                     textColor: .blue,
                     strokeWidth: 2,
                     strokeColor: .blue
                 )
+                .padding(.top)
                 Text(user.name)
                     .font(.headline)
-                Text(user.phoneNumber.isEmpty ? "(954) 234-5678" : formatPhoneNumber(user.phoneNumber))
+                Text(user.phoneNumber.isEmpty ? "(954) 234-5678" : phoneNumberFormatter.formatPhoneNumberForDisplay(user.phoneNumber))
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
@@ -666,8 +646,6 @@ struct ProfileView: View {
             .cornerRadius(12)
         }
         .padding(.horizontal)
-        .padding(.top, 8)
-        .padding(.bottom, 8)
     }
 
     @ViewBuilder
@@ -706,7 +684,6 @@ struct ProfileView: View {
         .background(Color(UIColor.secondarySystemGroupedBackground))
         .cornerRadius(12)
         .padding(.horizontal)
-        .padding(.bottom, 8)
     }
 
     private func mainContent(_ user: User) -> some View {
@@ -732,7 +709,6 @@ struct ProfileView: View {
                 .cornerRadius(12)
             }
             .padding(.horizontal)
-            .padding(.bottom, 8)
             
             Button(action: {
                 store.send(.confirmSignOut, animation: .default)
@@ -886,13 +862,19 @@ extension ProfileView {
                     TextEditor(text: $store.newDescription)
                         .font(.body)
                         .foregroundColor(.primary)
-                        .frame(minHeight: 240)
+                        .frame(minHeight: max(72, textEditorHeight))
                         .padding(.vertical, 4)
                         .padding(.horizontal)
                         .scrollContentBackground(.hidden)
                         .background(Color(UIColor.secondarySystemGroupedBackground))
                         .cornerRadius(12)
                         .focused($textEditorFocused)
+                        .onAppear {
+                            updateTextEditorHeight(for: store.newDescription)
+                        }
+                        .onChange(of: store.newDescription) { _, newValue in
+                            updateTextEditorHeight(for: newValue)
+                        }
                     Text("This note is visible to your contacts when they view your profile.")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -1053,7 +1035,7 @@ extension ProfileView {
                 .font(.headline)
                 .padding(.horizontal, 4)
 
-            Text(store.currentUser?.phoneNumber.isEmpty == false ? formatPhoneNumber(store.currentUser!.phoneNumber) : "(954) 234-5678")
+            Text(store.currentUser?.phoneNumber.isEmpty == false ? phoneNumberFormatter.formatPhoneNumberForDisplay(store.currentUser!.phoneNumber) : "(954) 234-5678")
                 .font(.body)
                 .padding(.vertical, 12)
                 .padding(.horizontal)
@@ -1094,7 +1076,8 @@ extension ProfileView {
                 .multilineTextAlignment(.leading) // Left align the text
                 .focused($phoneNumberFieldFocused)
                 .onChange(of: store.newPhoneNumber) { _, newValue in
-                    store.send(.handlePhoneNumberChange(newValue))
+                    let formattedValue = phoneNumberFormatter.formatAsYouType(newValue)
+                    store.send(.handlePhoneNumberChange(formattedValue))
                 }
 
             Text("Enter your new phone number. We'll send a verification code to confirm.")
@@ -1112,7 +1095,7 @@ extension ProfileView {
                     .frame(maxWidth: .infinity)
                     .padding()
                     .background(!store.isPhoneNumberValid ? Color.gray : Color.blue)
-                    .cornerRadius(10)
+                    .cornerRadius(12)
             }
             .disabled(!store.isPhoneNumberValid)
             .padding(.top, 16)
@@ -1155,12 +1138,29 @@ extension ProfileView {
                     .frame(maxWidth: .infinity)
                     .padding()
                     .background(!store.isVerificationCodeValid ? Color.gray : Color.blue)
-                    .cornerRadius(10)
+                    .cornerRadius(12)
             }
             .disabled(!store.isVerificationCodeValid)
             .padding(.top, 16)
         }
         .padding(.horizontal)
         .padding(.top, 24)
+    }
+    
+    private func updateTextEditorHeight(for text: String) {
+        let font = UIFont.preferredFont(forTextStyle: .body)
+        let lineHeight = font.lineHeight
+        let padding: CGFloat = 16 // Account for internal padding
+        
+        // Calculate approximate height based on text content
+        let size = text.boundingRect(
+            with: CGSize(width: UIScreen.main.bounds.width - 64, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font],
+            context: nil
+        )
+        
+        let calculatedHeight = max(72, size.height + padding)
+        textEditorHeight = calculatedHeight
     }
 }

@@ -218,7 +218,7 @@ struct NotificationHistoryRow: View {
             }
             .padding()
             .background(Color(UIColor.systemBackground))
-            .cornerRadius(8)
+            .cornerRadius(12)
 
             // Divider (will appear between items)
             Divider()
@@ -283,7 +283,7 @@ struct FilterChip: View {
                         .white :
                         .primary
                 )
-                .cornerRadius(16)
+                .cornerRadius(12)
         }
     }
 }
