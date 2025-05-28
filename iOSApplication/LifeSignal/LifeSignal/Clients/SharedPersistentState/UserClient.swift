@@ -340,7 +340,7 @@ extension User {
 // MARK: - User Shared State
 
 // 1. Mutable internal state (private to Client)
-struct UserState: Equatable {
+struct UserState: Equatable, Codable {
     var currentUser: User?
     var isLoading: Bool
     var lastSyncTimestamp: Date?
@@ -353,12 +353,29 @@ struct UserState: Equatable {
 }
 
 // 2. Read-only wrapper (prevents direct mutation)
-struct ReadOnlyUserState: Equatable {
+struct ReadOnlyUserState: Equatable, Codable {
     private let _state: UserState
     
     // 🔑 Only Client can access this init (same file = fileprivate access)
     fileprivate init(_ state: UserState) {
         self._state = state
+    }
+    
+    // MARK: - Codable Implementation (Preserves Ownership Pattern)
+    
+    private enum CodingKeys: String, CodingKey {
+        case state = "_state"
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let state = try container.decode(UserState.self, forKey: .state)
+        self.init(state)  // Uses fileprivate init - ownership preserved ✅
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_state, forKey: .state)
     }
     
     // Read-only accessors
@@ -367,9 +384,35 @@ struct ReadOnlyUserState: Equatable {
     var lastSyncTimestamp: Date? { _state.lastSyncTimestamp }
 }
 
-extension SharedReaderKey where Self == InMemoryKey<ReadOnlyUserState>.Default {
+// MARK: - RawRepresentable Conformance for AppStorage (Preserves Ownership)
+
+extension ReadOnlyUserState: RawRepresentable {
+    typealias RawValue = String
+    
+    var rawValue: String {
+        do {
+            let data = try JSONEncoder().encode(self)
+            return String(data: data, encoding: .utf8) ?? ""
+        } catch {
+            print("Failed to encode ReadOnlyUserState: \(error)")
+            return ""
+        }
+    }
+    
+    init?(rawValue: String) {
+        guard let data = rawValue.data(using: .utf8) else { return nil }
+        do {
+            self = try JSONDecoder().decode(ReadOnlyUserState.self, from: data)
+        } catch {
+            print("Failed to decode ReadOnlyUserState: \(error)")
+            return nil
+        }
+    }
+}
+
+extension SharedReaderKey where Self == AppStorageKey<ReadOnlyUserState>.Default {
     static var userState: Self {
-        Self[.inMemory("userState"), default: ReadOnlyUserState(UserState())]
+        Self[.appStorage("userState"), default: ReadOnlyUserState(UserState())]
     }
 }
 

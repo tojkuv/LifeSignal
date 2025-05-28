@@ -20,7 +20,11 @@ The application uses **The Composable Architecture (TCA)** v1.19.1:
 - **swift-dependencies** (v1.9.2) - Dependency injection
 - **swift-navigation** (v2.3.0) - Navigation helpers
 - **swift-sharing** (v2.5.2) - Shared state management
-- **Firebase** (v11.12.0) - Auth, Firestore, Messaging, Functions, AppCheck
+- **Firebase** (v11.12.0) - Auth, Messaging
+
+## Key Task Completion 
+
+- For maximum efficiency, whenever you need to perform multiple independent operations, invoke all relevant tools simultaneously rather than sequentially
 
 ## Build Commands
 

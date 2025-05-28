@@ -20,7 +20,6 @@ struct ContactDetailsSheetFeature {
     struct State: Equatable {
         var contact: Contact
         var isLoading = false
-        var shouldDismiss = false
         @Presents var alert: AlertState<ContactDetailsAlert>?
         
         var isNotResponsive: Bool {
@@ -73,16 +72,47 @@ struct ContactDetailsSheetFeature {
                     return .none
                 }
                 
-                return .run { [contact = state.contact] send in
-                    await haptics.impact(.medium)
-                    await send(.pingResponse(Result {
-                        try await notificationClient.sendPingNotification(
-                            .sendDependentPing,
-                            "Ping Sent",
-                            "You sent a ping to \(contact.name)",
-                            contact.id
-                        )
-                    }))
+                // Handle ping toggling
+                if state.contact.hasOutgoingPing {
+                    // Clear existing ping
+                    return .run { [contact = state.contact] send in
+                        await haptics.impact(.medium)
+                        await send(.pingResponse(Result {
+                            // Clear the ping first
+                            var updatedContact = contact
+                            updatedContact.hasOutgoingPing = false
+                            updatedContact.outgoingPingTimestamp = nil
+                            await contactsClient.updateContact(updatedContact)
+                            
+                            // Send notification about clearing ping
+                            try await notificationClient.sendPingNotification(
+                                .cancelDependentPing,
+                                "Ping Cleared",
+                                "You cleared the ping to \(contact.name)",
+                                contact.id
+                            )
+                        }))
+                    }
+                } else {
+                    // Send new ping
+                    return .run { [contact = state.contact] send in
+                        await haptics.impact(.medium)
+                        await send(.pingResponse(Result {
+                            // Update contact to show outgoing ping
+                            var updatedContact = contact
+                            updatedContact.hasOutgoingPing = true
+                            updatedContact.outgoingPingTimestamp = Date()
+                            await contactsClient.updateContact(updatedContact)
+                            
+                            // Send ping notification
+                            try await notificationClient.sendPingNotification(
+                                .sendDependentPing,
+                                "Ping Sent",
+                                "You sent a ping to \(contact.name)",
+                                contact.id
+                            )
+                        }))
+                    }
                 }
                 
             case .callContact:
@@ -204,9 +234,10 @@ struct ContactDetailsSheetFeature {
                 
                 return .run { [contact = updatedContact] send in
                     await haptics.notification(.success)
-                    // Note: Contact updates are handled via gRPC streaming, not direct API calls
-                    // The UI state is updated immediately for responsiveness
-                    await send(.contactUpdateResponse(.success(contact)))
+                    await send(.contactUpdateResponse(Result {
+                        await contactsClient.updateContact(contact)
+                        return contact
+                    }))
                 }
                 
             case .alert:
@@ -235,13 +266,13 @@ struct ContactDetailsSheetFeature {
                 
             case .contactDeleteResponse(.success):
                 state.isLoading = false
-                state.shouldDismiss = true
-                return .run { [contact = state.contact, haptics, notificationClient] _ in
+                return .run { [contact = state.contact, haptics, notificationClient] send in
                     await haptics.notification(.success)
                     try? await notificationClient.sendSystemNotification(
                         "Contact Deleted",
                         "Successfully deleted \(contact.name)"
                     )
+                    await send(.dismiss)
                 }
                 
             case .contactDeleteResponse(.failure(let error)):
@@ -255,6 +286,11 @@ struct ContactDetailsSheetFeature {
                 }
                 
             case .pingResponse(.success):
+                // Update the contact state in this feature to reflect the ping changes
+                @Shared(.contacts) var contacts
+                if let updatedContact = contacts.contact(by: state.contact.id) {
+                    state.contact = updatedContact
+                }
                 return .run { _ in
                     await haptics.notification(.success)
                 }
@@ -290,30 +326,24 @@ struct ContactDetailsSheetView: View {
     var body: some View {
         WithPerceptionTracking {
             NavigationStack {
-                Group {
-                    if store.shouldDismiss {
-                        contactDismissedView()
-                    } else {
-                        ScrollView {
-                            VStack(spacing: 16) {
-                                // Header
-                                contactHeaderView()
-                                
-                                // Action Buttons
-                                actionButtonsView()
-                                
-                                // Alert Cards (only show if there are alerts)
-                                if hasAlertCards {
-                                    alertCardsView()
-                                }
-                                
-                                // Information Cards
-                                noteCardView()
-                                rolesCardView()
-                                checkInCardView()
-                                deleteButtonView()
-                            }
+                ScrollView {
+                    VStack(spacing: 16) {
+                        // Header
+                        contactHeaderView()
+                        
+                        // Action Buttons
+                        actionButtonsView()
+                        
+                        // Alert Cards (only show if there are alerts)
+                        if hasAlertCards {
+                            alertCardsView()
                         }
+                        
+                        // Information Cards
+                        noteCardView()
+                        rolesCardView()
+                        checkInCardView()
+                        deleteButtonView()
                     }
                 }
                 .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
@@ -324,27 +354,6 @@ struct ContactDetailsSheetView: View {
         }
     }
     
-    // MARK: - Contact Dismissed View
-    @ViewBuilder
-    private func contactDismissedView() -> some View {
-        VStack(spacing: 20) {
-            Spacer()
-            Text("Contact role updated")
-                .font(.headline)
-            Text("This contact has been moved to a different list.")
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-            Button("Close") {
-                store.send(.dismiss)
-            }
-            .padding()
-            .background(Color.blue)
-            .foregroundColor(.white)
-            .cornerRadius(8)
-            Spacer()
-        }
-        .padding()
-    }
     
     // MARK: - Contact Header View
     @ViewBuilder

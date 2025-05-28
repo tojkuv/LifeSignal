@@ -24,7 +24,7 @@ struct ApplicationFeature {
         var signIn = SignInFeature.State()
         var onboarding = OnboardingFeature.State()
         // Network connectivity handled via SessionClient
-        var notifications = NotificationCenterFeature.State()
+        var notifications = NotificationsHistorySheetFeature.State()
 
         var isLoggedIn: Bool { sessionState.isAuthenticated && currentUser != nil }
         var shouldShowOnboarding: Bool { sessionState.isAuthenticated && needsOnboarding }
@@ -59,7 +59,7 @@ struct ApplicationFeature {
         case signIn(SignInFeature.Action)
         case onboarding(OnboardingFeature.Action)
         // Network connectivity handled via SessionClient
-        case notifications(NotificationCenterFeature.Action)
+        case notifications(NotificationsHistorySheetFeature.Action)
         
         case performBackgroundSync
         case backgroundSyncCompleted(Result<Int, Error>)
@@ -89,7 +89,7 @@ struct ApplicationFeature {
         // Network connectivity handled via SessionClient
 
         Scope(state: \.notifications, action: \.notifications) {
-            NotificationCenterFeature()
+            NotificationsHistorySheetFeature()
         }
 
         Reduce { state, action in

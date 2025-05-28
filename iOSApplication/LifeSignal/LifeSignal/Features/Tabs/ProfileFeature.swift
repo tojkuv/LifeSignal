@@ -601,6 +601,32 @@ struct ProfileView: View {
     @FocusState private var phoneNumberFieldFocused: Bool
     @FocusState private var phoneVerificationCodeFieldFocused: Bool
 
+    private func formatPhoneNumber(_ phoneNumber: String) -> String {
+        // Remove all non-digit characters
+        let digits = phoneNumber.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+        
+        // Handle different phone number lengths
+        if digits.count == 10 {
+            // US format: (xxx) xxx-xxxx
+            let areaCode = String(digits.prefix(3))
+            let prefix = String(digits.dropFirst(3).prefix(3))
+            let suffix = String(digits.dropFirst(6))
+            return "(\(areaCode)) \(prefix)-\(suffix)"
+        } else if digits.count == 11 && digits.hasPrefix("1") {
+            // US format with country code: +1 (xxx) xxx-xxxx
+            let areaCode = String(digits.dropFirst(1).prefix(3))
+            let prefix = String(digits.dropFirst(4).prefix(3))
+            let suffix = String(digits.dropFirst(7))
+            return "+1 (\(areaCode)) \(prefix)-\(suffix)"
+        } else if digits.count > 10 {
+            // International format: +xx xxx xxx xxxx (basic formatting)
+            return "+\(digits)"
+        } else {
+            // Return original if it doesn't match common patterns
+            return phoneNumber
+        }
+    }
+
     @ViewBuilder
     private func profileHeader() -> some View {
         VStack(spacing: 16) {
@@ -616,7 +642,7 @@ struct ProfileView: View {
                 )
                 Text(user.name)
                     .font(.headline)
-                Text(user.phoneNumber.isEmpty ? "(954) 234-5678" : user.phoneNumber)
+                Text(user.phoneNumber.isEmpty ? "(954) 234-5678" : formatPhoneNumber(user.phoneNumber))
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
@@ -1027,7 +1053,7 @@ extension ProfileView {
                 .font(.headline)
                 .padding(.horizontal, 4)
 
-            Text(store.currentUser?.phoneNumber.isEmpty == false ? store.currentUser!.phoneNumber : "(954) 234-5678")
+            Text(store.currentUser?.phoneNumber.isEmpty == false ? formatPhoneNumber(store.currentUser!.phoneNumber) : "(954) 234-5678")
                 .font(.body)
                 .padding(.vertical, 12)
                 .padding(.horizontal)

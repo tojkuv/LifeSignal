@@ -8,16 +8,36 @@ import DependenciesMacros
 // MARK: - Shared State (Read-Only Wrapper Pattern)
 
 // 1. Mutable internal state (private to Client)
-struct ContactsState: Equatable {
+struct ContactsState: Equatable, Codable {
     var contacts: [Contact] = []
     var lastSyncTimestamp: Date? = nil
     var isLoading: Bool = false
 }
 
 // 2. Read-only wrapper (prevents direct mutation)
-struct ReadOnlyContactsState: Equatable {
+struct ReadOnlyContactsState: Equatable, Codable {
     private let _state: ContactsState
     fileprivate init(_ state: ContactsState) { self._state = state }  // 🔑 Client can access (same file)
+    
+    // MARK: - Codable Implementation (Preserves Ownership Pattern)
+    
+    // Private coding keys to prevent external access
+    private enum CodingKeys: String, CodingKey {
+        case state = "_state"
+    }
+    
+    // Decoder uses the fileprivate init - maintains ownership
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let state = try container.decode(ContactsState.self, forKey: .state)
+        self.init(state)  // Uses fileprivate init - ownership preserved ✅
+    }
+    
+    // Encoder exposes only the internal state
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_state, forKey: .state)
+    }
     
     // Read-only access
     var contacts: [Contact] { _state.contacts }
@@ -38,10 +58,39 @@ struct ReadOnlyContactsState: Equatable {
     }
 }
 
-// 3. Shared key stores read-only wrapper
-extension SharedReaderKey where Self == InMemoryKey<ReadOnlyContactsState>.Default {
+// MARK: - RawRepresentable Conformance for AppStorage (Preserves Ownership)
+
+extension ReadOnlyContactsState: RawRepresentable {
+    typealias RawValue = String
+    
+    // Convert to JSON string for storage
+    var rawValue: String {
+        do {
+            let data = try JSONEncoder().encode(self)
+            return String(data: data, encoding: .utf8) ?? ""
+        } catch {
+            print("Failed to encode ReadOnlyContactsState: \(error)")
+            return ""
+        }
+    }
+    
+    // Decode from JSON string - uses our ownership-preserving Codable init
+    init?(rawValue: String) {
+        guard let data = rawValue.data(using: .utf8) else { return nil }
+        do {
+            self = try JSONDecoder().decode(ReadOnlyContactsState.self, from: data)
+            // ☝️ This calls our custom init(from decoder:) which uses fileprivate init ✅
+        } catch {
+            print("Failed to decode ReadOnlyContactsState: \(error)")
+            return nil
+        }
+    }
+}
+
+// 3. Shared key stores read-only wrapper with persistence
+extension SharedReaderKey where Self == AppStorageKey<ReadOnlyContactsState>.Default {
     static var contacts: Self {
-        Self[.inMemory("contacts"), default: ReadOnlyContactsState(ContactsState())]
+        Self[.appStorage("contacts"), default: ReadOnlyContactsState(ContactsState())]
     }
 }
 
@@ -116,7 +165,7 @@ final class MockContactService: ContactServiceProtocol {
 
         let mockContacts = [
             Contact_Proto(
-                id: UUID().uuidString,
+                id: "99999999-9999-9999-9999-999999999001", // Fixed UUID for John Doe
                 name: "John Doe",
                 phoneNumber: "+1234567890",
                 isResponder: true,
@@ -137,7 +186,7 @@ final class MockContactService: ContactServiceProtocol {
                 lastUpdated: Int64(Date().timeIntervalSince1970)
             ),
             Contact_Proto(
-                id: UUID().uuidString,
+                id: "99999999-9999-9999-9999-999999999002", // Fixed UUID for Jane Smith
                 name: "Jane Smith",
                 phoneNumber: "+0987654321",
                 isResponder: false,
@@ -494,13 +543,24 @@ extension ContactsClient: DependencyKey {
                 proto.toDomain()
             }
             
-            // Also include our comprehensive mock data for visual testing
-            let allContacts = contacts + Contact.mockData
+            // Check if we already have persisted contacts to avoid overwriting cleared pings
+            @Shared(.contacts) var sharedContactsState
+            let existingContacts = sharedContactsState.contacts
+            
+            let finalContacts: [Contact]
+            if existingContacts.isEmpty {
+                // First time or no persisted data - include mock data for visual testing
+                finalContacts = contacts + Contact.mockData
+            } else {
+                // We have persisted data - preserve it and only add genuinely new contacts
+                let existingIds = Set(existingContacts.map(\.id))
+                let newServerContacts = contacts.filter { !existingIds.contains($0.id) }
+                finalContacts = existingContacts + newServerContacts
+            }
             
             // Update shared state via fileprivate init
-            @Shared(.contacts) var sharedContactsState
             let mutableState = ContactsState(
-                contacts: allContacts,
+                contacts: finalContacts,
                 lastSyncTimestamp: Date(),
                 isLoading: false
             )

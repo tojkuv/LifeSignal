@@ -9,7 +9,7 @@ import Network
 // MARK: - Session Shared State
 
 // 1. Mutable internal state (private to Client)
-struct SessionInternalState: Equatable {
+struct SessionInternalState: Equatable, Codable {
     var authenticationToken: String?
     var sessionState: SessionState
     var needsOnboarding: Bool
@@ -47,12 +47,29 @@ struct SessionInternalState: Equatable {
 }
 
 // 2. Read-only wrapper (prevents direct mutation)
-struct ReadOnlySessionState: Equatable {
+struct ReadOnlySessionState: Equatable, Codable {
     private let _state: SessionInternalState
     
     // 🔑 Only Client can access this init (same file = fileprivate access)
     fileprivate init(_ state: SessionInternalState) {
         self._state = state
+    }
+    
+    // MARK: - Codable Implementation (Preserves Ownership Pattern)
+    
+    private enum CodingKeys: String, CodingKey {
+        case state = "_state"
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let state = try container.decode(SessionInternalState.self, forKey: .state)
+        self.init(state)  // Uses fileprivate init - ownership preserved ✅
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_state, forKey: .state)
     }
     
     // Read-only accessors
@@ -68,9 +85,35 @@ struct ReadOnlySessionState: Equatable {
     var lastNetworkCheck: Date? { _state.lastNetworkCheck }
 }
 
-extension SharedReaderKey where Self == InMemoryKey<ReadOnlySessionState>.Default {
+// MARK: - RawRepresentable Conformance for AppStorage (Preserves Ownership)
+
+extension ReadOnlySessionState: RawRepresentable {
+    typealias RawValue = String
+    
+    var rawValue: String {
+        do {
+            let data = try JSONEncoder().encode(self)
+            return String(data: data, encoding: .utf8) ?? ""
+        } catch {
+            print("Failed to encode ReadOnlySessionState: \(error)")
+            return ""
+        }
+    }
+    
+    init?(rawValue: String) {
+        guard let data = rawValue.data(using: .utf8) else { return nil }
+        do {
+            self = try JSONDecoder().decode(ReadOnlySessionState.self, from: data)
+        } catch {
+            print("Failed to decode ReadOnlySessionState: \(error)")
+            return nil
+        }
+    }
+}
+
+extension SharedReaderKey where Self == AppStorageKey<ReadOnlySessionState>.Default {
     static var sessionInternalState: Self {
-        Self[.inMemory("sessionInternalState"), default: ReadOnlySessionState(SessionInternalState())]
+        Self[.appStorage("sessionInternalState"), default: ReadOnlySessionState(SessionInternalState())]
     }
 }
 
@@ -166,7 +209,7 @@ struct AuthResult: Sendable {
     let expiresAt: Date
 }
 
-struct InternalAuthUser: Sendable, Equatable {
+struct InternalAuthUser: Sendable, Equatable, Codable {
     let uid: String
     let phoneNumber: String
     let displayName: String?

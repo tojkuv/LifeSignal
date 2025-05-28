@@ -27,7 +27,10 @@ struct RespondersFeature {
         // Add presentations
         @Presents var contactDetails: ContactDetailsSheetFeature.State?
         @Presents var confirmationAlert: AlertState<RespondersAlert>?
+        @Presents var notificationsHistory: NotificationsHistorySheetFeature.State?
         var showClearAllPingsConfirmation = false
+        
+        var contactCards: IdentifiedArrayOf<ContactCardFeature.State> = []
         
         // Computed property for responders
         var responders: [Contact] {
@@ -59,6 +62,17 @@ struct RespondersFeature {
         var pendingPingsCount: Int {
             // Count responders that have incoming pings (these are the "busy" responders)
             responders.filter { $0.hasIncomingPing }.count
+        }
+        
+        var responderCards: IdentifiedArrayOf<ContactCardFeature.State> = []
+        
+        mutating func updateResponderCards() {
+            responderCards = IdentifiedArray(uniqueElements: responders.map { contact in
+                ContactCardFeature.State(
+                    contact: contact,
+                    style: .responder(statusText: responderStatusText(for: contact))
+                )
+            })
         }
 
         // MARK: - Formatting Functions
@@ -196,21 +210,27 @@ struct RespondersFeature {
         case pingContact(Contact)
         case removeContact(Contact)
         case clearAllPings
+        case dismissClearAllPingsAlert
         case showRemoveConfirmation(Contact)
+        case showNotificationsHistory
         
         // UI presentations
         case contactDetails(PresentationAction<ContactDetailsSheetFeature.Action>)
         case confirmationAlert(PresentationAction<RespondersAlert>)
+        case notificationsHistory(PresentationAction<NotificationsHistorySheetFeature.Action>)
+        case contactCards(IdentifiedActionOf<ContactCardFeature>)
         
         // Network responses
         case pingResponse(Result<Void, Error>)
         case removeResponse(Result<Void, Error>)
         case refreshResponse(Result<Void, Error>)
+        case checkInResponse(Result<Void, Error>)
     }
 
     @Dependency(\.contactsClient) var contactsClient
     @Dependency(\.notificationClient) var notificationClient
     @Dependency(\.hapticClient) var haptics
+    @Dependency(\.userClient) var userClient
 
     var body: some ReducerOf<Self> {
         Reduce { state, action in
@@ -219,6 +239,7 @@ struct RespondersFeature {
             case .refreshResponders:
                 guard state.currentUser != nil else { return .none }
                 state.isLoading = true
+                state.updateResponderCards() // Update cards with current data
 
                 return .run { [contactsClient] send in
                     await send(.refreshResponse(Result {
@@ -268,11 +289,49 @@ struct RespondersFeature {
                 state.showClearAllPingsConfirmation = true
                 return .none
 
+            case .dismissClearAllPingsAlert:
+                state.showClearAllPingsConfirmation = false
+                return .none
+
             case let .showRemoveConfirmation(contact):
                 return .send(.removeContact(contact))
 
+            case .showNotificationsHistory:
+                state.notificationsHistory = NotificationsHistorySheetFeature.State()
+                return .none
+
             // UI presentations
+            case .contactDetails(.presented(.dismiss)):
+                state.contactDetails = nil
+                state.updateResponderCards() // Refresh the list after contact deletion
+                return .none
+                
+            case .contactDetails(.presented(.contactDeleteResponse(.success))):
+                // Contact was successfully deleted, refresh the list and close sheet if contact no longer exists
+                state.updateResponderCards()
+                
+                // Check if the contact still exists in the shared state
+                if let contactDetails = state.contactDetails,
+                   state.contactsState.contact(by: contactDetails.contact.id) == nil {
+                    // Contact was deleted, close the sheet
+                    state.contactDetails = nil
+                }
+                return .none
+                
             case .contactDetails:
+                return .none
+
+            case .notificationsHistory:
+                return .none
+
+            case .contactCards(.element(id: let contactId, action: .tapped)):
+                // Handle contact card tap - forward to selectContact
+                if let contact = state.contactsState.contacts.first(where: { $0.id.uuidString == contactId }) {
+                    return .send(.selectContact(contact))
+                }
+                return .none
+
+            case .contactCards:
                 return .none
 
             case .confirmationAlert(.presented(.confirmRemove(let contact))):
@@ -298,14 +357,29 @@ struct RespondersFeature {
                     return updatedContact
                 }
 
-                return .run { [contactsClient, notificationClient] send in
+                return .run { [haptics, notificationClient, contactsClient, userClient, currentUser = state.currentUser] send in
                     await haptics.notification(.success)
                     
-                    // First: Send acknowledgment notifications to each contact who sent pings
+                    // First: Perform check-in since responding to pings means user is safe
+                    await send(.checkInResponse(Result {
+                        guard let user = currentUser else {
+                            throw UserClientError.userNotFound
+                        }
+                        
+                        // Update user with new check-in timestamp
+                        var updatedUser = user
+                        updatedUser.lastCheckedIn = Date()
+                        updatedUser.lastModified = Date()
+                        
+                        // Call updateUser to persist the check-in
+                        try await userClient.updateUser(updatedUser)
+                    }))
+                    
+                    // Second: Send acknowledgment notifications to each contact who sent pings
                     for originalContact in contactsToNotify {
                         do {
                             try await notificationClient.sendPingNotification(
-                                .sendResponderPingResponded,
+                                .receiveDependentPingResponded,
                                 "Ping Acknowledged",
                                 "Your ping has been acknowledged",
                                 originalContact.id
@@ -316,7 +390,7 @@ struct RespondersFeature {
                         }
                     }
                     
-                    // Second: Update each contact's state to clear the pings
+                    // Third: Update each contact's state to clear the pings
                     for contact in contactsToUpdate {
                         await contactsClient.updateContact(contact)
                     }
@@ -336,8 +410,8 @@ struct RespondersFeature {
                 return .run { [haptics, notificationClient] _ in
                     await haptics.notification(.success)
                     try? await notificationClient.sendSystemNotification(
-                        "Success",
-                        "All incoming pings have been cleared successfully."
+                        "Check-in Complete",
+                        "You've checked in and responded to all pings."
                     )
                 }
 
@@ -373,6 +447,12 @@ struct RespondersFeature {
 
             case .refreshResponse(.success):
                 state.isLoading = false
+                state.updateResponderCards()
+                // Also update the contact details if open and the contact still exists
+                if let contactDetails = state.contactDetails,
+                   let updatedContact = state.contactsState.contact(by: contactDetails.contact.id) {
+                    state.contactDetails?.contact = updatedContact
+                }
                 return .none
 
             case let .refreshResponse(.failure(error)):
@@ -384,12 +464,32 @@ struct RespondersFeature {
                         "Unable to refresh responders: \(error.localizedDescription)"
                     )
                 }
+                
+            case .checkInResponse(.success):
+                // Check-in successful - continue with ping clearing
+                return .none
+                
+            case let .checkInResponse(.failure(error)):
+                // Check-in failed but continue with ping clearing anyway
+                return .run { [haptics, notificationClient] _ in
+                    await haptics.notification(.warning)
+                    try? await notificationClient.sendSystemNotification(
+                        "Check-in Issue",
+                        "Unable to complete check-in but pings were cleared: \(error.localizedDescription)"
+                    )
+                }
             }
         }
         .ifLet(\.$contactDetails, action: \.contactDetails) {
             ContactDetailsSheetFeature()
         }
         .ifLet(\.$confirmationAlert, action: \.confirmationAlert)
+        .ifLet(\.$notificationsHistory, action: \.notificationsHistory) {
+            NotificationsHistorySheetFeature()
+        }
+        .forEach(\.responderCards, action: \.contactCards) {
+            ContactCardFeature()
+        }
     }
 }
 
@@ -409,6 +509,9 @@ struct RespondersView: View {
                 .alert("Clear All Pings", isPresented: confirmationBinding, actions: alertActions, message: alertMessage)
                 .sheet(item: $store.scope(state: \.contactDetails, action: \.contactDetails)) { store in
                     ContactDetailsSheetView(store: store)
+                }
+                .sheet(item: $store.scope(state: \.notificationsHistory, action: \.notificationsHistory)) { store in
+                    NotificationsHistorySheetView(store: store)
                 }
         }
     }
@@ -451,14 +554,11 @@ private extension RespondersView {
     
     @ViewBuilder
     var contactsListView: some View {
-        ForEach(store.responders) { responder in
-            ContactCardView(
-                contact: responder,
-                style: .responder(statusText: store.state.responderStatusText(for: responder)),
-                onTap: { store.send(.selectContact(responder), animation: .default) }
-            )
+        ForEach(store.scope(state: \.responderCards, action: \.contactCards)) { cardStore in
+            ContactCardView(store: cardStore, onTap: {})
         }
     }
+    
 }
 
 // MARK: - Toolbar
@@ -481,7 +581,7 @@ private extension RespondersView {
             HStack(spacing: 4) {
                 Image(systemName: store.pendingPingsCount > 0 ? "bell.badge.slash.fill" : "bell.fill")
                     .font(.system(size: 18))
-                Text("Clear")
+                Text("Respond")
                     .font(.body)
             }
             .foregroundColor(store.pendingPingsCount > 0 ? .blue : .gray)
@@ -494,9 +594,6 @@ private extension RespondersView {
         Button(action: notificationCenterAction) {
             Image(systemName: "square.fill.text.grid.1x2")
         }
-        .simultaneousGesture(TapGesture().onEnded { _ in
-            store.send(.clearAllPings, animation: .default)
-        })
     }
 }
 
@@ -507,21 +604,27 @@ private extension RespondersView {
     var confirmationBinding: Binding<Bool> {
         Binding(
             get: { store.showClearAllPingsConfirmation },
-            set: { _ in }
+            set: { newValue in
+                if !newValue {
+                    store.send(.dismissClearAllPingsAlert)
+                }
+            }
         )
     }
     
     @ViewBuilder
     func alertActions() -> some View {
-        Button("Clear All") {
+        Button("Respond") {
             store.send(.confirmationAlert(.presented(.confirmClearAllPings)), animation: .default)
         }
-        Button("Cancel", role: .cancel) { }
+        Button("Cancel", role: .cancel) {
+            store.send(.dismissClearAllPingsAlert)
+        }
     }
     
     @ViewBuilder
     func alertMessage() -> some View {
-        Text("Are you sure you want to clear all pending pings?")
+        Text("This will check you in and respond to all pending pings from your responders.")
     }
 }
 
@@ -538,7 +641,7 @@ private extension RespondersView {
     }
     
     func notificationCenterAction() {
-        // This should be handled by parent feature if needed
+        store.send(.showNotificationsHistory)
     }
 }
 

@@ -22,7 +22,10 @@ struct HomeFeature {
     @ObservableState
     struct State: Equatable {
         // User Data
-        @Shared(.currentUser) var currentUser: User? = nil
+        @Shared(.userState) var userState: ReadOnlyUserState
+        
+        // Convenience accessor for current user
+        var currentUser: User? { userState.currentUser }
 
         // QR Code Properties
         var qrCodeImage: UIImage? = nil
@@ -132,6 +135,8 @@ struct HomeFeature {
     @Dependency(\.userClient) var userClient
     @Dependency(\.notificationClient) var notificationClient
     @Dependency(\.hapticClient) var haptics
+    @Dependency(\.contactsClient) var contactsClient
+    @Dependency(\.sessionClient) var sessionClient
 
     /// Home reducer body implementing business logic
     var body: some ReducerOf<Self> {
@@ -219,6 +224,7 @@ struct HomeFeature {
     private func loadUserEffect() -> Effect<Action> {
         .run { [userClient, haptics, notificationClient] send in
             do {
+                // UserClient automatically updates shared state when loading user data
                 if let user = try await userClient.getUser() {
                     await send(.userLoaded(user))
                 }
@@ -274,6 +280,7 @@ struct HomeFeature {
            let imageData = image.pngData(),
            let user = state.currentUser {
             return .run { [userClient] _ in
+                // UserClient automatically persists QR code updates to shared state
                 await userClient.updateQRCodeImages()
             }
         }
@@ -335,6 +342,7 @@ struct HomeFeature {
            let imageData = image.pngData(),
            let user = state.currentUser {
             return .run { [userClient] _ in
+                // UserClient automatically persists QR code updates to shared state
                 await userClient.updateQRCodeImages()
             }
         }
@@ -363,7 +371,13 @@ struct HomeFeature {
                 user.checkInInterval = interval
                 user.lastModified = Date()
                 try await userClient.updateUser(user)
+                // The shared state will be updated by UserClient, refresh picker to reflect changes
                 await send(.initializeIntervalPicker)
+                await haptics.notification(.success)
+                try? await notificationClient.sendSystemNotification(
+                    "Check-in Interval Updated",
+                    "Your check-in interval has been successfully updated."
+                )
             } catch {
                 await haptics.notification(.error)
                 try? await notificationClient.sendSystemNotification(
@@ -451,6 +465,7 @@ struct HomeFeature {
                 
                 user.lastModified = Date()
                 try await userClient.updateUser(user)
+                // UserClient automatically updates shared state and persists changes
                 
                 await haptics.notification(.success)
                 try? await notificationClient.sendSystemNotification(
@@ -537,13 +552,24 @@ struct HomeFeature {
             
         case let .setShowIntervalChangeConfirmation(show):
             if show, let interval = state.pendingIntervalChange {
-                let intervalText = state.formatInterval(interval)
+                let notificationText = switch Int(interval) {
+                case 0: "disable check-in notifications"
+                case 30: "notify you 30 minutes before check-in expires"
+                case 120: "notify you 2 hours before check-in expires"
+                default: "change notification settings"
+                }
+                
                 state.alert = AlertState {
-                    TextState("Change check-in interval to \(intervalText)?")
+                    TextState("Change Notification Setting")
                 } actions: {
+                    ButtonState(action: .intervalChangeConfirmation(interval)) {
+                        TextState("Change")
+                    }
                     ButtonState(role: .cancel) {
                         TextState("Cancel")
                     }
+                } message: {
+                    TextState("Are you sure you want to \(notificationText)?")
                 }
             } else {
                 state.alert = nil
@@ -562,8 +588,16 @@ struct HomeFeature {
             return handleResetQRConfirmation(state: &state)
             
         case let .alert(.presented(.intervalChangeConfirmation(interval))):
-            state.showIntervalPicker = false
-            return .send(.updateCheckInInterval(interval))
+            switch Int(interval) {
+            case 0:
+                return .send(.updateNotificationSettings(enabled: false, notify30Min: false, notify2Hours: false))
+            case 30:
+                return .send(.updateNotificationSettings(enabled: true, notify30Min: true, notify2Hours: false))
+            case 120:
+                return .send(.updateNotificationSettings(enabled: true, notify30Min: false, notify2Hours: true))
+            default:
+                return .none
+            }
             
         case .alert(.presented(.cameraDenied)):
             return .none
@@ -619,6 +653,7 @@ struct HomeFeature {
                 user.qrCodeId = UUID()
                 user.lastModified = Date()
                 try await userClient.updateUser(user)
+                // UserClient automatically updates shared state and persists changes
                 
                 await haptics.notification(.success)
                 try? await notificationClient.sendSystemNotification(
@@ -849,6 +884,8 @@ struct HomeView: View {
     @Bindable var store: StoreOf<HomeFeature>
 
     var body: some View {
+        @Bindable var bindableStore = store
+        
         WithPerceptionTracking {
             mainContent()
         }
@@ -858,8 +895,43 @@ struct HomeView: View {
         .onAppear {
             store.send(.generateQRCode)
         }
-        .setupSheets(store: store)
-        .setupAlerts(store: store)
+        .sheet(item: $bindableStore.scope(state: \.qrScanner, action: \.qrScanner)) { qrStore in
+            QRScannerView(store: qrStore)
+        }
+        .sheet(item: $bindableStore.scope(state: \.qrShareSheet, action: \.qrShareSheet)) { shareStore in
+            QRCodeShareSheetView(store: shareStore)
+        }
+        .sheet(isPresented: $bindableStore.showIntervalPicker) {
+            IntervalPickerView(store: store)
+                .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $bindableStore.showInstructions) {
+            InstructionsView(store: store)
+        }
+        .sheet(isPresented: $bindableStore.showShareSheet) {
+            if let shareImage = store.shareableImage {
+                ActivityShareSheet(items: ["My LifeSignal QR Code", shareImage])
+            }
+        }
+        .alert(item: $bindableStore.scope(state: \.alert, action: \.alert))
+        .alert("Camera Access Denied", isPresented: $bindableStore.showCameraDeniedAlert) {
+            Button("OK", role: .cancel) { }
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+        } message: {
+            Text("Please allow camera access in Settings to scan QR codes.")
+        }
+        .alert("Reset QR Code", isPresented: $bindableStore.showResetQRConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Reset") {
+                store.send(.resetQRCode)
+            }
+        } message: {
+            Text("Are you sure you want to reset your QR code? This will invalidate any previously shared QR codes.")
+        }
     }
 
     // MARK: - Main Content
@@ -1074,8 +1146,17 @@ struct HomeView: View {
                     }
                 },
                 set: { (newValue: Int) in
-                    store.send(.setPendingIntervalChange(TimeInterval(newValue)))
-                    store.send(.setShowIntervalChangeConfirmation(true))
+                    let currentValue = switch store.currentUser?.notificationPreference ?? .thirtyMinutes {
+                    case .disabled: 0
+                    case .thirtyMinutes: 30
+                    case .twoHours: 120
+                    }
+                    
+                    // Only show confirmation if value actually changed
+                    if newValue != currentValue {
+                        store.send(.setPendingIntervalChange(TimeInterval(newValue)))
+                        store.send(.setShowIntervalChangeConfirmation(true))
+                    }
                 }
             )) {
                 Text("Disabled").tag(0)
@@ -1148,89 +1229,3 @@ struct HomeView: View {
     }
 }
 
-// MARK: - View Extensions
-
-extension View {
-    @ViewBuilder
-    func setupSheets(store: StoreOf<HomeFeature>) -> some View {
-        @Bindable var bindableStore = store
-        return self
-            .sheet(item: $bindableStore.scope(state: \.qrScanner, action: \.qrScanner)) { qrStore in
-                QRScannerView(store: qrStore)
-            }
-            .sheet(item: $bindableStore.scope(state: \.qrShareSheet, action: \.qrShareSheet)) { shareStore in
-                QRCodeShareSheetView(store: shareStore)
-            }
-            .sheet(isPresented: $bindableStore.showIntervalPicker) {
-                IntervalPickerView(store: store)
-                    .presentationDetents([.medium])
-            }
-            .sheet(isPresented: $bindableStore.showInstructions) {
-                InstructionsView(store: store)
-            }
-            .sheet(isPresented: $bindableStore.showShareSheet) {
-                if let shareImage = store.shareableImage {
-                    ActivityShareSheet(items: ["My LifeSignal QR Code", shareImage])
-                }
-            }
-    }
-    
-    @ViewBuilder
-    func setupAlerts(store: StoreOf<HomeFeature>) -> some View {
-        @Bindable var bindableStore = store
-        return self
-            .alert("Change Notification Setting?", isPresented: $bindableStore.showIntervalChangeConfirmation) {
-                Button("Cancel", role: .cancel) {
-                    store.send(.setShowIntervalChangeConfirmation(false))
-                }
-                Button("Change") {
-                    if let interval = store.pendingIntervalChange {
-                        switch Int(interval) {
-                        case 0:
-                            store.send(.updateNotificationSettings(enabled: false, notify30Min: false, notify2Hours: false))
-                        case 30:
-                            store.send(.updateNotificationSettings(enabled: true, notify30Min: true, notify2Hours: false))
-                        case 120:
-                            store.send(.updateNotificationSettings(enabled: true, notify30Min: false, notify2Hours: true))
-                        default:
-                            break
-                        }
-                    }
-                    store.send(.setShowIntervalChangeConfirmation(false))
-                }
-            } message: {
-                if let interval = store.pendingIntervalChange {
-                    switch Int(interval) {
-                    case 0:
-                        Text("Are you sure you want to disable check-in notifications?")
-                    case 30:
-                        Text("You'll be notified 30 minutes before your check-in expires. Is this correct?")
-                    case 120:
-                        Text("You'll be notified 2 hours before your check-in expires. Is this correct?")
-                    default:
-                        Text("Are you sure you want to change your notification setting?")
-                    }
-                } else {
-                    Text("Are you sure you want to change your notification setting?")
-                }
-            }
-            .alert("Camera Access Denied", isPresented: $bindableStore.showCameraDeniedAlert) {
-                Button("OK", role: .cancel) { }
-                Button("Open Settings") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url)
-                    }
-                }
-            } message: {
-                Text("Please allow camera access in Settings to scan QR codes.")
-            }
-            .alert("Reset QR Code", isPresented: $bindableStore.showResetQRConfirmation) {
-                Button("Cancel", role: .cancel) { }
-                Button("Reset") {
-                    store.send(.resetQRCode)
-                }
-            } message: {
-                Text("Are you sure you want to reset your QR code? This will invalidate any previously shared QR codes.")
-            }
-    }
-}

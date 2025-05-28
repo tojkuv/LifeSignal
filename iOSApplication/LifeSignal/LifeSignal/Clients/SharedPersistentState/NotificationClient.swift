@@ -84,7 +84,6 @@ struct MarkNotificationRequest: Sendable {
     let authToken: String
 }
 
-
 struct MarkAllNotificationsReadRequest: Sendable {
     let authToken: String
 }
@@ -168,12 +167,14 @@ struct Notification_Proto: Sendable {
         // Ping communications (Medium/Low Priority)
         case sendDependentPing = 9                  // User → Dependent ping
         case receiveResponderPing = 10              // User ← Responder ping
-        case sendResponderPingResponded = 11        // User → Responder response
+        case cancelDependentPing = 11               // User canceled ping sent to dependent
         case receiveDependentPingResponded = 12     // User ← Dependent response
         case sendClearAllResponderPings = 13        // User cleared all responder pings
         
         // System notifications
         case receiveSystemNotification = 14         // General system messages
+        case receiveSystemNotificationSuccess = 15  // System success messages
+        case receiveSystemNotificationError = 16    // System error messages
     }
 }
 
@@ -203,8 +204,25 @@ final class MockNotificationService: NotificationServiceProtocol {
                 let hourOffset = Double(i * 8) // Spread throughout the day
                 let notificationDate = date.addingTimeInterval(-hourOffset * 3600)
                 
-                let types: [Notification_Proto.Notification_Type] = [.sendManualAlertActive, .receiveDependentManualAlertActive, .receiveResponderPing, .sendDependentPing, .receiveSystemNotification]
-                let randomType = types.randomElement() ?? .receiveSystemNotification
+                let allTypes: [Notification_Proto.Notification_Type] = [
+                    // Alerts
+                    .sendManualAlertActive, .sendManualAlertInactive, 
+                    .receiveDependentManualAlertActive, .receiveDependentManualAlertInactive,
+                    .receiveNonResponsiveAlert, .receiveNonResponsiveDependentAlert,
+                    
+                    // Pings
+                    .receiveResponderPing, .sendDependentPing, .cancelDependentPing, 
+                    .receiveDependentPingResponded, .sendClearAllResponderPings,
+                    
+                    // Contact Updates
+                    .receiveContactAdded, .receiveContactRemoved, .receiveContactRoleChanged,
+                    
+                    // System
+                    .receiveSystemNotificationSuccess, .receiveSystemNotificationError
+                ]
+                let randomType = allTypes.randomElement() ?? .receiveSystemNotificationSuccess
+                
+                let hasContactId = [.receiveDependentManualAlertActive, .receiveDependentManualAlertInactive, .receiveNonResponsiveDependentAlert, .receiveResponderPing, .sendDependentPing, .cancelDependentPing, .receiveDependentPingResponded, .receiveContactAdded, .receiveContactRemoved, .receiveContactRoleChanged].contains(randomType)
                 
                 let notification = Notification_Proto(
                     id: UUID().uuidString,
@@ -212,9 +230,9 @@ final class MockNotificationService: NotificationServiceProtocol {
                     type: randomType,
                     title: Self.titleFor(type: randomType),
                     message: Self.messageFor(type: randomType),
-                    isRead: Bool.random(),
+                    isRead: dayOffset > 2 ? true : Bool.random(), // Recent notifications more likely to be unread
                     createdAt: Int64(notificationDate.timeIntervalSince1970),
-                    contactId: [.receiveResponderPing, .sendDependentPing, .sendResponderPingResponded, .receiveDependentPingResponded].contains(randomType) ? UUID().uuidString : nil,
+                    contactId: hasContactId ? UUID().uuidString : nil,
                     userId: request.userId.uuidString,
                     metadata: [:]
                 )
@@ -234,35 +252,281 @@ final class MockNotificationService: NotificationServiceProtocol {
         case .receiveDependentManualAlertInactive: return "Dependent Alert Resolved"
         case .receiveNonResponsiveAlert: return "Missed Check-in"
         case .receiveNonResponsiveDependentAlert: return "Dependent Non-Responsive"
-        case .receiveContactAdded: return "Contact Added"
-        case .receiveContactRemoved: return "Contact Removed"
-        case .receiveContactRoleChanged: return "Role Changed"
-        case .sendDependentPing: return "Ping Sent to Dependent"
-        case .receiveResponderPing: return "Ping from Responder"
-        case .sendResponderPingResponded: return "Response Sent to Responder"
-        case .receiveDependentPingResponded: return "Response from Dependent"
-        case .sendClearAllResponderPings: return "Pings Cleared"
-        case .receiveSystemNotification: return "System"
+        case .receiveContactAdded: 
+            let contactAddedTitles = [
+                "Contact Added",
+                "New Responder",
+                "Emergency Contact Added",
+                "Safety Network Updated",
+                "Invitation Accepted",
+                "Dependent Added",
+                "Response Team Updated",
+                "Contact Joined"
+            ]
+            return contactAddedTitles.randomElement() ?? "Contact Added"
+        case .receiveContactRemoved:
+            let contactRemovedTitles = [
+                "Contact Removed",
+                "Responder Left",
+                "Safety Network Updated",
+                "Emergency Contact Removed",
+                "Response Team Updated",
+                "Contact Departed"
+            ]
+            return contactRemovedTitles.randomElement() ?? "Contact Removed"
+        case .receiveContactRoleChanged:
+            let roleChangedTitles = [
+                "Role Updated",
+                "Permissions Changed",
+                "Contact Promoted",
+                "Role Changed",
+                "Status Updated",
+                "Emergency Role Updated"
+            ]
+            return roleChangedTitles.randomElement() ?? "Role Changed"
+        case .sendDependentPing: 
+            let sendPingTitles = [
+                "Check-in Request Sent",
+                "Safety Check Sent",
+                "Ping Sent",
+                "Wellness Check Requested",
+                "Status Check Sent"
+            ]
+            return sendPingTitles.randomElement() ?? "Check-in Request Sent"
+        case .receiveResponderPing: 
+            let receivePingTitles = [
+                "Check-in Request Received",
+                "Safety Check Requested",
+                "Ping Received",
+                "Wellness Check",
+                "Status Check Request"
+            ]
+            return receivePingTitles.randomElement() ?? "Check-in Request Received"
+        case .cancelDependentPing: 
+            let cancelPingTitles = [
+                "Check-in Request Canceled",
+                "Safety Check Withdrawn",
+                "Ping Canceled",
+                "Request Retracted",
+                "Check Canceled"
+            ]
+            return cancelPingTitles.randomElement() ?? "Check-in Request Canceled"
+        case .receiveDependentPingResponded: 
+            let respondedTitles = [
+                "Check-in Response Received",
+                "Safety Confirmed",
+                "Ping Response",
+                "Status Confirmed",
+                "All Clear Response"
+            ]
+            return respondedTitles.randomElement() ?? "Check-in Response Received"
+        case .sendClearAllResponderPings: 
+            let clearAllTitles = [
+                "All Check-in Requests Cleared",
+                "All Pings Acknowledged",
+                "Safety Confirmed to All",
+                "All Checks Responded",
+                "Bulk Response Sent"
+            ]
+            return clearAllTitles.randomElement() ?? "All Check-in Requests Cleared"
+        case .receiveSystemNotification: 
+            let systemTitles = [
+                "Settings Updated",
+                "Interval Changed", 
+                "QR Code Reset",
+                "Profile Synced",
+                "Backup Complete",
+                "App Updated"
+            ]
+            return systemTitles.randomElement() ?? "System"
+        case .receiveSystemNotificationSuccess:
+            let successTitles = [
+                "Settings Saved",
+                "Profile Updated",
+                "Backup Complete",
+                "Sync Successful",
+                "Preferences Applied",
+                "Data Exported"
+            ]
+            return successTitles.randomElement() ?? "Success"
+        case .receiveSystemNotificationError:
+            let errorTitles = [
+                "Sync Failed",
+                "Connection Error",
+                "Settings Error",
+                "Export Failed",
+                "Backup Failed",
+                "Update Error"
+            ]
+            return errorTitles.randomElement() ?? "Error"
         }
     }
     
     private static func messageFor(type: Notification_Proto.Notification_Type) -> String {
         switch type {
-        case .sendManualAlertActive: return "Emergency alert has been activated"
-        case .sendManualAlertInactive: return "Emergency alert has been deactivated"
-        case .receiveDependentManualAlertActive: return "A dependent has activated an emergency alert"
-        case .receiveDependentManualAlertInactive: return "A dependent has deactivated their emergency alert"
-        case .receiveNonResponsiveAlert: return "You missed your scheduled check-in"
-        case .receiveNonResponsiveDependentAlert: return "A dependent hasn't checked in on time"
-        case .receiveContactAdded: return "A new contact was added to your network"
-        case .receiveContactRemoved: return "A contact was removed from your network"
-        case .receiveContactRoleChanged: return "A contact's role has been updated"
-        case .sendDependentPing: return "You sent a ping to a dependent"
-        case .receiveResponderPing: return "You received a ping from a responder"
-        case .sendResponderPingResponded: return "You responded to a responder's ping"
-        case .receiveDependentPingResponded: return "Your dependent responded to your ping"
-        case .sendClearAllResponderPings: return "All received responder pings have been cleared"
-        case .receiveSystemNotification: return "System notification message"
+        case .sendManualAlertActive: 
+            let alertActiveMessages = [
+                "Your emergency alert has been activated and all responders have been notified",
+                "Emergency alert is now active - your safety team has been alerted",
+                "You've activated your emergency alert - help is being notified",
+                "Emergency signal sent to all your responders - assistance is on the way"
+            ]
+            return alertActiveMessages.randomElement() ?? "Your emergency alert has been activated and all responders have been notified"
+        case .sendManualAlertInactive: 
+            let alertInactiveMessages = [
+                "Your emergency alert has been deactivated and responders have been notified",
+                "Emergency alert turned off - your safety team has been informed",
+                "You've deactivated your emergency alert - all clear signal sent",
+                "Emergency resolved - responders have been notified of your safety"
+            ]
+            return alertInactiveMessages.randomElement() ?? "Your emergency alert has been deactivated and responders have been notified"
+        case .receiveDependentManualAlertActive: 
+            let dependentAlertMessages = [
+                "Sarah Johnson has activated an emergency alert and needs immediate assistance",
+                "EMERGENCY: Mike Wilson requires immediate help - alert activated",
+                "Alex Chen has triggered an emergency alert - respond immediately",
+                "URGENT: Jessica Taylor needs assistance - emergency alert active",
+                "David Kim activated emergency alert - immediate response required"
+            ]
+            return dependentAlertMessages.randomElement() ?? "Someone has activated an emergency alert and needs immediate assistance"
+        case .receiveDependentManualAlertInactive: 
+            let dependentResolvedMessages = [
+                "Sarah Johnson has deactivated their emergency alert - situation resolved",
+                "Mike Wilson's emergency has been resolved - alert deactivated",
+                "Alex Chen is safe - emergency alert has been turned off",
+                "Jessica Taylor's emergency resolved - no longer needs assistance",
+                "David Kim deactivated emergency alert - situation under control"
+            ]
+            return dependentResolvedMessages.randomElement() ?? "Emergency alert has been deactivated - situation resolved"
+        case .receiveNonResponsiveAlert: 
+            let missedCheckinMessages = [
+                "You missed your 2:00 PM check-in. Please confirm your safety when possible",
+                "Scheduled check-in was missed 45 minutes ago - please respond",
+                "You haven't checked in for your 6:00 AM interval - confirm you're okay",
+                "Missed check-in detected - please verify your safety status",
+                "Check-in overdue by 1 hour - respond to confirm you're safe"
+            ]
+            return missedCheckinMessages.randomElement() ?? "You missed your scheduled check-in. Please confirm your safety when possible"
+        case .receiveNonResponsiveDependentAlert: 
+            let dependentMissedMessages = [
+                "Mike Wilson missed their scheduled check-in 30 minutes ago",
+                "Sarah Johnson hasn't checked in for 2 hours - last seen at 4:00 PM",
+                "Alex Chen is overdue for check-in by 45 minutes",
+                "Jessica Taylor missed her morning check-in - no response yet",
+                "David Kim hasn't responded to check-in for 1.5 hours"
+            ]
+            return dependentMissedMessages.randomElement() ?? "Someone missed their scheduled check-in"
+        case .receiveContactAdded: 
+            let contactAddedMessages = [
+                "Alex Chen has been added to your emergency response network",
+                "Maria Rodriguez has joined as your emergency responder",
+                "David Kim has been added to your emergency contacts",
+                "Jessica Taylor is now part of your safety network",
+                "Michael Brown has accepted your emergency contact invitation",
+                "Lisa Wang has been added as your dependent contact",
+                "James Wilson has joined your emergency response team",
+                "Sarah Mitchell is now in your emergency contact list"
+            ]
+            return contactAddedMessages.randomElement() ?? "New contact has been added to your emergency response network"
+        case .receiveContactRemoved:
+            let contactRemovedMessages = [
+                "Emma Davis has been removed from your emergency response network",
+                "John Smith is no longer in your emergency contacts",
+                "Amanda Wilson has left your safety network",
+                "Robert Lee has been removed from your response team",
+                "Samantha Jones is no longer your emergency responder",
+                "Carlos Martinez has been removed from your emergency contacts"
+            ]
+            return contactRemovedMessages.randomElement() ?? "Contact has been removed from your emergency response network"
+        case .receiveContactRoleChanged:
+            let roleChangedMessages = [
+                "Tom Brown's role has been updated from Dependent to Responder",
+                "Linda Garcia's permissions have been changed to Emergency Responder",
+                "Kevin Park has been promoted from Contact to Dependent",
+                "Ashley Chen's role has been updated to Emergency Responder",
+                "Daniel Rodriguez's status has been changed to Dependent",
+                "Rachel Kim has been promoted to Emergency Responder role"
+            ]
+            return roleChangedMessages.randomElement() ?? "Contact's role has been updated in your emergency network"
+        case .sendDependentPing: 
+            let sendPingMessages = [
+                "You sent a check-in request to Sarah Johnson",
+                "Check-in request sent to Mike Wilson - waiting for response",
+                "You pinged Alex Chen to confirm their safety",
+                "Check-in request sent to Jessica Taylor",
+                "You requested a safety check from David Kim",
+                "Ping sent to Maria Rodriguez - awaiting confirmation"
+            ]
+            return sendPingMessages.randomElement() ?? "You sent a check-in request"
+        case .receiveResponderPing: 
+            let receivePingMessages = [
+                "Mike Wilson sent you a check-in request - tap to respond",
+                "Sarah Johnson is checking on you - please confirm you're safe",
+                "Alex Chen wants to know if you're okay - respond when possible",
+                "Jessica Taylor sent a safety check - tap to reply",
+                "David Kim is asking for a check-in confirmation",
+                "Maria Rodriguez pinged you - please respond to confirm safety"
+            ]
+            return receivePingMessages.randomElement() ?? "Someone sent you a check-in request - tap to respond"
+        case .cancelDependentPing: 
+            let cancelPingMessages = [
+                "You canceled the check-in request sent to Sarah Johnson",
+                "Check-in request to Mike Wilson has been withdrawn",
+                "You retracted the safety ping sent to Alex Chen",
+                "Check-in request to Jessica Taylor was canceled",
+                "You withdrew the ping sent to David Kim",
+                "Safety check request to Maria Rodriguez has been canceled"
+            ]
+            return cancelPingMessages.randomElement() ?? "You canceled a check-in request"
+        case .receiveDependentPingResponded: 
+            let respondedMessages = [
+                "Sarah Johnson responded to your check-in request - they're safe",
+                "Mike Wilson confirmed they are okay and safe",
+                "Alex Chen replied to your safety check - all good",
+                "Jessica Taylor responded - no assistance needed",
+                "David Kim confirmed their safety status",
+                "Maria Rodriguez checked in - everything is fine"
+            ]
+            return respondedMessages.randomElement() ?? "Someone responded to your check-in request - they're safe"
+        case .sendClearAllResponderPings: 
+            let clearAllMessages = [
+                "All received check-in requests have been acknowledged and cleared",
+                "You've responded to all pending safety checks from your responders",
+                "All incoming pings have been cleared - responders have been notified",
+                "You've acknowledged all check-in requests and confirmed your safety",
+                "All pending safety checks have been cleared and responded to"
+            ]
+            return clearAllMessages.randomElement() ?? "All received check-in requests have been acknowledged and cleared"
+        case .receiveSystemNotification: 
+            let systemMessages = [
+                "Your notification preferences have been updated successfully",
+                "Check-in interval has been changed to 24 hours",
+                "QR code has been reset - previous codes are no longer valid",
+                "Profile information has been synchronized",
+                "Emergency contact list has been backed up",
+                "App updated to version 2.1.0 with improved performance"
+            ]
+            return systemMessages.randomElement() ?? "System notification"
+        case .receiveSystemNotificationSuccess:
+            let successMessages = [
+                "Your settings have been saved successfully",
+                "Profile information updated and synchronized",
+                "Emergency contact backup completed successfully",
+                "Data sync completed - all information is up to date",
+                "Notification preferences applied successfully",
+                "All data has been exported to your device successfully"
+            ]
+            return successMessages.randomElement() ?? "Operation completed successfully"
+        case .receiveSystemNotificationError:
+            let errorMessages = [
+                "Failed to sync your profile - please try again",
+                "Connection error occurred - check your network",
+                "Unable to update settings - verify your connection",
+                "Export operation failed - check available storage space",
+                "Backup failed - please check your connection and retry",
+                "Update could not be completed - try again later"
+            ]
+            return errorMessages.randomElement() ?? "An error occurred - please try again"
         }
     }
 
@@ -316,6 +580,7 @@ final class MockNotificationService: NotificationServiceProtocol {
         return Empty_Proto()
     }
 
+
     
     func notifyEmergencyAlertToggled(_ request: NotifyEmergencyAlertRequest) async throws -> Empty_Proto {
         try await Task.sleep(for: .milliseconds(800))
@@ -363,7 +628,7 @@ final class MockNotificationService: NotificationServiceProtocol {
                         let notification = NotificationItem(
                             title: "Real-time Notification",
                             message: "This is a simulated real-time notification from stream",
-                            type: [NotificationType.sendManualAlertActive, .receiveResponderPing, .receiveSystemNotification].randomElement() ?? .receiveSystemNotification
+                            type: [NotificationType.sendManualAlertActive, .receiveResponderPing, .cancelDependentPing, .receiveSystemNotificationSuccess, .receiveSystemNotificationError].randomElement() ?? .receiveSystemNotificationSuccess
                         )
                         
                         let updateEvent = NotificationStreamEvent(
@@ -413,10 +678,12 @@ extension Notification_Proto.Notification_Type {
         case .receiveContactRoleChanged: return .receiveContactRoleChanged
         case .sendDependentPing: return .sendDependentPing
         case .receiveResponderPing: return .receiveResponderPing
-        case .sendResponderPingResponded: return .sendResponderPingResponded
+        case .cancelDependentPing: return .cancelDependentPing
         case .receiveDependentPingResponded: return .receiveDependentPingResponded
         case .sendClearAllResponderPings: return .sendClearAllResponderPings
         case .receiveSystemNotification: return .receiveSystemNotification
+        case .receiveSystemNotificationSuccess: return .receiveSystemNotificationSuccess
+        case .receiveSystemNotificationError: return .receiveSystemNotificationError
         }
     }
 }
@@ -435,10 +702,12 @@ extension NotificationType {
         case .receiveContactRoleChanged: return .receiveContactRoleChanged
         case .sendDependentPing: return .sendDependentPing
         case .receiveResponderPing: return .receiveResponderPing
-        case .sendResponderPingResponded: return .sendResponderPingResponded
+        case .cancelDependentPing: return .cancelDependentPing
         case .receiveDependentPingResponded: return .receiveDependentPingResponded
         case .sendClearAllResponderPings: return .sendClearAllResponderPings
         case .receiveSystemNotification: return .receiveSystemNotification
+        case .receiveSystemNotificationSuccess: return .receiveSystemNotificationSuccess
+        case .receiveSystemNotificationError: return .receiveSystemNotificationError
         }
     }
 }
@@ -511,7 +780,7 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate, @u
 // MARK: - Notification Shared State
 
 // 1. Mutable internal state (private to Client)
-struct NotificationState: Equatable {
+struct NotificationState: Equatable, Codable {
     var notifications: [NotificationItem]
     var unreadNotificationCount: Int
     var pendingNotificationActions: [PendingNotificationAction]
@@ -534,12 +803,29 @@ struct NotificationState: Equatable {
 }
 
 // 2. Read-only wrapper (prevents direct mutation)
-struct ReadOnlyNotificationState: Equatable {
+struct ReadOnlyNotificationState: Equatable, Codable {
     private let _state: NotificationState
     
     // 🔑 Only Client can access this init (same file = fileprivate access)
     fileprivate init(_ state: NotificationState) {
         self._state = state
+    }
+    
+    // MARK: - Codable Implementation (Preserves Ownership Pattern)
+    
+    private enum CodingKeys: String, CodingKey {
+        case state = "_state"
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let state = try container.decode(NotificationState.self, forKey: .state)
+        self.init(state)  // Uses fileprivate init - ownership preserved ✅
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_state, forKey: .state)
     }
     
     // Read-only accessors
@@ -550,9 +836,35 @@ struct ReadOnlyNotificationState: Equatable {
     var lastSyncTimestamp: Date? { _state.lastSyncTimestamp }
 }
 
-extension SharedReaderKey where Self == InMemoryKey<ReadOnlyNotificationState>.Default {
+// MARK: - RawRepresentable Conformance for AppStorage (Preserves Ownership)
+
+extension ReadOnlyNotificationState: RawRepresentable {
+    typealias RawValue = String
+    
+    var rawValue: String {
+        do {
+            let data = try JSONEncoder().encode(self)
+            return String(data: data, encoding: .utf8) ?? ""
+        } catch {
+            print("Failed to encode ReadOnlyNotificationState: \(error)")
+            return ""
+        }
+    }
+    
+    init?(rawValue: String) {
+        guard let data = rawValue.data(using: .utf8) else { return nil }
+        do {
+            self = try JSONDecoder().decode(ReadOnlyNotificationState.self, from: data)
+        } catch {
+            print("Failed to decode ReadOnlyNotificationState: \(error)")
+            return nil
+        }
+    }
+}
+
+extension SharedReaderKey where Self == AppStorageKey<ReadOnlyNotificationState>.Default {
     static var notificationState: Self {
-        Self[.inMemory("notificationState"), default: ReadOnlyNotificationState(NotificationState())]
+        Self[.appStorage("notificationState"), default: ReadOnlyNotificationState(NotificationState())]
     }
 }
 
@@ -687,15 +999,17 @@ enum NotificationType: String, Codable, CaseIterable, Identifiable, Sendable {
     case receiveContactRoleChanged = "receive_contact_role_changed"         // Contact role changed
     
     // MARK: - Ping Communications (Medium/Low Priority)
-    // Ping lifecycle: User → Contact → Response
+    // Essential ping operations only
     case sendDependentPing = "send_dependent_ping"                       // User sent ping to dependent
     case receiveResponderPing = "receive_responder_ping"               // User received ping from responder
-    case sendResponderPingResponded = "send_responder_ping_responded"    // User responded to responder's ping
-    case receiveDependentPingResponded = "receive_dependent_ping_responded" // User received response from dependent
-    case sendClearAllResponderPings = "send_clear_all_responder_pings"                     // User cleared all received responder pings
+    case cancelDependentPing = "cancel_dependent_ping"                  // User canceled ping sent to dependent
+    case receiveDependentPingResponded = "receive_dependent_ping_responded" // Dependent responded to sent ping
+    case sendClearAllResponderPings = "send_clear_all_responder_pings"   // User cleared all received pings
     
     // MARK: - System Notifications (Low Priority)
     case receiveSystemNotification = "receive_system_notification"          // General system messages
+    case receiveSystemNotificationSuccess = "receive_system_notification_success" // System success messages
+    case receiveSystemNotificationError = "receive_system_notification_error"     // System error messages
     
     var id: String { rawValue }
     
@@ -720,16 +1034,20 @@ enum NotificationType: String, Codable, CaseIterable, Identifiable, Sendable {
         case .receiveContactRoleChanged:
             return "Role Changed"
         case .sendDependentPing:
-            return "Ping Sent to Dependent"
+            return "Check-in Request Sent"
         case .receiveResponderPing:
-            return "Ping from Responder"
-        case .sendResponderPingResponded:
-            return "Response Sent to Responder"
+            return "Check-in Request Received"
+        case .cancelDependentPing:
+            return "Check-in Request Canceled"
         case .receiveDependentPingResponded:
-            return "Response from Dependent"
+            return "Check-in Response Received"
         case .sendClearAllResponderPings:
-            return "Pings Cleared"
+            return "All Requests Cleared"
         case .receiveSystemNotification:
+            return "System"
+        case .receiveSystemNotificationSuccess:
+            return "System"
+        case .receiveSystemNotificationError:
             return "System"
         }
     }
@@ -742,9 +1060,9 @@ enum NotificationType: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .sendManualAlertActive, .receiveDependentManualAlertActive, .receiveNonResponsiveAlert, .receiveNonResponsiveDependentAlert:
             return .high
-        case .sendManualAlertInactive, .receiveDependentManualAlertInactive, .receiveResponderPing, .sendResponderPingResponded:
+        case .sendManualAlertInactive, .receiveDependentManualAlertInactive, .receiveResponderPing:
             return .medium
-        case .receiveContactAdded, .receiveContactRemoved, .receiveContactRoleChanged, .sendDependentPing, .receiveDependentPingResponded, .sendClearAllResponderPings, .receiveSystemNotification:
+        case .receiveContactAdded, .receiveContactRemoved, .receiveContactRoleChanged, .sendDependentPing, .cancelDependentPing, .receiveDependentPingResponded, .sendClearAllResponderPings, .receiveSystemNotification, .receiveSystemNotificationSuccess, .receiveSystemNotificationError:
             return .low
         }
     }
@@ -773,7 +1091,7 @@ enum NotificationType: String, Codable, CaseIterable, Identifiable, Sendable {
     /// Indicates if this notification type is related to ping communications
     var isPingRelated: Bool {
         switch self {
-        case .sendDependentPing, .receiveResponderPing, .sendResponderPingResponded, .receiveDependentPingResponded, .sendClearAllResponderPings:
+        case .sendDependentPing, .receiveResponderPing, .cancelDependentPing, .receiveDependentPingResponded, .sendClearAllResponderPings:
             return true
         default:
             return false
@@ -941,23 +1259,28 @@ struct NotificationClient {
     var clearFCMToken: @Sendable () async throws -> Void = { }
     var refreshFCMToken: @Sendable () async throws -> String? = { nil }
     
+    
+    
+    
     // Emergency Alert operations
     var notifyEmergencyAlertToggled: @Sendable (UUID, Bool) async throws -> Void = { _, _ in throw NotificationClientError.saveFailed("Operation failed") }
-    
-    // Ping management operations
-    var clearAllReceivedPings: @Sendable () async throws -> Void = { }
-    var clearSentPing: @Sendable (UUID) async throws -> Void = { _ in }
     
     // Contact notification operations
     var notifyContactAdded: @Sendable (UUID) async throws -> Void = { _ in }
     var notifyContactRemoved: @Sendable (UUID) async throws -> Void = { _ in }
     var notifyContactRoleChanged: @Sendable (UUID) async throws -> Void = { _ in }
     
+    // Ping management operations
+    var clearAllReceivedPings: @Sendable () async throws -> Void = { }
+    var clearSentPing: @Sendable (UUID) async throws -> Void = { _ in }
+    
+    
     // Ping notification methods (explicit feature-driven)
     var sendPingNotification: @Sendable (NotificationType, String, String, UUID) async throws -> Void = { _, _, _, _ in throw NotificationClientError.saveFailed("Operation failed") }
     
     // Local device scheduling (not tracked in history)
     var scheduleLocalCheckInReminder: @Sendable (Date, String) async throws -> Void = { _, _ in }
+    
     
     // System notification method for local feedback (not tracked in persistent history)
     var sendSystemNotification: @Sendable (String, String) async throws -> Void = { _, _ in }
@@ -999,7 +1322,7 @@ extension NotificationClient: DependencyKey {
             let stream = try await service.startNotificationStream(streamRequest)
             
             // Handle both initial history and real-time updates through single stream
-            Task {
+            Task { @MainActor in
                 for try await event in stream {
                     @Shared(.notificationState) var sharedNotificationState
                     
@@ -1123,10 +1446,6 @@ extension NotificationClient: DependencyKey {
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         },
         
-        
-        
-        
-        
         scheduleNotification: { notification, delay in
             let authInfo = try await Self.getAuthenticatedUserInfo()
             let service = MockNotificationService()
@@ -1174,13 +1493,11 @@ extension NotificationClient: DependencyKey {
             return notification.id.uuidString
         },
         
-        
         cancelScheduledNotification: { identifier in
             // Simulate delay
             try await Task.sleep(for: .milliseconds(150))
             // Mock cancellation always succeeds
         },
-        
         
         requestPermission: {
             // Mock always grants permission
@@ -1253,6 +1570,61 @@ extension NotificationClient: DependencyKey {
             // Stream will handle updating shared state
         },
         
+        // Contact notification operations
+        notifyContactAdded: { contactId in
+            let authInfo = try await Self.getAuthenticatedUserInfo()
+            let service = MockNotificationService()
+            
+            let request = AddNotificationRequest(
+                userId: authInfo.user.id,
+                type: .receiveContactAdded,
+                title: NotificationType.receiveContactAdded.title,
+                message: "A new emergency contact has been added to your network",
+                contactId: contactId,
+                metadata: ["action": "contact_added"],
+                authToken: authInfo.token
+            )
+            
+            _ = try await service.addNotification(request)
+            // Stream will handle updating shared state
+        },
+        
+        notifyContactRemoved: { contactId in
+            let authInfo = try await Self.getAuthenticatedUserInfo()
+            let service = MockNotificationService()
+            
+            let request = AddNotificationRequest(
+                userId: authInfo.user.id,
+                type: .receiveContactRemoved,
+                title: "Contact Removed",
+                message: "A contact was removed from your network",
+                contactId: contactId,
+                metadata: ["action": "contact_removed"],
+                authToken: authInfo.token
+            )
+            
+            _ = try await service.addNotification(request)
+            // Stream will handle updating shared state
+        },
+        
+        notifyContactRoleChanged: { contactId in
+            let authInfo = try await Self.getAuthenticatedUserInfo()
+            let service = MockNotificationService()
+            
+            let request = AddNotificationRequest(
+                userId: authInfo.user.id,
+                type: .receiveContactRoleChanged,
+                title: "Role Changed",
+                message: "A contact's role has been updated",
+                contactId: contactId,
+                metadata: ["action": "role_changed"],
+                authToken: authInfo.token
+            )
+            
+            _ = try await service.addNotification(request)
+            // Stream will handle updating shared state
+        },
+        
         // Ping management operations
         clearAllReceivedPings: {
             let authInfo = try await Self.getAuthenticatedUserInfo()
@@ -1304,61 +1676,6 @@ extension NotificationClient: DependencyKey {
             // 4. Server streams all updates back to clients
             //
             // Stream will handle updating all shared state - no direct manipulation here
-        },
-        
-        // Contact notification operations
-        notifyContactAdded: { contactId in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
-            
-            let request = AddNotificationRequest(
-                userId: authInfo.user.id,
-                type: .receiveContactAdded,
-                title: "Contact Added",
-                message: "A new contact was added to your network",
-                contactId: contactId,
-                metadata: ["action": "contact_added"],
-                authToken: authInfo.token
-            )
-            
-            _ = try await service.addNotification(request)
-            // Stream will handle updating shared state
-        },
-        
-        notifyContactRemoved: { contactId in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
-            
-            let request = AddNotificationRequest(
-                userId: authInfo.user.id,
-                type: .receiveContactRemoved,
-                title: "Contact Removed",
-                message: "A contact was removed from your network",
-                contactId: contactId,
-                metadata: ["action": "contact_removed"],
-                authToken: authInfo.token
-            )
-            
-            _ = try await service.addNotification(request)
-            // Stream will handle updating shared state
-        },
-        
-        notifyContactRoleChanged: { contactId in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
-            
-            let request = AddNotificationRequest(
-                userId: authInfo.user.id,
-                type: .receiveContactRoleChanged,
-                title: "Role Changed",
-                message: "A contact's role has been updated",
-                contactId: contactId,
-                metadata: ["action": "role_changed"],
-                authToken: authInfo.token
-            )
-            
-            _ = try await service.addNotification(request)
-            // Stream will handle updating shared state
         },
         
         // Ping notification methods (explicit feature-driven)

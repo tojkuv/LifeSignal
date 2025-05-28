@@ -22,10 +22,25 @@ struct DependentsFeature {
         var sortMode: SortMode = .timeLeft
         @Presents var contactDetails: ContactDetailsSheetFeature.State?
         @Presents var confirmationAlert: AlertState<DependentsAlert>?
+        @Presents var notificationsHistory: NotificationsHistorySheetFeature.State?
+        
+        var dependentCards: IdentifiedArrayOf<ContactCardFeature.State> = []
         
         var dependents: [Contact] {
             let filtered = contactsState.contacts.filter(\.isDependent)
             return sortedContacts(filtered, by: sortMode)
+        }
+        
+        mutating func updateDependentCards() {
+            dependentCards = IdentifiedArray(uniqueElements: dependents.map { contact in
+                ContactCardFeature.State(
+                    contact: contact,
+                    style: .dependent(
+                        statusText: statusText(for: contact),
+                        statusColor: statusColor(for: contact)
+                    )
+                )
+            })
         }
         
         private func sortedContacts(_ contacts: [Contact], by mode: SortMode) -> [Contact] {
@@ -92,14 +107,77 @@ struct DependentsFeature {
         // MARK: - Formatting Functions
 
         func statusText(for contact: Contact) -> String {
+            // Priority order: Alert > Non-responsive (including expired check-ins) > Active check-in status
             if contact.hasManualAlertActive {
-                return "Sent out an Alert"
+                if let alertTime = contact.emergencyAlertTimestamp {
+                    let timeSince = Date().timeIntervalSince(alertTime)
+                    return "Sent out an alert \(formatTimeAgo(timeSince))"
+                } else {
+                    return "Sent out an alert"
+                }
             } else if contact.hasNotResponsiveAlert {
-                return "Non-responsive"
-            } else if contact.hasOutgoingPing {
-                return "You Pinged Them"
+                if let alertTime = contact.notResponsiveAlertTimestamp {
+                    let timeSince = Date().timeIntervalSince(alertTime)
+                    return "Non-responsive \(formatTimeAgo(timeSince))"
+                } else {
+                    return "Non-responsive"
+                }
+            } else if let lastCheckIn = contact.lastCheckInTimestamp {
+                // Check if check-in has expired - treat as non-responsive
+                let timeSinceCheckIn = Date().timeIntervalSince(lastCheckIn)
+                let timeRemaining = contact.checkInInterval - timeSinceCheckIn
+                
+                if timeRemaining > 0 {
+                    // Active - show time remaining until check-in expires
+                    let days = Int(timeRemaining) / 86400
+                    let hours = Int(timeRemaining) % 86400 / 3600
+                    let minutes = Int(timeRemaining) % 3600 / 60
+                    
+                    if days > 0 {
+                        if hours > 0 {
+                            return "\(days)d \(hours)h"
+                        } else {
+                            return "\(days)d"
+                        }
+                    } else if hours > 0 {
+                        if minutes > 0 {
+                            return "\(hours)h \(minutes)m"
+                        } else {
+                            return "\(hours)h"
+                        }
+                    } else {
+                        return "\(minutes)m"
+                    }
+                } else {
+                    // Overdue check-in = Non-responsive status
+                    let expiredTime = abs(timeRemaining)
+                    return "Non-responsive \(formatTimeAgo(expiredTime))"
+                }
             } else {
                 return ""
+            }
+            // Note: Removed outgoing ping subtext - only show bell badge on avatar
+        }
+        
+        private func formatTimeAgo(_ timeInterval: TimeInterval) -> String {
+            let days = Int(timeInterval) / 86400
+            let hours = Int(timeInterval) % 86400 / 3600
+            let minutes = Int(timeInterval) % 3600 / 60
+            
+            if days > 0 {
+                if hours > 0 {
+                    return "\(days)d \(hours)h ago"
+                } else {
+                    return "\(days)d ago"
+                }
+            } else if hours > 0 {
+                if minutes > 0 {
+                    return "\(hours)h \(minutes)m ago"
+                } else {
+                    return "\(hours)h ago"
+                }
+            } else {
+                return "\(minutes)m ago"
             }
         }
 
@@ -108,11 +186,16 @@ struct DependentsFeature {
                 return .red
             } else if contact.hasNotResponsiveAlert {
                 return .orange
-            } else if contact.hasOutgoingPing {
-                return .blue
-            } else {
-                return .secondary
+            } else if let lastCheckIn = contact.lastCheckInTimestamp {
+                // Check if check-in has expired - treat as non-responsive (orange)
+                let timeSinceCheckIn = Date().timeIntervalSince(lastCheckIn)
+                let timeRemaining = contact.checkInInterval - timeSinceCheckIn
+                if timeRemaining <= 0 {
+                    return .orange // Expired check-in = Non-responsive
+                }
             }
+            return .secondary
+            // Note: Removed outgoing ping color - only show bell badge on avatar
         }
 
         func cardBackgroundColor(for contact: Contact) -> Color {
@@ -137,12 +220,67 @@ struct DependentsFeature {
                 return ("Outgoing Ping", .blue)
             } else if let lastCheckIn = contact.lastCheckInTimestamp {
                 let timeSinceCheckIn = Date().timeIntervalSince(lastCheckIn)
-                if timeSinceCheckIn < contact.checkInInterval {
-                    return ("Active", .green)
-                } else if timeSinceCheckIn < contact.checkInInterval * 2 {
-                    return ("Overdue", .yellow)
+                let timeRemaining = contact.checkInInterval - timeSinceCheckIn
+                
+                if timeRemaining > 0 {
+                    // Active - show time remaining until check-in expires (same format as CheckInFeature)
+                    let days = Int(timeRemaining) / 86400
+                    let hours = Int(timeRemaining) % 86400 / 3600
+                    let minutes = Int(timeRemaining) % 3600 / 60
+                    
+                    let timeText: String
+                    if days > 0 {
+                        if hours > 0 {
+                            timeText = "\(days)d \(hours)h"
+                        } else {
+                            timeText = "\(days)d"
+                        }
+                    } else if hours > 0 {
+                        if minutes > 0 {
+                            timeText = "\(hours)h \(minutes)m"
+                        } else {
+                            timeText = "\(hours)h"
+                        }
+                    } else {
+                        timeText = "\(minutes)m"
+                    }
+                    return (timeText, .green)
                 } else {
-                    return ("Late Check-in", .orange)
+                    // Overdue - show how long expired (same format as CheckInFeature)
+                    let expiredTime = abs(timeRemaining)
+                    let days = Int(expiredTime) / 86400
+                    let hours = Int(expiredTime) % 86400 / 3600
+                    let minutes = Int(expiredTime) % 3600 / 60
+                    
+                    let expiredText: String
+                    if days > 30 {
+                        // Show generic message for very old
+                        expiredText = "Expired long ago"
+                    } else if days > 0 {
+                        if hours > 0 {
+                            expiredText = "Expired \(days)d \(hours)h ago"
+                        } else {
+                            expiredText = "Expired \(days)d ago"
+                        }
+                    } else if hours > 0 {
+                        if minutes > 0 {
+                            expiredText = "Expired \(hours)h \(minutes)m ago"
+                        } else {
+                            expiredText = "Expired \(hours)h ago"
+                        }
+                    } else {
+                        expiredText = "Expired \(minutes)m ago"
+                    }
+                    
+                    // Color coding for overdue time
+                    let overdueColor: Color
+                    if timeRemaining < -contact.checkInInterval {
+                        overdueColor = .red  // Very overdue (more than one full interval)
+                    } else {
+                        overdueColor = .orange  // Recently overdue
+                    }
+                    
+                    return (expiredText, overdueColor)
                 }
             } else {
                 return ("No Check-in", .gray)
@@ -291,10 +429,13 @@ struct DependentsFeature {
         case removeContact(Contact)
         case toggleDependentStatus(Contact)
         case showRemoveConfirmation(Contact)
+        case showNotificationsHistory
         
         // UI presentations
         case contactDetails(PresentationAction<ContactDetailsSheetFeature.Action>)
         case confirmationAlert(PresentationAction<DependentsAlert>)
+        case notificationsHistory(PresentationAction<NotificationsHistorySheetFeature.Action>)
+        case contactCards(IdentifiedActionOf<ContactCardFeature>)
         
         // Network responses
         case pingResponse(Result<Void, Error>)
@@ -318,7 +459,8 @@ struct DependentsFeature {
             // Data management
             case .refreshDependents:
                 guard state.currentUser != nil else { return .none }
-
+                state.updateDependentCards() // Update cards with current data
+                
                 return .run { [contactsClient] send in
                     await send(.refreshResponse(Result {
                         try await contactsClient.refreshContacts()
@@ -327,6 +469,7 @@ struct DependentsFeature {
 
             case let .setSortMode(mode):
                 state.sortMode = mode
+                state.updateDependentCards()
                 return .run { _ in
                     await haptics.impact(.light)
                 }
@@ -384,8 +527,42 @@ struct DependentsFeature {
             case let .showRemoveConfirmation(contact):
                 return .send(.removeContact(contact))
 
+            case .showNotificationsHistory:
+                state.notificationsHistory = NotificationsHistorySheetFeature.State()
+                return .none
+
             // UI presentations
+            case .contactDetails(.presented(.dismiss)):
+                state.contactDetails = nil
+                state.updateDependentCards() // Refresh the list after contact deletion
+                return .none
+                
+            case .contactDetails(.presented(.contactDeleteResponse(.success))):
+                // Contact was successfully deleted, refresh the list and close sheet if contact no longer exists
+                state.updateDependentCards()
+                
+                // Check if the contact still exists in the shared state
+                if let contactDetails = state.contactDetails,
+                   state.contactsState.contact(by: contactDetails.contact.id) == nil {
+                    // Contact was deleted, close the sheet
+                    state.contactDetails = nil
+                }
+                return .none
+                
             case .contactDetails:
+                return .none
+
+            case .notificationsHistory:
+                return .none
+
+            case .contactCards(.element(id: let contactId, action: .tapped)):
+                // Handle contact card tap - forward to selectContact
+                if let contact = state.contactsState.contacts.first(where: { $0.id.uuidString == contactId }) {
+                    return .send(.selectContact(contact))
+                }
+                return .none
+
+            case .contactCards:
                 return .none
 
             case .confirmationAlert(.presented(.confirmPing(let contact))):
@@ -393,6 +570,12 @@ struct DependentsFeature {
                 return .run { send in
                     await haptics.notification(.warning)
                     await send(.pingResponse(Result {
+                        // Update contact to show outgoing ping
+                        var updatedContact = contact
+                        updatedContact.hasOutgoingPing = true
+                        updatedContact.outgoingPingTimestamp = Date()
+                        await contactsClient.updateContact(updatedContact)
+                        
                         // Send ping notification via NotificationClient
                         try await notificationClient.sendPingNotification(
                             .sendDependentPing,
@@ -420,6 +603,7 @@ struct DependentsFeature {
 
             // Network responses
             case .pingResponse(.success):
+                state.updateDependentCards()
                 return .run { [haptics, notificationClient] _ in
                     await haptics.notification(.success)
                     try? await notificationClient.sendSystemNotification(
@@ -475,6 +659,12 @@ struct DependentsFeature {
                 }
 
             case .refreshResponse(.success):
+                state.updateDependentCards()
+                // Also update the contact details if open and the contact still exists
+                if let contactDetails = state.contactDetails,
+                   let updatedContact = state.contactsState.contact(by: contactDetails.contact.id) {
+                    state.contactDetails?.contact = updatedContact
+                }
                 return .none
 
             case .refreshResponse(.failure):
@@ -491,6 +681,12 @@ struct DependentsFeature {
             ContactDetailsSheetFeature()
         }
         .ifLet(\.$confirmationAlert, action: \.confirmationAlert)
+        .ifLet(\.$notificationsHistory, action: \.notificationsHistory) {
+            NotificationsHistorySheetFeature()
+        }
+        .forEach(\.dependentCards, action: \.contactCards) {
+            ContactCardFeature()
+        }
     }
 }
 
@@ -510,6 +706,9 @@ struct DependentsView: View {
                 .sheet(item: $store.scope(state: \.contactDetails, action: \.contactDetails)) { store in
                     ContactDetailsSheetView(store: store)
                 }
+                .sheet(item: $store.scope(state: \.notificationsHistory, action: \.notificationsHistory)) { store in
+                    NotificationsHistorySheetView(store: store)
+                }
         }
     }
 }
@@ -517,11 +716,6 @@ struct DependentsView: View {
 // MARK: - Content Views
 
 private extension DependentsView {
-    
-    /// Computed property to get sorted dependents from the store
-    var sortedDependents: [Contact] {
-        store.dependents
-    }
     
     @ViewBuilder
     var contentView: some View {
@@ -539,7 +733,7 @@ private extension DependentsView {
     
     @ViewBuilder
     var contactsContent: some View {
-        if sortedDependents.isEmpty {
+        if store.dependents.isEmpty {
             emptyStateView
         } else {
             contactsListView
@@ -556,15 +750,8 @@ private extension DependentsView {
     
     @ViewBuilder
     var contactsListView: some View {
-        ForEach(sortedDependents) { dependent in
-            ContactCardView(
-                contact: dependent,
-                style: .dependent(
-                    statusText: store.state.statusText(for: dependent),
-                    statusColor: store.state.statusColor(for: dependent)
-                ),
-                onTap: { store.send(.selectContact(dependent), animation: .default) }
-            )
+        ForEach(store.scope(state: \.dependentCards, action: \.contactCards)) { cardStore in
+            ContactCardView(store: cardStore, onTap: {})
         }
     }
 }
@@ -612,9 +799,6 @@ private extension DependentsView {
         Button(action: notificationCenterAction) {
             Image(systemName: "square.fill.text.grid.1x2")
         }
-        .simultaneousGesture(TapGesture().onEnded { _ in
-            store.send(.refreshDependents, animation: .default)
-        })
     }
 }
 
@@ -627,7 +811,7 @@ private extension DependentsView {
     }
     
     func notificationCenterAction() {
-        // TODO: Add notification center navigation
+        store.send(.showNotificationsHistory)
     }
 }
 
