@@ -525,22 +525,21 @@ struct HomeFeature {
                     return
                 }
                 
-                // If enabling biometric auth, verify it's available and authenticate first
-                if enabled {
-                    let biometricType = biometricClient.getBiometricType()
-                    guard biometricType != .none else {
-                        await send(.biometricAuthResponse(.failure(BiometricClientError.notAvailable)))
-                        return
-                    }
-                    
-                    // Authenticate to confirm user can use biometric auth
-                    let reason = "Enable \(biometricType.displayName) authentication for LifeSignal"
-                    let success = try await biometricClient.authenticate(reason)
-                    
-                    guard success else {
-                        await send(.biometricAuthResponse(.failure(BiometricClientError.authenticationFailed)))
-                        return
-                    }
+                // Always require authentication for biometric setting changes
+                let biometricType = biometricClient.getBiometricType()
+                guard biometricType != .none else {
+                    await send(.biometricAuthResponse(.failure(BiometricClientError.notAvailable)))
+                    return
+                }
+                
+                // Authenticate to confirm user identity for security setting changes
+                let action = enabled ? "enable" : "disable"
+                let reason = "Authenticate to \(action) \(biometricType.displayName) for LifeSignal"
+                let success = try await biometricClient.authenticate(reason)
+                
+                guard success else {
+                    await send(.biometricAuthResponse(.failure(BiometricClientError.authenticationFailed)))
+                    return
                 }
                 
                 // Update user setting

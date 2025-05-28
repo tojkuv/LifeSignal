@@ -32,6 +32,10 @@ struct ApplicationFeature {
         var isLoggedIn: Bool { sessionState.sessionState.isAuthenticated && sessionState.hasUserProfile }
         var shouldShowOnboarding: Bool { sessionState.sessionState.isAuthenticated && sessionState.needsOnboarding }
         var shouldShowMainTabs: Bool { sessionState.sessionState.isAuthenticated && !sessionState.needsOnboarding && sessionState.hasUserProfile }
+        var isLoadingAfterAuth: Bool { 
+            sessionState.sessionState == .loading && 
+            (sessionState.authenticationToken != nil || sessionState.needsOnboarding || sessionState.hasUserProfile)
+        }
         var hasValidSession: Bool { sessionState.sessionState.isAuthenticated && sessionState.authenticationToken != nil && sessionState.hasUserProfile }
         var isOnline: Bool { sessionState.isNetworkConnected }
 
@@ -261,6 +265,7 @@ struct LifeSignalApp: App {
         dependencies.haptics = .mockValue
         dependencies.notificationClient = .mockValue
         dependencies.logging = .mockValue
+        dependencies.biometricClient = .liveValue  // Use live biometric authentication
     }
 
     var body: some Scene {
@@ -285,6 +290,17 @@ struct AppRootView: View {
                     state: \.onboarding,
                     action: \.onboarding
                 ))
+            } else if store.isLoadingAfterAuth {
+                // Show loading state during navigation transition
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .scaleEffect(1.2)
+                    Text("Loading...")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(UIColor.systemGroupedBackground))
             } else {
                 SignInView(store: store.scope(
                     state: \.signIn,
@@ -298,6 +314,12 @@ struct AppRootView: View {
         .onChange(of: store.shouldShowOnboarding) { wasShowingOnboarding, isShowingOnboarding in
             // If we're transitioning from onboarding to sign-in, reset the sign-in form
             if wasShowingOnboarding && !isShowingOnboarding && !store.shouldShowMainTabs {
+                store.send(.signIn(.resetForm))
+            }
+        }
+        .onChange(of: store.shouldShowMainTabs) { wasShowingMainTabs, isShowingMainTabs in
+            // If we're transitioning from main tabs to sign-in (sign out), reset the sign-in form
+            if wasShowingMainTabs && !isShowingMainTabs && !store.shouldShowOnboarding {
                 store.send(.signIn(.resetForm))
             }
         }

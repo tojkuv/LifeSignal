@@ -204,6 +204,7 @@ struct RespondersFeature {
     enum Action {
         // Data management
         case refreshResponders
+        case contactsChanged
         
         // Contact interactions
         case selectContact(Contact)
@@ -251,6 +252,10 @@ struct RespondersFeature {
                         try await contactsClient.refreshContacts()
                     }))
                 }
+
+            case .contactsChanged:
+                state.updateResponderCards()
+                return .none
 
             // Contact interactions
             case let .selectContact(contact):
@@ -613,6 +618,9 @@ struct RespondersView: View {
             contentView
                 .toolbar { toolbarContent }
                 .onAppear(perform: onAppear)
+                .onChange(of: store.contactsState.contacts) { _, _ in
+                    store.send(.contactsChanged)
+                }
                 .alert($store.scope(state: \.confirmationAlert, action: \.confirmationAlert))
                 .alert("Clear All Pings", isPresented: confirmationBinding, actions: alertActions, message: alertMessage)
                 .sheet(item: $store.scope(state: \.contactDetails, action: \.contactDetails)) { store in

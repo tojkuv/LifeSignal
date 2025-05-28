@@ -189,6 +189,16 @@ struct ContactDetailsSheetFeature {
                     return .none
                 }
                 
+                // If removing dependent role and there's an active outgoing ping, mention it will be cancelled
+                let alertMessage: String
+                if !isDependent && state.contact.hasOutgoingPing {
+                    alertMessage = "You will no longer be able to check on this contact or send them pings. The current pending ping will be cancelled."
+                } else if isDependent {
+                    alertMessage = "You will be able to check on this contact and send them pings."
+                } else {
+                    alertMessage = "You will no longer be able to check on this contact or send them pings."
+                }
+                
                 state.alert = AlertState {
                     TextState(isDependent ? "Add Dependent Role" : "Remove Dependent Role")
                 } actions: {
@@ -199,9 +209,7 @@ struct ContactDetailsSheetFeature {
                         TextState("Cancel")
                     }
                 } message: {
-                    TextState(isDependent ? 
-                        "You will be able to check on this contact and send them pings." :
-                        "You will no longer be able to check on this contact or send them pings.")
+                    TextState(alertMessage)
                 }
                 return .none
                 
@@ -221,12 +229,28 @@ struct ContactDetailsSheetFeature {
                     updatedContact.isResponder = newValue
                 case .dependent:
                     updatedContact.isDependent = newValue
+                    // Cancel any outgoing ping if removing dependent role
+                    if !newValue && updatedContact.hasOutgoingPing {
+                        updatedContact.hasOutgoingPing = false
+                        updatedContact.outgoingPingTimestamp = nil
+                    }
                 }
                 state.contact = updatedContact
                 state.isLoading = true
                 
-                return .run { [contact = updatedContact] send in
+                return .run { [contact = updatedContact, originalContact = state.contact] send in
                     await haptics.notification(.success)
+                    
+                    // If we cancelled an outgoing ping, send notification
+                    if role == .dependent && !newValue && originalContact.hasOutgoingPing {
+                        try? await notificationClient.sendPingNotification(
+                            .cancelDependentPing,
+                            "Ping Cancelled",
+                            "Ping to \(contact.name) was cancelled when removing dependent role",
+                            contact.id
+                        )
+                    }
+                    
                     await send(.contactUpdateResponse(Result {
                         await contactsClient.updateContact(contact)
                         return contact

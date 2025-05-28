@@ -64,7 +64,7 @@ struct ContactCardFeature {
         var hasStatusColor: Bool {
             switch style {
             case .responder:
-                return contact.hasIncomingPing || contact.hasOutgoingPing
+                return contact.hasIncomingPing
             case .dependent(_, let statusColor):
                 // Use statusColor parameter to determine if background should be shown
                 return statusColor != .secondary
@@ -228,7 +228,7 @@ private extension ContactCardView {
     var statusOverlayColor: some View {
         switch store.style {
         case .responder:
-            if store.contact.hasIncomingPing || store.contact.hasOutgoingPing {
+            if store.contact.hasIncomingPing {
                 Color.blue.opacity(0.1)
             }
         case .dependent(_, let statusColor):

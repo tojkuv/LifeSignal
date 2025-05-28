@@ -171,7 +171,7 @@ final class MockContactService: ContactServiceProtocol {
                 isResponder: true,
                 isDependent: false,
                 emergencyNote: "Emergency contact",
-                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-3600).timeIntervalSince1970),
+                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-3600).timeIntervalSince1970), // 1 hour ago
                 checkInInterval: 86400,
                 hasIncomingPing: false,
                 hasOutgoingPing: false,
@@ -192,7 +192,7 @@ final class MockContactService: ContactServiceProtocol {
                 isResponder: false,
                 isDependent: true,
                 emergencyNote: "Dependent contact",
-                lastCheckInTimestamp: nil,
+                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-7200).timeIntervalSince1970), // 2 hours ago
                 checkInInterval: 43200,
                 hasIncomingPing: true,
                 hasOutgoingPing: false,
@@ -204,6 +204,90 @@ final class MockContactService: ContactServiceProtocol {
                 notResponsiveAlertTimestamp: Int64(Date().addingTimeInterval(-7200).timeIntervalSince1970),
                 profileImageURL: nil,
                 dateAdded: Int64(Date().addingTimeInterval(-259200).timeIntervalSince1970),
+                lastUpdated: Int64(Date().timeIntervalSince1970)
+            ),
+            Contact_Proto(
+                id: "99999999-9999-9999-9999-999999999003", // Fixed UUID for Lisa Thompson
+                name: "Lisa Thompson",
+                phoneNumber: "+1555123456",
+                isResponder: true,
+                isDependent: false,
+                emergencyNote: "Has severe allergies to peanuts",
+                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-1800).timeIntervalSince1970), // 30 minutes ago
+                checkInInterval: 86400,
+                hasIncomingPing: false,
+                hasOutgoingPing: false,
+                hasManualAlertActive: false,
+                hasNotResponsiveAlert: false,
+                incomingPingTimestamp: nil,
+                outgoingPingTimestamp: nil,
+                emergencyAlertTimestamp: nil,
+                notResponsiveAlertTimestamp: nil,
+                profileImageURL: nil,
+                dateAdded: Int64(Date().addingTimeInterval(-432000).timeIntervalSince1970), // 5 days ago
+                lastUpdated: Int64(Date().timeIntervalSince1970)
+            ),
+            Contact_Proto(
+                id: "99999999-9999-9999-9999-999999999004", // Fixed UUID for Mike Chen
+                name: "Mike Chen",
+                phoneNumber: "+1555789012",
+                isResponder: true,
+                isDependent: false,
+                emergencyNote: "Takes medication for heart condition",
+                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-10800).timeIntervalSince1970), // 3 hours ago
+                checkInInterval: 86400,
+                hasIncomingPing: false,
+                hasOutgoingPing: false,
+                hasManualAlertActive: false,
+                hasNotResponsiveAlert: false,
+                incomingPingTimestamp: nil,
+                outgoingPingTimestamp: nil,
+                emergencyAlertTimestamp: nil,
+                notResponsiveAlertTimestamp: nil,
+                profileImageURL: nil,
+                dateAdded: Int64(Date().addingTimeInterval(-345600).timeIntervalSince1970), // 4 days ago
+                lastUpdated: Int64(Date().timeIntervalSince1970)
+            ),
+            Contact_Proto(
+                id: "99999999-9999-9999-9999-999999999005", // Fixed UUID for Sarah Johnson
+                name: "Sarah Johnson",
+                phoneNumber: "+1555345678",
+                isResponder: false,
+                isDependent: true,
+                emergencyNote: "Contact work if not reachable",
+                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-5400).timeIntervalSince1970), // 1.5 hours ago
+                checkInInterval: 43200, // 12 hours
+                hasIncomingPing: false,
+                hasOutgoingPing: false,
+                hasManualAlertActive: false,
+                hasNotResponsiveAlert: false,
+                incomingPingTimestamp: nil,
+                outgoingPingTimestamp: nil,
+                emergencyAlertTimestamp: nil,
+                notResponsiveAlertTimestamp: nil,
+                profileImageURL: nil,
+                dateAdded: Int64(Date().addingTimeInterval(-172800).timeIntervalSince1970), // 2 days ago
+                lastUpdated: Int64(Date().timeIntervalSince1970)
+            ),
+            Contact_Proto(
+                id: "99999999-9999-9999-9999-999999999006", // Fixed UUID for Emma Wilson
+                name: "Emma Wilson",
+                phoneNumber: "+1555901234",
+                isResponder: true,
+                isDependent: false,
+                emergencyNote: "Lives alone - check neighbor if needed",
+                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-14400).timeIntervalSince1970), // 4 hours ago
+                checkInInterval: 86400,
+                hasIncomingPing: false,
+                hasOutgoingPing: false,
+                hasManualAlertActive: false,
+                hasNotResponsiveAlert: false,
+                incomingPingTimestamp: nil,
+                outgoingPingTimestamp: nil,
+                emergencyAlertTimestamp: nil,
+                notResponsiveAlertTimestamp: nil,
+                profileImageURL: nil,
+                dateAdded: Int64(Date().addingTimeInterval(-86400).timeIntervalSince1970), // 1 day ago
                 lastUpdated: Int64(Date().timeIntervalSince1970)
             )
         ]
@@ -465,7 +549,7 @@ extension ContactsClient: DependencyKey {
                 isResponder: true,
                 isDependent: false,
                 emergencyNote: ["Has severe allergies to peanuts", "Takes medication for heart condition", "Contact work if not reachable", "Lives alone - check neighbor if needed", "Has emergency key under flowerpot"].randomElement() ?? "No emergency information provided",
-                lastCheckInTimestamp: nil,
+                lastCheckInTimestamp: Date().addingTimeInterval(-Double.random(in: 1800...43200)), // 30 min to 12 hours ago
                 checkInInterval: 24 * 60 * 60,
                 hasIncomingPing: false,
                 hasOutgoingPing: false,
@@ -793,7 +877,7 @@ extension Contact {
         isResponder: Bool = false,
         isDependent: Bool = true,
         emergencyNote: String = "Test note",
-        lastCheckInTimestamp: Date? = nil,
+        lastCheckInTimestamp: Date? = Date().addingTimeInterval(-Double.random(in: 3600...86400)), // 1-24 hours ago
         checkInInterval: TimeInterval = 86400,
         hasIncomingPing: Bool = false,
         hasOutgoingPing: Bool = false,

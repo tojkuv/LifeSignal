@@ -832,6 +832,7 @@ extension SessionClient: DependencyKey {
                 }
                 user.notificationPreference = notificationPreference
                 user.biometricAuthEnabled = biometricAuthEnabled
+                user.lastCheckedIn = Date().addingTimeInterval(300) // 5 minutes from now
                 user.lastModified = Date()
                 
                 // Update user via UserClient - it handles shared state updates
@@ -869,6 +870,7 @@ extension SessionClient: DependencyKey {
                 }
                 newUser.notificationPreference = notificationPreference
                 newUser.biometricAuthEnabled = biometricAuthEnabled
+                newUser.lastCheckedIn = Date().addingTimeInterval(300) // 5 minutes from now
                 newUser.lastModified = Date()
                 
                 // Update user via UserClient - it handles shared state updates

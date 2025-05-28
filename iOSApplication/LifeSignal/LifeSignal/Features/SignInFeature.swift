@@ -14,14 +14,8 @@ struct SignInFeature {
         @Shared(.needsOnboarding) var needsOnboarding: Bool = false
 
         // UI state
-        var phoneNumber = ""
-        var verificationCode = ""
         var verificationID: String? = nil
         var showPhoneEntry = true
-        var selectedRegion = "US"
-        var showRegionPicker = false
-        var phoneNumberFieldFocused = false
-        var verificationCodeFieldFocused = false
         var isLoading = false
         
         // Available regions
@@ -32,45 +26,31 @@ struct SignInFeature {
             ("AU", "+61")
         ]
         
-        // Computed properties
-        var phoneNumberPlaceholder: String {
-            let selectedRegionInfo = Self.regions.first { $0.0 == selectedRegion }!
-            return "\(selectedRegionInfo.1) (000) 000-0000"
-        }
-
-        var canSendCode: Bool {
-            isPhoneNumberValid && !isLoading
-        }
+        // Child feature states
+        var phoneNumberEntry = PhoneNumberEntryFeature.State(
+            selectedRegion: "US",
+            regions: SignInFeature.State.regions,
+            buttonTitle: "Send Verification Code"
+        )
         
-        var canVerifyCode: Bool {
-            isVerificationCodeValid && !isLoading
-        }
-        
-        var isPhoneNumberValid: Bool {
-            let digitCount = phoneNumber.filter { $0.isNumber }.count
-            return digitCount == 10 || phoneNumber == "+11234567890" // Allow dev testing
-        }
-        
-        var isVerificationCodeValid: Bool {
-            verificationCode.filter { $0.isNumber }.count == 6
-        }
+        var verificationCodeEntry = VerificationCodeEntryFeature.State(
+            buttonTitle: "Verify"
+        )
     }
 
     @CasePathable
     enum Action: BindableAction {
         case binding(BindingAction<State>)
         
+        // Child feature actions
+        case phoneNumberEntry(PhoneNumberEntryFeature.Action)
+        case verificationCodeEntry(VerificationCodeEntryFeature.Action)
+        
         // UI actions
         case clearError
-        case focusPhoneNumberField
-        case toggleRegionPicker
-        case updateSelectedRegion((String, String))
-        case handlePhoneNumberChange(String)
-        case sendVerificationCode
-        case handleVerificationCodeChange(String)
-        case verifyCode
         case changeToPhoneEntryView
         case resetForm
+        case viewAppeared
         
         // Authentication actions
         case signOut
@@ -88,6 +68,14 @@ struct SignInFeature {
     @Dependency(\.sessionClient) var sessionClient
 
     var body: some ReducerOf<Self> {
+        Scope(state: \.phoneNumberEntry, action: \.phoneNumberEntry) {
+            PhoneNumberEntryFeature()
+        }
+        
+        Scope(state: \.verificationCodeEntry, action: \.verificationCodeEntry) {
+            VerificationCodeEntryFeature()
+        }
+        
         BindingReducer()
 
         Reduce { state, action in
@@ -98,77 +86,38 @@ struct SignInFeature {
             case .clearError:
                 return .none
                 
-            case .focusPhoneNumberField:
-                state.phoneNumberFieldFocused = true
-                return .none
-                
-            case .toggleRegionPicker:
-                state.showRegionPicker.toggle()
-                return .none
-                
-            case let .updateSelectedRegion(region):
-                state.selectedRegion = region.0
-                state.showRegionPicker = false
-                return .none
-                
-            case let .handlePhoneNumberChange(newValue):
-                state.phoneNumber = newValue
-                return .none
-                
-            case .sendVerificationCode:
-                guard !state.phoneNumber.isEmpty else {
-                    return .none
+            case .viewAppeared:
+                if state.showPhoneEntry {
+                    return .run { send in
+                        try await Task.sleep(for: .milliseconds(100))
+                        await send(.phoneNumberEntry(.focusPhoneNumberField(true)))
+                    }
                 }
-                
-                state.isLoading = true
-                
-                return .run { [phoneNumber = state.phoneNumber] send in
-                    await send(.verificationCodeSent(
-                        Result {
-                            try await sessionClient.sendVerificationCode(phoneNumber)
-                        }
-                    ))
-                }
-                
-            case let .handleVerificationCodeChange(newValue):
-                state.verificationCode = newValue
                 return .none
-                
-            case .verifyCode:
-                guard !state.verificationCode.isEmpty else {
-                    return .none
-                }
-                
-                guard let verificationID = state.verificationID else {
-                    return .none
-                }
-                
-                state.isLoading = true
-                
-                return .run { [verificationID = verificationID, code = state.verificationCode] send in
-                    await send(.sessionStartResult(
-                        Result {
-                            try await sessionClient.verifyPhoneCodeAndStartSession(verificationID, code)
-                        }
-                    ))
-                }
                 
             case .changeToPhoneEntryView:
                 state.showPhoneEntry = true
-                state.phoneNumber = ""
-                state.verificationCode = ""
+                state.phoneNumberEntry.phoneNumber = ""
+                state.phoneNumberEntry.canSendCode = false
+                state.verificationCodeEntry.verificationCode = ""
+                state.verificationCodeEntry.canVerifyCode = false
                 state.verificationID = nil
                 state.isLoading = false
-                return .none
+                return .run { send in
+                    try await Task.sleep(for: .milliseconds(100))
+                    await send(.phoneNumberEntry(.focusPhoneNumberField(true)))
+                }
 
             case .resetForm:
-                state.phoneNumber = ""
-                state.verificationCode = ""
+                state.phoneNumberEntry.phoneNumber = ""
+                state.phoneNumberEntry.canSendCode = false
+                state.verificationCodeEntry.verificationCode = ""
+                state.verificationCodeEntry.canVerifyCode = false
                 state.verificationID = nil
                 state.showPhoneEntry = true
-                state.showRegionPicker = false
-                state.phoneNumberFieldFocused = false
-                state.verificationCodeFieldFocused = false
+                state.phoneNumberEntry.showRegionPicker = false
+                state.phoneNumberEntry.phoneNumberFieldFocused = false
+                state.verificationCodeEntry.verificationCodeFieldFocused = false
                 state.isLoading = false
                 return .none
                 
@@ -195,20 +144,34 @@ struct SignInFeature {
             case let .verificationCodeSent(.success(verificationID)):
                 // Verification code sent successfully
                 state.isLoading = false
+                state.phoneNumberEntry.isLoading = false
                 state.verificationID = verificationID
                 state.showPhoneEntry = false
-                return .none
+                return .run { send in
+                    try await Task.sleep(for: .milliseconds(100))
+                    await send(.verificationCodeEntry(.focusVerificationCodeField(true)))
+                }
                 
             case let .verificationCodeSent(.failure(error)):
                 state.isLoading = false
+                state.phoneNumberEntry.isLoading = false
                 return .none
                 
             case let .sessionStartResult(.success):
                 state.isLoading = false
+                state.verificationCodeEntry.isLoading = false
+                // Clear form after successful sign-in
+                state.phoneNumberEntry.phoneNumber = ""
+                state.phoneNumberEntry.canSendCode = false
+                state.verificationCodeEntry.verificationCode = ""
+                state.verificationCodeEntry.canVerifyCode = false
+                state.verificationID = nil
+                state.showPhoneEntry = true
                 return .none
                 
             case let .sessionStartResult(.failure(error)):
                 state.isLoading = false
+                state.verificationCodeEntry.isLoading = false
                 return .none
                 
             case let .debugSessionResult(.success):
@@ -217,6 +180,49 @@ struct SignInFeature {
                 
             case let .debugSessionResult(.failure(error)):
                 state.isLoading = false
+                return .none
+
+            // Handle child feature delegate actions
+            case .phoneNumberEntry(.delegate(.buttonTapped)):
+                guard !state.phoneNumberEntry.phoneNumber.isEmpty else {
+                    return .none
+                }
+                
+                state.isLoading = true
+                state.phoneNumberEntry.isLoading = true
+                
+                return .run { [phoneNumber = state.phoneNumberEntry.phoneNumber] send in
+                    await send(.verificationCodeSent(
+                        Result {
+                            try await sessionClient.sendVerificationCode(phoneNumber)
+                        }
+                    ))
+                }
+                
+            case .verificationCodeEntry(.delegate(.buttonTapped)):
+                guard !state.verificationCodeEntry.verificationCode.isEmpty else {
+                    return .none
+                }
+                
+                guard let verificationID = state.verificationID else {
+                    return .none
+                }
+                
+                state.isLoading = true
+                state.verificationCodeEntry.isLoading = true
+                
+                return .run { [verificationID = verificationID, code = state.verificationCodeEntry.verificationCode] send in
+                    await send(.sessionStartResult(
+                        Result {
+                            try await sessionClient.verifyPhoneCodeAndStartSession(verificationID, code)
+                        }
+                    ))
+                }
+                
+            case .phoneNumberEntry:
+                return .none
+                
+            case .verificationCodeEntry:
                 return .none
 
             }
@@ -229,8 +235,6 @@ struct SignInFeature {
 
 struct SignInView: View {
     @Bindable var store: StoreOf<SignInFeature>
-    @FocusState private var phoneNumberFieldFocused: Bool
-    @FocusState private var verificationCodeFieldFocused: Bool
     
     @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
 
@@ -254,15 +258,25 @@ struct SignInView: View {
                 }
                 .background(Color(UIColor.systemGroupedBackground))
                 .edgesIgnoringSafeArea(.bottom)
-                .navigationTitle("Sign In")
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
                 .onAppear {
-                    store.send(.focusPhoneNumberField)
+                    store.send(.viewAppeared)
                 }
-                .onChange(of: store.phoneNumberFieldFocused) { _, newValue in
-                    phoneNumberFieldFocused = newValue
-                }
-                .onChange(of: store.verificationCodeFieldFocused) { _, newValue in
-                    verificationCodeFieldFocused = newValue
+                .toolbar {
+                    if !store.showPhoneEntry {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button(action: {
+                                store.send(.changeToPhoneEntryView, animation: .default)
+                            }) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "chevron.left")
+                                    Text("Back")
+                                }
+                                .foregroundColor(.blue)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -302,27 +316,8 @@ struct SignInView: View {
                 .font(.title2)
                 .fontWeight(.bold)
 
-            PhoneNumberEntryComponent(
-                selectedRegion: store.selectedRegion,
-                regions: SignInFeature.State.regions,
-                phoneNumber: store.phoneNumber,
-                phoneNumberPlaceholder: store.phoneNumberPlaceholder,
-                buttonTitle: "Send Verification Code",
-                isLoading: store.isLoading,
-                canSendCode: store.canSendCode,
-                showRegionPicker: store.showRegionPicker,
-                onRegionPickerToggle: {
-                    store.send(.toggleRegionPicker)
-                },
-                onRegionSelection: { region in
-                    store.send(.updateSelectedRegion(region))
-                },
-                onPhoneNumberChange: { newValue in
-                    store.send(.handlePhoneNumberChange(newValue))
-                },
-                onButtonTap: {
-                    store.send(.sendVerificationCode, animation: .default)
-                }
+            PhoneNumberEntryView(
+                store: store.scope(state: \.phoneNumberEntry, action: \.phoneNumberEntry)
             )
 
             Spacer()
@@ -337,28 +332,17 @@ struct SignInView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 120, height: 120)
-                .padding(.top, 20)
-
 
             Text("Enter verification code")
                 .font(.title2)
                 .fontWeight(.bold)
+            
+            Text("Sent to \(phoneNumberFormatter.formatPhoneNumberWithRegionCode(store.phoneNumberEntry.phoneNumber))")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
 
-            VerificationCodeEntryComponent(
-                verificationCode: store.verificationCode,
-                buttonTitle: "Verify",
-                isLoading: store.isLoading,
-                canVerifyCode: store.canVerifyCode,
-                changePhoneButtonTitle: "Change phone number",
-                onVerificationCodeChange: { newValue in
-                    store.send(.handleVerificationCodeChange(newValue))
-                },
-                onButtonTap: {
-                    store.send(.verifyCode, animation: .default)
-                },
-                onChangePhoneNumber: {
-                    store.send(.changeToPhoneEntryView, animation: .default)
-                }
+            VerificationCodeEntryView(
+                store: store.scope(state: \.verificationCodeEntry, action: \.verificationCodeEntry)
             )
 
             Spacer()

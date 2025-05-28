@@ -9,11 +9,14 @@ struct PhoneNumberFormatterClient {
     var cleanPhoneNumber: @Sendable (String) -> String = { _ in "" }
     var isValidPhoneNumber: @Sendable (String) -> Bool = { _ in false }
     var formatAsYouType: @Sendable (String) -> String = { _ in "" }
+    var formatAsYouTypeForRegion: @Sendable (String, String) -> String = { _, _ in "" }
     var formatVerificationCode: @Sendable (String) -> String = { _ in "" }
     var cleanVerificationCode: @Sendable (String) -> String = { _ in "" }
     var isValidVerificationCode: @Sendable (String) -> Bool = { _ in false }
     var limitVerificationCodeLength: @Sendable (String) -> String = { _ in "" }
     var limitPhoneNumberLength: @Sendable (String) -> String = { _ in "" }
+    var limitPhoneNumberLengthForRegion: @Sendable (String, String) -> String = { _, _ in "" }
+    var formatPhoneNumberWithRegionCode: @Sendable (String) -> String = { _ in "" }
 }
 
 extension PhoneNumberFormatterClient: DependencyKey {
@@ -106,6 +109,69 @@ extension PhoneNumberFormatterClient: DependencyKey {
             }
         },
         
+        formatAsYouTypeForRegion: { input, region in
+            let cleaned = Self.cleanPhoneNumber(input)
+            
+            if cleaned.isEmpty { return "" }
+            
+            switch region {
+            case "US", "CA":
+                // US/Canada format: (XXX) XXX-XXXX
+                if cleaned.count <= 3 {
+                    return "(\(cleaned)"
+                } else if cleaned.count <= 6 {
+                    let areaCode = String(cleaned.prefix(3))
+                    let exchange = String(cleaned.dropFirst(3))
+                    return "(\(areaCode)) \(exchange)"
+                } else if cleaned.count <= 10 {
+                    let areaCode = String(cleaned.prefix(3))
+                    let exchange = String(cleaned.dropFirst(3).prefix(3))
+                    let number = String(cleaned.dropFirst(6))
+                    return "(\(areaCode)) \(exchange)-\(number)"
+                } else {
+                    return cleaned
+                }
+                
+            case "UK":
+                // UK format: XXXXX XXXXXX
+                if cleaned.count <= 5 {
+                    return cleaned
+                } else if cleaned.count <= 11 {
+                    let first = String(cleaned.prefix(5))
+                    let second = String(cleaned.dropFirst(5))
+                    return "\(first) \(second)"
+                } else {
+                    return cleaned
+                }
+                
+            case "AU":
+                // Australia format: XXXX XXX XXX
+                if cleaned.count <= 4 {
+                    return cleaned
+                } else if cleaned.count <= 7 {
+                    let first = String(cleaned.prefix(4))
+                    let second = String(cleaned.dropFirst(4))
+                    return "\(first) \(second)"
+                } else if cleaned.count <= 10 {
+                    let first = String(cleaned.prefix(4))
+                    let second = String(cleaned.dropFirst(4).prefix(3))
+                    let third = String(cleaned.dropFirst(7))
+                    return "\(first) \(second) \(third)"
+                } else {
+                    return cleaned
+                }
+                
+            default:
+                // International format with spacing
+                if cleaned.count <= 12 {
+                    let chunks = cleaned.chunked(into: 3)
+                    return chunks.joined(separator: " ")
+                } else {
+                    return cleaned
+                }
+            }
+        },
+        
         formatVerificationCode: { code in
             let cleaned = Self.cleanVerificationCode(code)
             guard cleaned.count >= 3 else { return cleaned }
@@ -135,6 +201,52 @@ extension PhoneNumberFormatterClient: DependencyKey {
             let cleaned = Self.cleanPhoneNumber(phone)
             // Allow up to 15 digits for international numbers
             return String(cleaned.prefix(15))
+        },
+        
+        limitPhoneNumberLengthForRegion: { phone, region in
+            let cleaned = Self.cleanPhoneNumber(phone)
+            
+            // Define digit limits per region
+            let digitLimit: Int
+            switch region {
+            case "US", "CA": // United States and Canada use 10 digits
+                digitLimit = 10
+            case "UK": // UK uses 11 digits
+                digitLimit = 11  
+            case "AU": // Australia uses 10 digits
+                digitLimit = 10
+            default:
+                digitLimit = 15 // Default for international
+            }
+            
+            return String(cleaned.prefix(digitLimit))
+        },
+        
+        formatPhoneNumberWithRegionCode: { phoneNumber in
+            let cleaned = Self.cleanPhoneNumber(phoneNumber)
+            guard cleaned.count >= 10 else { return phoneNumber }
+            
+            if cleaned.count == 10 {
+                // Assume US number, add +1 prefix: +1 (XXX) XXX-XXXX
+                let areaCode = String(cleaned.prefix(3))
+                let exchange = String(cleaned.dropFirst(3).prefix(3))
+                let number = String(cleaned.dropFirst(6))
+                return "+1 (\(areaCode)) \(exchange)-\(number)"
+            } else if cleaned.count == 11 && cleaned.hasPrefix("1") {
+                // Already has US country code: +1 (XXX) XXX-XXXX
+                let areaCode = String(cleaned.dropFirst(1).prefix(3))
+                let exchange = String(cleaned.dropFirst(4).prefix(3))
+                let number = String(cleaned.dropFirst(7))
+                return "+1 (\(areaCode)) \(exchange)-\(number)"
+            } else {
+                // International format
+                if cleaned.count <= 12 {
+                    let chunks = cleaned.chunked(into: 3)
+                    return "+\(chunks.joined(separator: " "))"
+                } else {
+                    return "+\(cleaned)"
+                }
+            }
         }
     )
     
@@ -144,11 +256,14 @@ extension PhoneNumberFormatterClient: DependencyKey {
         cleanPhoneNumber: { $0 },
         isValidPhoneNumber: { _ in true },
         formatAsYouType: { $0 },
+        formatAsYouTypeForRegion: { phone, _ in phone },
         formatVerificationCode: { $0 },
         cleanVerificationCode: { $0 },
         isValidVerificationCode: { _ in true },
         limitVerificationCodeLength: { $0 },
-        limitPhoneNumberLength: { $0 }
+        limitPhoneNumberLength: { $0 },
+        limitPhoneNumberLengthForRegion: { phone, _ in phone },
+        formatPhoneNumberWithRegionCode: { $0 }
     )
     
     static let mockValue = PhoneNumberFormatterClient(
@@ -197,6 +312,50 @@ extension PhoneNumberFormatterClient: DependencyKey {
                 return "(\(areaCode)) \(exchange)-\(number)"
             }
         },
+        formatAsYouTypeForRegion: { input, region in
+            let cleaned = input.filter { $0.isNumber }
+            
+            if cleaned.isEmpty { return "" }
+            
+            switch region {
+            case "US", "CA":
+                if cleaned.count <= 3 {
+                    return "(\(cleaned)"
+                } else if cleaned.count <= 6 {
+                    let areaCode = String(cleaned.prefix(3))
+                    let exchange = String(cleaned.dropFirst(3))
+                    return "(\(areaCode)) \(exchange)"
+                } else {
+                    let areaCode = String(cleaned.prefix(3))
+                    let exchange = String(cleaned.dropFirst(3).prefix(3))
+                    let number = String(cleaned.dropFirst(6))
+                    return "(\(areaCode)) \(exchange)-\(number)"
+                }
+            case "UK":
+                if cleaned.count <= 5 {
+                    return cleaned
+                } else {
+                    let first = String(cleaned.prefix(5))
+                    let second = String(cleaned.dropFirst(5))
+                    return "\(first) \(second)"
+                }
+            case "AU":
+                if cleaned.count <= 4 {
+                    return cleaned
+                } else if cleaned.count <= 7 {
+                    let first = String(cleaned.prefix(4))
+                    let second = String(cleaned.dropFirst(4))
+                    return "\(first) \(second)"
+                } else {
+                    let first = String(cleaned.prefix(4))
+                    let second = String(cleaned.dropFirst(4).prefix(3))
+                    let third = String(cleaned.dropFirst(7))
+                    return "\(first) \(second) \(third)"
+                }
+            default:
+                return cleaned
+            }
+        },
         formatVerificationCode: { code in
             let cleaned = code.filter { $0.isNumber }
             guard cleaned.count >= 3 else { return cleaned }
@@ -222,6 +381,45 @@ extension PhoneNumberFormatterClient: DependencyKey {
         limitPhoneNumberLength: { phone in
             let cleaned = phone.filter { $0.isNumber }
             return String(cleaned.prefix(15))
+        },
+        limitPhoneNumberLengthForRegion: { phone, region in
+            let cleaned = phone.filter { $0.isNumber }
+            
+            // Define digit limits per region for mock
+            let digitLimit: Int
+            switch region {
+            case "US", "CA": 
+                digitLimit = 10
+            case "UK": 
+                digitLimit = 11  
+            case "AU": 
+                digitLimit = 10
+            default:
+                digitLimit = 15
+            }
+            
+            return String(cleaned.prefix(digitLimit))
+        },
+        formatPhoneNumberWithRegionCode: { phoneNumber in
+            let cleaned = phoneNumber.filter { $0.isNumber }
+            guard cleaned.count >= 10 else { return phoneNumber }
+            
+            if cleaned.count == 10 {
+                // Assume US number, add +1 prefix
+                let areaCode = String(cleaned.prefix(3))
+                let exchange = String(cleaned.dropFirst(3).prefix(3))
+                let number = String(cleaned.dropFirst(6).prefix(4))
+                return "+1 (\(areaCode)) \(exchange)-\(number)"
+            } else if cleaned.count == 11 && cleaned.hasPrefix("1") {
+                // Already has US country code
+                let areaCode = String(cleaned.dropFirst(1).prefix(3))
+                let exchange = String(cleaned.dropFirst(4).prefix(3))
+                let number = String(cleaned.dropFirst(7).prefix(4))
+                return "+1 (\(areaCode)) \(exchange)-\(number)"
+            } else {
+                // International format
+                return "+\(cleaned)"
+            }
         }
     )
     

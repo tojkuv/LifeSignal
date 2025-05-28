@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import LocalAuthentication
 import ComposableArchitecture
 import Dependencies
@@ -26,7 +27,28 @@ enum BiometricClientError: Error, LocalizedError {
     case systemCancel
     case passcodeNotSet
     case authenticationFailed
+    case permissionDenied
+    case biometryLocked
     case unknown(Error)
+    
+    static func == (lhs: BiometricClientError, rhs: BiometricClientError) -> Bool {
+        switch (lhs, rhs) {
+        case (.notAvailable, .notAvailable),
+             (.notEnrolled, .notEnrolled),
+             (.userCancel, .userCancel),
+             (.userFallback, .userFallback),
+             (.systemCancel, .systemCancel),
+             (.passcodeNotSet, .passcodeNotSet),
+             (.authenticationFailed, .authenticationFailed),
+             (.permissionDenied, .permissionDenied),
+             (.biometryLocked, .biometryLocked):
+            return true
+        case (.unknown(let lhsError), .unknown(let rhsError)):
+            return lhsError.localizedDescription == rhsError.localizedDescription
+        default:
+            return false
+        }
+    }
     
     var errorDescription: String? {
         switch self {
@@ -44,6 +66,10 @@ enum BiometricClientError: Error, LocalizedError {
             return "Device passcode is not set"
         case .authenticationFailed:
             return "Biometric authentication failed"
+        case .permissionDenied:
+            return "Biometric authentication permission denied. Please enable in Settings."
+        case .biometryLocked:
+            return "Biometric authentication is temporarily locked. Try again later or use your passcode."
         case .unknown(let error):
             return "Authentication error: \(error.localizedDescription)"
         }
@@ -56,7 +82,10 @@ enum BiometricClientError: Error, LocalizedError {
 struct BiometricClient {
     var isAvailable: @Sendable () -> BiometricType = { .none }
     var authenticate: @Sendable (String) async throws -> Bool = { _ in false }
+    var authenticateWithPermissionRequest: @Sendable (String) async throws -> Bool = { _ in false }
     var getBiometricType: @Sendable () -> BiometricType = { .none }
+    var isBiometricCapable: @Sendable () -> Bool = { false }
+    var openSettings: @Sendable () -> Void = { }
 }
 
 extension BiometricClient: DependencyKey {
@@ -117,6 +146,65 @@ extension BiometricClient: DependencyKey {
                             throw BiometricClientError.passcodeNotSet
                         case .authenticationFailed:
                             throw BiometricClientError.authenticationFailed
+                        case .biometryLockout:
+                            // Biometry is locked due to too many failed attempts
+                            throw BiometricClientError.biometryLocked
+                        default:
+                            throw BiometricClientError.unknown(error)
+                        }
+                    } else {
+                        throw BiometricClientError.unknown(error)
+                    }
+                }
+            },
+            
+            authenticateWithPermissionRequest: { reason in
+                let context = LAContext()
+                
+                // Configure context
+                context.localizedFallbackTitle = "Use Passcode"
+                context.localizedCancelTitle = "Cancel"
+                
+                do {
+                    let result = try await context.evaluatePolicy(
+                        .deviceOwnerAuthenticationWithBiometrics,
+                        localizedReason: reason
+                    )
+                    return result
+                } catch {
+                    // Map LAError to BiometricClientError
+                    if let laError = error as? LAError {
+                        switch laError.code {
+                        case .biometryNotAvailable:
+                            throw BiometricClientError.notAvailable
+                        case .biometryNotEnrolled:
+                            throw BiometricClientError.notEnrolled
+                        case .userCancel:
+                            throw BiometricClientError.userCancel
+                        case .userFallback:
+                            throw BiometricClientError.userFallback
+                        case .systemCancel:
+                            throw BiometricClientError.systemCancel
+                        case .passcodeNotSet:
+                            throw BiometricClientError.passcodeNotSet
+                        case .authenticationFailed:
+                            // For repeated failures, try again with device owner authentication
+                            let retryContext = LAContext()
+                            retryContext.localizedFallbackTitle = "Use Passcode"
+                            retryContext.localizedCancelTitle = "Cancel"
+                            
+                            do {
+                                let retryResult = try await retryContext.evaluatePolicy(
+                                    .deviceOwnerAuthentication,
+                                    localizedReason: reason
+                                )
+                                return retryResult
+                            } catch {
+                                throw BiometricClientError.authenticationFailed
+                            }
+                        case .biometryLockout:
+                            // Biometry is locked due to too many failed attempts
+                            throw BiometricClientError.biometryLocked
                         default:
                             throw BiometricClientError.unknown(error)
                         }
@@ -146,6 +234,27 @@ extension BiometricClient: DependencyKey {
                 @unknown default:
                     return .none
                 }
+            },
+            
+            isBiometricCapable: {
+                let context = LAContext()
+                // Check if device has biometric hardware, regardless of enrollment or permission
+                switch context.biometryType {
+                case .faceID, .touchID, .opticID:
+                    return true
+                case .none:
+                    return false
+                @unknown default:
+                    return false
+                }
+            },
+            
+            openSettings: {
+                if let settingsUrl = URL(string: UIApplication.openSettingsURLString) {
+                    Task { @MainActor in
+                        UIApplication.shared.open(settingsUrl)
+                    }
+                }
             }
         )
     }()
@@ -153,7 +262,10 @@ extension BiometricClient: DependencyKey {
     static let testValue = BiometricClient(
         isAvailable: { .faceID },
         authenticate: { _ in true },
-        getBiometricType: { .faceID }
+        authenticateWithPermissionRequest: { _ in true },
+        getBiometricType: { .faceID },
+        isBiometricCapable: { true },
+        openSettings: { }
     )
     
     static let mockValue = BiometricClient(
@@ -163,7 +275,14 @@ extension BiometricClient: DependencyKey {
             try await Task.sleep(for: .milliseconds(500))
             return true
         },
-        getBiometricType: { .faceID }
+        authenticateWithPermissionRequest: { reason in
+            // Simulate authentication delay
+            try await Task.sleep(for: .milliseconds(500))
+            return true
+        },
+        getBiometricType: { .faceID },
+        isBiometricCapable: { true },
+        openSettings: { }
     )
 }
 

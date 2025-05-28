@@ -43,31 +43,21 @@ struct ProfileFeature {
             lhs.newDescription == rhs.newDescription &&
             lhs.newName == rhs.newName &&
             lhs.imagePickerSourceType.rawValue == rhs.imagePickerSourceType.rawValue &&
-            lhs.newPhoneNumber == rhs.newPhoneNumber &&
-            lhs.phoneVerificationCode == rhs.phoneVerificationCode &&
             lhs.phoneVerificationID == rhs.phoneVerificationID &&
             lhs.isPhoneVerificationStep == rhs.isPhoneVerificationStep &&
-            lhs.selectedPhoneRegion == rhs.selectedPhoneRegion &&
-            lhs.showPhoneRegionPicker == rhs.showPhoneRegionPicker &&
             lhs.textEditorFocused == rhs.textEditorFocused &&
             lhs.nameFieldFocused == rhs.nameFieldFocused &&
-            lhs.phoneNumberFieldFocused == rhs.phoneNumberFieldFocused &&
-            lhs.phoneVerificationCodeFieldFocused == rhs.phoneVerificationCodeFieldFocused
+            lhs.phoneNumberEntry == rhs.phoneNumberEntry &&
+            lhs.verificationCodeEntry == rhs.verificationCodeEntry
         }
         
         // Phone number change states
-        var newPhoneNumber = ""
-        var phoneVerificationCode = ""
         var phoneVerificationID: String? = nil
         var isPhoneVerificationStep = false
-        var selectedPhoneRegion = "US"
-        var showPhoneRegionPicker = false
         
         // Focus states for sync with SwiftUI
         var textEditorFocused = false
         var nameFieldFocused = false
-        var phoneNumberFieldFocused = false
-        var phoneVerificationCodeFieldFocused = false
         
         // Available regions for phone number
         static let phoneRegions: [(String, String)] = [
@@ -76,6 +66,17 @@ struct ProfileFeature {
             ("UK", "+44"),
             ("AU", "+61")
         ]
+        
+        // Child feature states for phone number change
+        var phoneNumberEntry = PhoneNumberEntryFeature.State(
+            selectedRegion: "US",
+            regions: ProfileFeature.State.phoneRegions,
+            buttonTitle: "Send Verification Code"
+        )
+        
+        var verificationCodeEntry = VerificationCodeEntryFeature.State(
+            buttonTitle: "Verify Code"
+        )
         
         var isUsingDefaultAvatar: Bool {
             avatarImageData == nil
@@ -86,27 +87,7 @@ struct ProfileFeature {
             return UIImage(data: imageData)
         }
         
-        var phoneNumberPlaceholder: String {
-            let selectedRegionInfo = Self.phoneRegions.first { $0.0 == selectedPhoneRegion }!
-            return "\(selectedRegionInfo.1) (000) 000-0000"
-        }
         
-        var canSendPhoneVerification: Bool {
-            isPhoneNumberValid
-        }
-        
-        var canVerifyPhoneCode: Bool {
-            isVerificationCodeValid
-        }
-        
-        var isPhoneNumberValid: Bool {
-            let digitCount = newPhoneNumber.filter { $0.isNumber }.count
-            return digitCount == 10 || newPhoneNumber == "+11234567890" // Allow dev testing
-        }
-        
-        var isVerificationCodeValid: Bool {
-            phoneVerificationCode.filter { $0.isNumber }.count == 6
-        }
     }
     
     @CasePathable
@@ -130,13 +111,11 @@ struct ProfileFeature {
         // Phone number management
         case showPhoneNumberChange
         case cancelPhoneNumberChange
-        case togglePhoneRegionPicker
-        case updateSelectedPhoneRegion((String, String))
-        case handlePhoneNumberChange(String)
-        case sendPhoneVerificationCode
-        case handlePhoneVerificationCodeChange(String)
-        case verifyPhoneNumber
         case resetPhoneNumberFlow
+        
+        // Child feature actions
+        case phoneNumberEntry(PhoneNumberEntryFeature.Action)
+        case verificationCodeEntry(VerificationCodeEntryFeature.Action)
         
         // Authentication
         case confirmSignOut
@@ -145,8 +124,6 @@ struct ProfileFeature {
         // Focus states
         case handleTextEditorFocusChange(Bool)
         case handleNameFieldFocusChange(Bool)
-        case handlePhoneNumberFieldFocusChange(Bool)
-        case handlePhoneVerificationCodeFieldFocusChange(Bool)
         
         // Network responses
         case updateResponse(Result<Void, Error>)
@@ -162,6 +139,14 @@ struct ProfileFeature {
     @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
     
     var body: some ReducerOf<Self> {
+        Scope(state: \.phoneNumberEntry, action: \.phoneNumberEntry) {
+            PhoneNumberEntryFeature()
+        }
+        
+        Scope(state: \.verificationCodeEntry, action: \.verificationCodeEntry) {
+            VerificationCodeEntryFeature()
+        }
+        
         BindingReducer()
 
         Reduce { state, action in
@@ -192,42 +177,36 @@ struct ProfileFeature {
                 }
 
             case .showPhoneNumberChange:
-                state.newPhoneNumber = ""
-                state.phoneVerificationCode = ""
+                state.phoneNumberEntry.phoneNumber = ""
+                state.verificationCodeEntry.verificationCode = ""
                 state.phoneVerificationID = nil
                 state.isPhoneVerificationStep = false
-                state.selectedPhoneRegion = "US"
+                state.phoneNumberEntry.selectedRegion = "US"
                 state.showPhoneNumberChangeSheet = true
-                state.phoneNumberFieldFocused = true
+                state.phoneNumberEntry.phoneNumberFieldFocused = true
                 return .run { _ in
                     await haptics.impact(.light)
                 }
                 
             case .cancelPhoneNumberChange:
                 state.showPhoneNumberChangeSheet = false
-                state.newPhoneNumber = ""
-                state.phoneVerificationCode = ""
+                state.phoneNumberEntry.phoneNumber = ""
+                state.verificationCodeEntry.verificationCode = ""
                 state.phoneVerificationID = nil
                 state.isPhoneVerificationStep = false
                 return .run { _ in
                     await haptics.impact(.light)
                 }
                 
-            case .togglePhoneRegionPicker:
-                state.showPhoneRegionPicker.toggle()
+            case .resetPhoneNumberFlow:
+                state.isPhoneVerificationStep = false
+                state.verificationCodeEntry.verificationCode = ""
+                state.phoneVerificationID = nil
                 return .none
                 
-            case let .updateSelectedPhoneRegion(region):
-                state.selectedPhoneRegion = region.0
-                state.showPhoneRegionPicker = false
-                return .none
-                
-            case let .handlePhoneNumberChange(newValue):
-                state.newPhoneNumber = newValue
-                return .none
-                
-            case .sendPhoneVerificationCode:
-                guard !state.newPhoneNumber.isEmpty else {
+            // Handle child feature delegate actions
+            case .phoneNumberEntry(.delegate(.buttonTapped)):
+                guard !state.phoneNumberEntry.phoneNumber.isEmpty else {
                     return .run { [notificationClient, haptics] _ in
                         try? await notificationClient.sendSystemNotification(
                             "Phone Number Required",
@@ -237,7 +216,7 @@ struct ProfileFeature {
                     }
                 }
                 
-                return .run { [phoneNumber = state.newPhoneNumber, sessionClient] send in
+                return .run { [phoneNumber = state.phoneNumberEntry.phoneNumber, sessionClient] send in
                     await send(.phoneVerificationSent(
                         Result {
                             try await sessionClient.sendPhoneChangeVerificationCode(phoneNumber)
@@ -245,12 +224,8 @@ struct ProfileFeature {
                     ))
                 }
                 
-            case let .handlePhoneVerificationCodeChange(newValue):
-                state.phoneVerificationCode = newValue
-                return .none
-                
-            case .verifyPhoneNumber:
-                guard !state.phoneVerificationCode.isEmpty else {
+            case .verificationCodeEntry(.delegate(.buttonTapped)):
+                guard !state.verificationCodeEntry.verificationCode.isEmpty else {
                     return .run { [notificationClient, haptics] _ in
                         try? await notificationClient.sendSystemNotification(
                             "Verification Code Required",
@@ -270,7 +245,7 @@ struct ProfileFeature {
                     }
                 }
                 
-                return .run { [verificationID = verificationID, code = state.phoneVerificationCode, sessionClient] send in
+                return .run { [verificationID = verificationID, code = state.verificationCodeEntry.verificationCode, sessionClient] send in
                     await send(.phoneNumberChanged(
                         Result {
                             try await sessionClient.changePhoneNumber(verificationID, code)
@@ -278,10 +253,10 @@ struct ProfileFeature {
                     ))
                 }
                 
-            case .resetPhoneNumberFlow:
-                state.isPhoneVerificationStep = false
-                state.phoneVerificationCode = ""
-                state.phoneVerificationID = nil
+            case .phoneNumberEntry:
+                return .none
+                
+            case .verificationCodeEntry:
                 return .none
 
             case .confirmSignOut:
@@ -443,13 +418,6 @@ struct ProfileFeature {
                 state.nameFieldFocused = focused
                 return .none
                 
-            case let .handlePhoneNumberFieldFocusChange(focused):
-                state.phoneNumberFieldFocused = focused
-                return .none
-                
-            case let .handlePhoneVerificationCodeFieldFocusChange(focused):
-                state.phoneVerificationCodeFieldFocused = focused
-                return .none
 
             case .updateResponse(.success):
                 return .run { [haptics, notificationClient] _ in
@@ -489,8 +457,8 @@ struct ProfileFeature {
             case let .phoneVerificationSent(.success(verificationID)):
                 state.phoneVerificationID = verificationID
                 state.isPhoneVerificationStep = true
-                state.phoneVerificationCodeFieldFocused = true
-                return .run { [phoneNumber = state.newPhoneNumber, haptics, notificationClient] _ in
+                state.verificationCodeEntry.verificationCodeFieldFocused = true
+                return .run { [phoneNumber = state.phoneNumberEntry.phoneNumber, haptics, notificationClient] _ in
                     await haptics.notification(.success)
                     
                     try? await notificationClient.sendSystemNotification(
@@ -511,9 +479,9 @@ struct ProfileFeature {
                 
             case .phoneNumberChanged(.success):
                 state.showPhoneNumberChangeSheet = false
-                let changedPhoneNumber = state.newPhoneNumber
-                state.newPhoneNumber = ""
-                state.phoneVerificationCode = ""
+                let changedPhoneNumber = state.phoneNumberEntry.phoneNumber
+                state.phoneNumberEntry.phoneNumber = ""
+                state.verificationCodeEntry.verificationCode = ""
                 state.phoneVerificationID = nil
                 state.isPhoneVerificationStep = false
                 return .run { [haptics, notificationClient] _ in
@@ -599,8 +567,6 @@ struct ProfileView: View {
     // Focus states bound to store
     @FocusState private var textEditorFocused: Bool
     @FocusState private var nameFieldFocused: Bool
-    @FocusState private var phoneNumberFieldFocused: Bool
-    @FocusState private var phoneVerificationCodeFieldFocused: Bool
     @State private var textEditorHeight: CGFloat = 72
     
     @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
@@ -839,18 +805,6 @@ extension ProfileView {
             .onChange(of: store.nameFieldFocused) { _, newValue in
                 nameFieldFocused = newValue
             }
-            .onChange(of: phoneNumberFieldFocused) { _, newValue in
-                store.send(.handlePhoneNumberFieldFocusChange(newValue))
-            }
-            .onChange(of: store.phoneNumberFieldFocused) { _, newValue in
-                phoneNumberFieldFocused = newValue
-            }
-            .onChange(of: phoneVerificationCodeFieldFocused) { _, newValue in
-                store.send(.handlePhoneVerificationCodeFieldFocusChange(newValue))
-            }
-            .onChange(of: store.phoneVerificationCodeFieldFocused) { _, newValue in
-                phoneVerificationCodeFieldFocused = newValue
-            }
     }
 
     // MARK: - Emergency Note Sheet View
@@ -1035,7 +989,7 @@ extension ProfileView {
                 .font(.headline)
                 .padding(.horizontal, 4)
 
-            Text(store.currentUser?.phoneNumber.isEmpty == false ? phoneNumberFormatter.formatPhoneNumberForDisplay(store.currentUser!.phoneNumber) : "(954) 234-5678")
+            Text(store.currentUser?.phoneNumber.isEmpty == false ? phoneNumberFormatter.formatPhoneNumberWithRegionCode(store.currentUser!.phoneNumber) : "+1 (954) 234-5678")
                 .font(.body)
                 .padding(.vertical, 12)
                 .padding(.horizontal)
@@ -1049,33 +1003,9 @@ extension ProfileView {
                 .padding(.horizontal, 4)
                 .padding(.top, 8)
 
-            PhoneNumberEntryComponent(
-                selectedRegion: store.selectedPhoneRegion,
-                regions: ProfileFeature.State.phoneRegions,
-                phoneNumber: store.newPhoneNumber,
-                phoneNumberPlaceholder: store.phoneNumberPlaceholder,
-                buttonTitle: "Send Verification Code",
-                isLoading: false,
-                canSendCode: store.isPhoneNumberValid,
-                showRegionPicker: store.showPhoneRegionPicker,
-                onRegionPickerToggle: {
-                    store.send(.togglePhoneRegionPicker)
-                },
-                onRegionSelection: { region in
-                    store.send(.updateSelectedPhoneRegion(region))
-                },
-                onPhoneNumberChange: { newValue in
-                    store.send(.handlePhoneNumberChange(newValue))
-                },
-                onButtonTap: {
-                    store.send(.sendPhoneVerificationCode, animation: .default)
-                }
+            PhoneNumberEntryView(
+                store: store.scope(state: \.phoneNumberEntry, action: \.phoneNumberEntry)
             )
-
-            Text("Enter your new phone number. We'll send a verification code to confirm.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 4)
         }
         .padding(.horizontal)
         .padding(.top, 24)
@@ -1089,23 +1019,12 @@ extension ProfileView {
                 .font(.headline)
                 .padding(.horizontal, 4)
 
-            Text("Enter the verification code sent to \(store.newPhoneNumber)")
+            Text("Sent to \(store.phoneNumberEntry.phoneNumber)")
                 .font(.body)
                 .padding(.horizontal, 4)
 
-            VerificationCodeEntryComponent(
-                verificationCode: store.phoneVerificationCode,
-                buttonTitle: "Verify Code",
-                isLoading: false,
-                canVerifyCode: store.isVerificationCodeValid,
-                changePhoneButtonTitle: nil,
-                onVerificationCodeChange: { newValue in
-                    store.send(.handlePhoneVerificationCodeChange(newValue))
-                },
-                onButtonTap: {
-                    store.send(.verifyPhoneNumber, animation: .default)
-                },
-                onChangePhoneNumber: nil
+            VerificationCodeEntryView(
+                store: store.scope(state: \.verificationCodeEntry, action: \.verificationCodeEntry)
             )
         }
         .padding(.horizontal)

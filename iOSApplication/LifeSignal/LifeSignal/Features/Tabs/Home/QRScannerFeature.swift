@@ -3,6 +3,7 @@ import Foundation
 import UIKit
 @preconcurrency import AVFoundation
 import PhotosUI
+import Photos
 import ComposableArchitecture
 import Perception
 
@@ -18,6 +19,7 @@ struct QRScannerFeature {
         var scannedCode: String? = nil
         var manualQRCode = ""
         var cameraPermissionStatus: AVAuthorizationStatus = .notDetermined
+        var photoLibraryPermissionStatus: PHAuthorizationStatus = .notDetermined
         
         // View state
         var isShowingManualEntry = false
@@ -29,6 +31,7 @@ struct QRScannerFeature {
         var showErrorAlert = false
         var errorMessage: String? = nil
         var galleryThumbnails: [UIImage] = []
+        var areGalleryThumbnailsMock: Bool = false
         
         // Contact being added - using updated Contact model
         var contact = Contact(
@@ -38,7 +41,7 @@ struct QRScannerFeature {
             isResponder: false,
             isDependent: false,
             emergencyNote: "",
-            lastCheckInTimestamp: nil,
+            lastCheckInTimestamp: Date().addingTimeInterval(-3600), // 1 hour ago
             checkInInterval: 24 * 60 * 60,
             hasIncomingPing: false,
             hasOutgoingPing: false,
@@ -99,6 +102,9 @@ struct QRScannerFeature {
         case cancelAddContact
         case loadGalleryThumbnails
         case galleryThumbnailsLoaded([UIImage])
+        case galleryThumbnailsLoadedAsMock([UIImage])
+        case requestPhotoLibraryPermission
+        case photoLibraryPermissionResponse(PHAuthorizationStatus)
         case dismiss
         case permissionResponse(AVAuthorizationStatus)
         case codeProcessingResponse(Result<Contact, Error>)
@@ -196,7 +202,19 @@ struct QRScannerFeature {
             
         case let .galleryThumbnailsLoaded(thumbnails):
             state.galleryThumbnails = thumbnails
+            state.areGalleryThumbnailsMock = false
             return .none
+            
+        case let .galleryThumbnailsLoadedAsMock(thumbnails):
+            state.galleryThumbnails = thumbnails
+            state.areGalleryThumbnailsMock = true
+            return .none
+            
+        case .requestPhotoLibraryPermission:
+            return requestPhotoLibraryPermissionEffect()
+            
+        case let .photoLibraryPermissionResponse(status):
+            return photoLibraryPermissionResponseEffect(state: &state, status: status)
             
         case .dismiss:
             return .none
@@ -331,6 +349,11 @@ struct QRScannerFeature {
             }
         }
         
+        // If these are mock thumbnails and photo library permission is not granted, request permission
+        if state.areGalleryThumbnailsMock && state.photoLibraryPermissionStatus != .authorized && state.photoLibraryPermissionStatus != .limited {
+            return .send(.requestPhotoLibraryPermission)
+        }
+        
         return .run { [haptics, cameraClient] send in
             await haptics.impact(.light)
             await send(.toggleGallery(false))
@@ -392,8 +415,16 @@ struct QRScannerFeature {
     
     private func loadGalleryThumbnailsEffect() -> Effect<Action> {
         .run { [cameraClient] send in
+            // Check photo library permission first
+            let photoStatus = await cameraClient.checkPhotoLibraryPermission()
             let thumbnails = await cameraClient.getRecentPhotos()
-            await send(.galleryThumbnailsLoaded(thumbnails))
+            
+            // If permission is not granted, these will be mock thumbnails
+            if photoStatus == .authorized || photoStatus == .limited {
+                await send(.galleryThumbnailsLoaded(thumbnails))
+            } else {
+                await send(.galleryThumbnailsLoadedAsMock(thumbnails))
+            }
         }
     }
     
@@ -401,11 +432,12 @@ struct QRScannerFeature {
         state.cameraPermissionStatus = status
         if status == .authorized {
             state.isScanning = true
-            // Request photo library permission and then load gallery thumbnails
+            // Check current photo library permission status and load gallery thumbnails
             return .run { [cameraClient] send in
-                // Request photo library permission first
-                _ = await cameraClient.requestPhotoLibraryPermission()
-                // Then load gallery thumbnails
+                // Check current photo library permission
+                let photoStatus = await cameraClient.checkPhotoLibraryPermission()
+                await send(.photoLibraryPermissionResponse(photoStatus))
+                // Load gallery thumbnails
                 await send(.loadGalleryThumbnails)
             }
         }
@@ -490,6 +522,22 @@ struct QRScannerFeature {
                 "Unable to add contact: \(error.localizedDescription)"
             )
         }
+    }
+    
+    private func requestPhotoLibraryPermissionEffect() -> Effect<Action> {
+        .run { [cameraClient] send in
+            let status = await cameraClient.requestPhotoLibraryPermission()
+            await send(.photoLibraryPermissionResponse(status))
+        }
+    }
+    
+    private func photoLibraryPermissionResponseEffect(state: inout State, status: PHAuthorizationStatus) -> Effect<Action> {
+        state.photoLibraryPermissionStatus = status
+        // If permission was granted, reload gallery thumbnails with real photos
+        if status == .authorized || status == .limited {
+            return .send(.loadGalleryThumbnails)
+        }
+        return .none
     }
 }
 
@@ -584,63 +632,6 @@ struct CameraPreviewView: UIViewRepresentable {
     }
 }
 
-
-/// A SwiftUI view for picking photos
-struct PhotoPickerView: UIViewControllerRepresentable {
-    /// The TCA store for the QR scanner
-    let store: StoreOf<QRScannerFeature>
-
-    func makeUIViewController(context: Context) -> PHPickerViewController {
-        var configuration = PHPickerConfiguration()
-        configuration.filter = .images
-        configuration.selectionLimit = 1
-
-        let picker = PHPickerViewController(configuration: configuration)
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-
-    class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        let parent: PhotoPickerView
-
-        init(_ parent: PhotoPickerView) {
-            self.parent = parent
-        }
-
-        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            // Dismiss the picker
-            DispatchQueue.main.async {
-                self.parent.store.send(.toggleGallery(false))
-            }
-
-            guard let provider = results.first?.itemProvider else {
-                // No image selected
-                return
-            }
-
-            if provider.canLoadObject(ofClass: UIImage.self) {
-                provider.loadObject(ofClass: UIImage.self) { image, error in
-                    if let image = image as? UIImage {
-                        DispatchQueue.main.async {
-                            // Process the selected image for QR code scanning
-                            self.parent.store.send(.processImageForQRCode(image))
-                        }
-                    } else {
-                        DispatchQueue.main.async {
-                            self.parent.store.send(.showNoQRCodeAlert(true))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 
 /// A SwiftUI view for scanning QR codes
@@ -1101,6 +1092,87 @@ struct QRScannerView: View {
             .navigationBarItems(leading: Button("Cancel") {
                 store.send(.cancelManualEntry)
             })
+        }
+    }
+}
+
+// MARK: - PhotoPickerView
+
+struct PhotoPickerView: View {
+    @Bindable var store: StoreOf<QRScannerFeature>
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Text("Recent Photos")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .padding(.top)
+                
+                if store.galleryThumbnails.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "photo.on.rectangle")
+                            .font(.system(size: 64))
+                            .foregroundColor(.gray)
+                        
+                        Text("No photos available")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                        
+                        if store.photoLibraryPermissionStatus == .notDetermined {
+                            Button("Allow Photo Access") {
+                                store.send(.requestPhotoLibraryPermission)
+                            }
+                            .foregroundColor(.blue)
+                        } else if store.photoLibraryPermissionStatus == .denied {
+                            VStack(spacing: 12) {
+                                Text("Photo library access is required to select images")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .multilineTextAlignment(.center)
+                                
+                                Button("Open Settings") {
+                                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                                        UIApplication.shared.open(url)
+                                    }
+                                }
+                                .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+                            ForEach(0..<store.galleryThumbnails.count, id: \.self) { index in
+                                Button(action: {
+                                    store.send(.processGalleryImage(index))
+                                }) {
+                                    Image(uiImage: store.galleryThumbnails[index])
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                        .frame(width: 100, height: 100)
+                                        .clipped()
+                                        .cornerRadius(8)
+                                }
+                            }
+                        }
+                        .padding()
+                    }
+                }
+                
+                Spacer()
+            }
+            .navigationTitle("Select Photo")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarItems(
+                leading: Button("Cancel") {
+                    store.send(.toggleGallery(false))
+                }
+            )
+            .onAppear {
+                store.send(.loadGalleryThumbnails)
+            }
         }
     }
 }

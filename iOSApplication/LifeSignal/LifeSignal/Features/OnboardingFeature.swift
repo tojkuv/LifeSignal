@@ -32,6 +32,13 @@ struct OnboardingFeature {
         var biometricAuthEnabled: Bool = false
         var intervalPickerUnit: String = "days"
         var intervalPickerValue: Int = 1
+        
+        // Biometric authentication state
+        var biometricType: BiometricType = .none
+        var isBiometricCapable: Bool = false
+        var showBiometricAuthError = false
+        var biometricAuthErrorMessage: String? = nil
+        var showPermissionAlert = false
 
         var progress: Double {
             Double(currentStep) / 4.0  // 5 steps total (0-4)
@@ -86,6 +93,7 @@ struct OnboardingFeature {
         case cancelOnboarding
         case completeOnboarding
         case onboardingCompleted
+        case viewAppeared
         
         // User profile creation
         case createUserProfile
@@ -111,10 +119,16 @@ struct OnboardingFeature {
         
         // Biometric auth
         case setBiometricAuth(Bool)
+        case requestBiometricAuth
+        case biometricAuthResult(Result<Bool, Error>)
+        case dismissBiometricError
+        case requestPermissionAndRetry
+        case openSettings
     }
 
     // Features use clients for business logic, SessionClient orchestrates other clients
     @Dependency(\.sessionClient) var sessionClient
+    @Dependency(\.biometricClient) var biometricClient
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -129,8 +143,13 @@ struct OnboardingFeature {
                 state.firstName = ""
                 state.lastName = ""
                 state.emergencyNote = ""
+                state.biometricType = biometricClient.getBiometricType()
+                state.isBiometricCapable = biometricClient.isBiometricCapable()
 
-                return .none
+                return .run { send in
+                    try await Task.sleep(for: .milliseconds(100))
+                    await send(.setFirstNameFieldFocused(true))
+                }
 
             case .nextStep:
                 if state.currentStep == 0 && !state.areBothNamesFilled {
@@ -140,13 +159,31 @@ struct OnboardingFeature {
                     state.checkInInterval = state.getComputedIntervalInSeconds()
                 }
                 if state.currentStep < 4 {
+                    let previousStep = state.currentStep
                     state.currentStep += 1
+                    // Focus appropriate field when moving to emergency note step
+                    if state.currentStep == 1 {
+                        return .run { send in
+                            try await Task.sleep(for: .milliseconds(100))
+                            await send(.setNoteFieldFocused(true))
+                        }
+                    }
                 }
                 return .none
 
             case .previousStep:
                 if state.currentStep > 0 {
                     state.currentStep -= 1
+                    let currentStep = state.currentStep
+                    // Focus appropriate field when going back
+                    return .run { send in
+                        try await Task.sleep(for: .milliseconds(100))
+                        if currentStep == 0 {
+                            await send(.setFirstNameFieldFocused(true))
+                        } else if currentStep == 1 {
+                            await send(.setNoteFieldFocused(true))
+                        }
+                    }
                 }
                 return .none
 
@@ -284,11 +321,117 @@ struct OnboardingFeature {
                 
             // Biometric auth
             case let .setBiometricAuth(enabled):
-                state.biometricAuthEnabled = enabled
+                if enabled {
+                    if state.biometricType != .none {
+                        // Biometrics are available, require authentication confirmation
+                        return .send(.requestBiometricAuth)
+                    } else if state.isBiometricCapable {
+                        // Device has biometric hardware but it's disabled/not enrolled
+                        state.showPermissionAlert = true
+                        state.biometricAuthErrorMessage = "Biometric authentication is not enabled. Please set it up in Settings."
+                        return .none
+                    } else {
+                        // Device doesn't support biometrics
+                        state.showBiometricAuthError = true
+                        state.biometricAuthErrorMessage = "This device does not support biometric authentication."
+                        return .none
+                    }
+                } else {
+                    // Allow disabling without confirmation
+                    state.biometricAuthEnabled = enabled
+                    return .none
+                }
+                
+            case .requestBiometricAuth:
+                return .run { send in
+                    await send(.biometricAuthResult(Result {
+                        try await biometricClient.authenticate("Confirm biometric authentication to enable secure actions")
+                    }))
+                }
+                
+            case let .biometricAuthResult(.success(authenticated)):
+                if authenticated {
+                    state.biometricAuthEnabled = true
+                }
                 return .none
+                
+            case let .biometricAuthResult(.failure(error)):
+                state.biometricAuthEnabled = false
+                if let biometricError = error as? BiometricClientError {
+                    switch biometricError {
+                    case .permissionDenied, .notAvailable, .notEnrolled:
+                        state.showPermissionAlert = true
+                        state.biometricAuthErrorMessage = "Biometric authentication is not available or disabled. Please enable it in Settings."
+                    case .biometryLocked:
+                        state.showBiometricAuthError = true
+                        state.biometricAuthErrorMessage = "Biometric authentication is temporarily locked due to too many failed attempts. Please wait and try again, or use your device passcode."
+                    case .userCancel:
+                        // User cancelled - just show normal error
+                        state.biometricAuthErrorMessage = "Authentication was cancelled"
+                        state.showBiometricAuthError = true
+                    case .authenticationFailed:
+                        // Authentication failed - offer to try again or go to settings
+                        state.showPermissionAlert = true
+                        state.biometricAuthErrorMessage = "Authentication failed. Try again or enable biometric authentication in Settings."
+                    default:
+                        state.biometricAuthErrorMessage = error.localizedDescription
+                        state.showBiometricAuthError = true
+                    }
+                } else {
+                    state.biometricAuthErrorMessage = error.localizedDescription
+                    state.showBiometricAuthError = true
+                }
+                return .none
+                
+            case .dismissBiometricError:
+                state.showBiometricAuthError = false
+                state.biometricAuthErrorMessage = nil
+                return .none
+                
+            case .requestPermissionAndRetry:
+                state.showPermissionAlert = false
+                return .run { send in
+                    await send(.biometricAuthResult(Result {
+                        try await biometricClient.authenticate("Enable biometric authentication for secure actions")
+                    }))
+                }
+                
+            case .openSettings:
+                state.showPermissionAlert = false
+                biometricClient.openSettings()
+                return .none
+                
+            case .viewAppeared:
+                // Update biometric type and capability when view appears
+                state.biometricType = biometricClient.getBiometricType()
+                state.isBiometricCapable = biometricClient.isBiometricCapable()
+                return .run { [currentStep = state.currentStep] send in
+                    try await Task.sleep(for: .milliseconds(100))
+                    if currentStep == 0 {
+                        await send(.setFirstNameFieldFocused(true))
+                    } else if currentStep == 1 {
+                        await send(.setNoteFieldFocused(true))
+                    }
+                }
                 
 
             case .onboardingCompleted:
+                // Clear onboarding fields after completion
+                state.currentStep = 0
+                state.firstName = ""
+                state.lastName = ""
+                state.emergencyNote = ""
+                state.checkInInterval = 86400  // Reset to default
+                state.reminderMinutesBefore = 30
+                state.biometricAuthEnabled = false
+                state.biometricType = .none
+                state.isBiometricCapable = false
+                state.showBiometricAuthError = false
+                state.biometricAuthErrorMessage = nil
+                state.showPermissionAlert = false
+                state.intervalPickerUnit = "days"
+                state.intervalPickerValue = 1
+                state.isLoading = false
                 return .none
             }
         }
@@ -329,6 +472,33 @@ struct OnboardingView: View {
                 .padding(.horizontal)
                 .padding(.bottom, 50)
                 .background(Color(UIColor.systemGroupedBackground))
+                .navigationTitle("Setup")
+                .navigationBarTitleDisplayMode(.inline)
+                .navigationBarBackButtonHidden(true)
+                .onAppear {
+                    store.send(.viewAppeared)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        if store.currentStep > 0 {
+                            Button(action: {
+                                store.send(.previousStep, animation: .default)
+                            }) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "chevron.left")
+                                    Text("Back")
+                                }
+                                .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Cancel") {
+                            store.send(.cancelOnboarding, animation: .default)
+                        }
+                        .foregroundColor(.blue)
+                    }
+                }
                 .onChange(of: store.firstNameFieldFocused) { _, newValue in
                     firstNameFieldFocused = newValue
                 }
@@ -372,20 +542,6 @@ struct OnboardingView: View {
     @ViewBuilder
     private func nameEntryView() -> some View {
         VStack(spacing: 0) {
-            HStack {
-                Button(action: {
-                    store.send(.cancelOnboarding, animation: .default)
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "xmark")
-                        Text("Cancel")
-                    }
-                    .foregroundColor(.blue)
-                }
-                Spacer()
-            }
-            .padding(.bottom, 16)
-            
             VStack(spacing: 24) {
                 Text("What's your name?")
                     .font(.title2)
@@ -442,6 +598,7 @@ struct OnboardingView: View {
             }
             
             Spacer()
+                .frame(minHeight: 24)
             
             Button(action: {
                 if store.areBothNamesFilled {
@@ -449,7 +606,7 @@ struct OnboardingView: View {
                 }
             }) {
                 Text("Continue")
-                    .fontWeight(.semibold)
+                    .font(.headline)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding()
@@ -463,20 +620,6 @@ struct OnboardingView: View {
     @ViewBuilder
     private func emergencyNoteView() -> some View {
         VStack(spacing: 0) {
-            HStack {
-                Button(action: {
-                    store.send(.previousStep, animation: .default)
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.left")
-                        Text("Back")
-                    }
-                    .foregroundColor(.blue)
-                }
-                Spacer()
-            }
-            .padding(.bottom, 16)
-            
             VStack(spacing: 24) {
                 Text("Your emergency note")
                     .font(.title2)
@@ -499,12 +642,13 @@ struct OnboardingView: View {
             }
             
             Spacer()
+                .frame(minHeight: 24)
             
             Button(action: {
                 store.send(.nextStep, animation: .default)
             }) {
                 Text("Continue")
-                    .fontWeight(.semibold)
+                    .font(.headline)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding()
@@ -517,20 +661,6 @@ struct OnboardingView: View {
     @ViewBuilder
     private func checkInIntervalView() -> some View {
         VStack(spacing: 0) {
-            HStack {
-                Button(action: {
-                    store.send(.previousStep, animation: .default)
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.left")
-                        Text("Back")
-                    }
-                    .foregroundColor(.blue)
-                }
-                Spacer()
-            }
-            .padding(.bottom, 16)
-            
             VStack(spacing: 24) {
                 Text("How often should you check in?")
                     .font(.title2)
@@ -572,12 +702,13 @@ struct OnboardingView: View {
             }
             
             Spacer()
+                .frame(minHeight: 24)
             
             Button(action: {
                 store.send(.nextStep, animation: .default)
             }) {
                 Text("Continue")
-                    .fontWeight(.semibold)
+                    .font(.headline)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding()
@@ -590,20 +721,6 @@ struct OnboardingView: View {
     @ViewBuilder
     private func reminderSettingsView() -> some View {
         VStack(spacing: 0) {
-            HStack {
-                Button(action: {
-                    store.send(.previousStep, animation: .default)
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.left")
-                        Text("Back")
-                    }
-                    .foregroundColor(.blue)
-                }
-                Spacer()
-            }
-            .padding(.bottom, 16)
-            
             VStack(spacing: 24) {
                 Text("When should we remind you?")
                     .font(.title2)
@@ -623,12 +740,13 @@ struct OnboardingView: View {
             }
             
             Spacer()
+                .frame(minHeight: 24)
             
             Button(action: {
                 store.send(.nextStep, animation: .default)
             }) {
                 Text("Continue")
-                    .fontWeight(.semibold)
+                    .font(.headline)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding()
@@ -642,20 +760,6 @@ struct OnboardingView: View {
     @ViewBuilder
     private func biometricAuthView() -> some View {
         VStack(spacing: 0) {
-            HStack {
-                Button(action: {
-                    store.send(.previousStep, animation: .default)
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.left")
-                        Text("Back")
-                    }
-                    .foregroundColor(.blue)
-                }
-                Spacer()
-            }
-            .padding(.bottom, 16)
-            
             VStack(spacing: 24) {
                 Text("Secure your actions")
                     .font(.title2)
@@ -669,16 +773,27 @@ struct OnboardingView: View {
                             Text("Biometric Authentication")
                                 .font(.body)
                                 .foregroundColor(.primary)
-                            Text("Enable Face ID for secure actions")
+                            Text(store.biometricType != .none 
+                                 ? "Enable \(store.biometricType.displayName) for secure actions"
+                                 : store.isBiometricCapable 
+                                 ? "Enable biometric authentication for secure actions" 
+                                 : "Biometric authentication not available")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
                         Spacer()
                         Toggle("", isOn: Binding(
                             get: { store.biometricAuthEnabled },
-                            set: { store.send(.setBiometricAuth($0)) }
+                            set: { enabled in
+                                if enabled {
+                                    store.send(.setBiometricAuth(true))
+                                } else {
+                                    store.send(.setBiometricAuth(false))
+                                }
+                            }
                         ))
                         .labelsHidden()
+                        .disabled(!store.isBiometricCapable)
                     }
                     .padding()
                     .background(Color(UIColor.secondarySystemGroupedBackground))
@@ -687,12 +802,13 @@ struct OnboardingView: View {
             }
             
             Spacer()
+                .frame(minHeight: 24)
             
             Button(action: {
                 store.send(.completeOnboarding, animation: .default)
             }) {
                 Text("Complete")
-                    .fontWeight(.semibold)
+                    .font(.headline)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding()
@@ -700,6 +816,32 @@ struct OnboardingView: View {
                     .cornerRadius(12)
             }
             .disabled(store.isLoading)
+        }
+        .alert("Biometric Authentication", isPresented: Binding(
+            get: { store.showBiometricAuthError },
+            set: { _ in store.send(.dismissBiometricError) }
+        )) {
+            Button("OK", role: .cancel) {
+                store.send(.dismissBiometricError)
+            }
+        } message: {
+            Text(store.biometricAuthErrorMessage ?? "Authentication failed")
+        }
+        .alert("Enable Biometric Authentication", isPresented: Binding(
+            get: { store.showPermissionAlert },
+            set: { _ in store.showPermissionAlert = false }
+        )) {
+            Button("Try Again") {
+                store.send(.requestPermissionAndRetry)
+            }
+            Button("Settings") {
+                store.send(.openSettings)
+            }
+            Button("Cancel", role: .cancel) {
+                store.showPermissionAlert = false
+            }
+        } message: {
+            Text(store.biometricAuthErrorMessage ?? "Biometric authentication is disabled. Would you like to enable it in Settings?")
         }
     }
 
@@ -743,7 +885,7 @@ struct OnboardingView: View {
     //             store.send(.handleGotItButtonTap, animation: .default)
     //         }) {
     //             Text("Got it")
-    //                 .fontWeight(.semibold)
+    //                 .font(.headline)
     //                 .frame(maxWidth: .infinity)
     //                 .padding()
     //                 .background(Color.blue)
