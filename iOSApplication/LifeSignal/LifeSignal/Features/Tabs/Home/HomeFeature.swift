@@ -35,11 +35,9 @@ struct HomeFeature {
 
         // UI State Properties
         @Presents var qrScanner: QRScannerFeature.State?
-        @Presents var qrShareSheet: QRCodeShareSheetFeature.State?
         var showQRScanner: Bool = false
         var showIntervalPicker: Bool = false
         var showInstructions: Bool = false
-        var showQRShareSheet: Bool = false
         @Presents var alert: AlertState<HomeAlert>?
         var showShareSheet: Bool = false
         var showIntervalChangeConfirmation: Bool = false
@@ -92,10 +90,7 @@ struct HomeFeature {
         // QR Code UI navigation
         case showQRScanner
         case hideQRScanner
-        case showQRShareSheet
-        case hideQRShareSheet
         case qrScanner(PresentationAction<QRScannerFeature.Action>)
-        case qrShareSheet(PresentationAction<QRCodeShareSheetFeature.Action>)
 
         // Check-in interval management
         case updateCheckInInterval(TimeInterval)
@@ -147,9 +142,6 @@ struct HomeFeature {
         }
         .ifLet(\.$qrScanner, action: \.qrScanner) {
             QRScannerFeature()
-        }
-        .ifLet(\.$qrShareSheet, action: \.qrShareSheet) {
-            QRCodeShareSheetFeature()
         }
         .ifLet(\.$alert, action: \.alert)
     }
@@ -336,6 +328,15 @@ struct HomeFeature {
                 image = UserClient.generateMockShareableQRCodeImage(qrImage: qrImage, userName: user.name)
             }
             
+            // Cache the generated shareable image in shared state
+            if let imageData = image.pngData() {
+                Task { @MainActor in
+                    let metadata = ImageMetadata(qrCodeId: user.qrCodeId)
+                    let cachedImage = QRImageWithMetadata(image: imageData, metadata: metadata)
+                    $shareableImage.withLock { $0 = cachedImage }
+                }
+            }
+            
             await send(.shareableQRCodeGenerated(image))
         }
     }
@@ -357,16 +358,22 @@ struct HomeFeature {
     }
     
     private func shareQRCodeEffect(state: inout State) -> Effect<Action> {
-        if state.shareableImage != nil {
-            return .send(.showQRShareSheet)
-        } else {
-            return .merge(
-                .send(.generateShareableQRCode),
-                .run { send in
-                    try await Task.sleep(for: .milliseconds(100))
-                    await send(.showQRShareSheet)
-                }
-            )
+        return .run { [currentUser = state.currentUser] send in
+            // Check shared state for cached shareable QR code
+            @Shared(.userShareableQRCodeImage) var shareableImage
+            if let cached = shareableImage,
+               let user = currentUser,
+               cached.metadata.qrCodeId == user.qrCodeId,
+               let image = UIImage(data: cached.image) {
+                // Use cached shareable QR code from shared state
+                await send(.shareableQRCodeGenerated(image))
+                await send(.setShowShareSheet(true))
+            } else {
+                // Generate new shareable QR code and then show share sheet
+                await send(.generateShareableQRCode)
+                try await Task.sleep(for: .milliseconds(200)) // Give time for generation
+                await send(.setShowShareSheet(true))
+            }
         }
     }
     
@@ -498,28 +505,11 @@ struct HomeFeature {
             state.qrScanner = nil
             return .none
             
-        case .showQRShareSheet:
-            if let shareableImage = state.shareableImage {
-                state.qrShareSheet = QRCodeShareSheetFeature.State(qrCodeImage: shareableImage)
-            }
-            return .none
-            
-        case .hideQRShareSheet:
-            state.qrShareSheet = nil
-            return .none
-            
         case .qrScanner(.dismiss):
             state.qrScanner = nil
             return .none
             
         case .qrScanner(.presented(_)):
-            return .none
-            
-        case .qrShareSheet(.dismiss):
-            state.qrShareSheet = nil
-            return .none
-            
-        case .qrShareSheet(.presented(_)):
             return .none
             
         case let .setShowIntervalPicker(show):
@@ -661,6 +651,7 @@ struct HomeFeature {
     }
     
     private func handleResetQRConfirmation(state: inout State) -> Effect<Action> {
+        // Clear the shareable image since it will be regenerated with new QR code ID
         state.shareableImage = nil
         // Keep existing QR code visible during reset - don't clear or show loading
         // state.qrCodeImage = nil
@@ -737,6 +728,51 @@ struct HomeFeature {
                 "QR Code ID Copied",
                 "Your QR code ID has been copied to the clipboard."
             )
+        }
+    }
+}
+
+// MARK: - QR Code Share Components
+
+/// UIActivityViewController wrapper for sharing QR code images with proper preview
+struct QRCodeShareSheet: UIViewControllerRepresentable {
+    let qrCodeImage: UIImage
+    
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        // Create a temporary file to ensure proper image preview
+        let tempURL = createTemporaryImageFile()
+        
+        let activityViewController = UIActivityViewController(
+            activityItems: tempURL != nil ? [tempURL!, "LifeSignal QR Code"] : [qrCodeImage, "LifeSignal QR Code"],
+            applicationActivities: nil
+        )
+        
+        // Exclude activities that don't make sense for QR codes
+        activityViewController.excludedActivityTypes = [
+            .assignToContact,
+            .addToReadingList,
+            .openInIBooks
+        ]
+        
+        return activityViewController
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
+        // No updates needed
+    }
+    
+    private func createTemporaryImageFile() -> URL? {
+        guard let imageData = qrCodeImage.pngData() else { return nil }
+        
+        let tempDir = FileManager.default.temporaryDirectory
+        // Use filename without underscores for cleaner title display
+        let tempFile = tempDir.appendingPathComponent("LifeSignal QR Code.png")
+        
+        do {
+            try imageData.write(to: tempFile)
+            return tempFile
+        } catch {
+            return nil
         }
     }
 }
@@ -916,9 +952,6 @@ struct HomeView: View {
             .sheet(item: $store.scope(state: \.qrScanner, action: \.qrScanner)) { qrStore in
                 QRScannerView(store: qrStore)
             }
-            .sheet(item: $store.scope(state: \.qrShareSheet, action: \.qrShareSheet)) { shareStore in
-                QRCodeShareSheetView(store: shareStore)
-            }
             .sheet(isPresented: $store.showIntervalPicker) {
                 IntervalPickerView(store: store)
                     .presentationDetents([.medium])
@@ -928,7 +961,7 @@ struct HomeView: View {
             }
             .sheet(isPresented: $store.showShareSheet) {
                 if let shareImage = store.shareableImage {
-                    ActivityShareSheet(items: ["My LifeSignal QR Code", shareImage])
+                    QRCodeShareSheet(qrCodeImage: shareImage)
                 }
             }
         
@@ -992,7 +1025,7 @@ struct HomeView: View {
                     label: "Share QR",
                     action: {
                         // Haptic feedback handled by TCA action
-                        store.send(.generateShareableQRCode)
+                        store.send(.shareQRCode)
                     }
                 )
 
