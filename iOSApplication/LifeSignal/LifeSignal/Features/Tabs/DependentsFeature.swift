@@ -421,6 +421,7 @@ struct DependentsFeature {
         
         // Data management
         case refreshDependents
+        case contactsChanged
         case setSortMode(State.SortMode)
         
         // Contact interactions
@@ -466,6 +467,10 @@ struct DependentsFeature {
                         try await contactsClient.refreshContacts()
                     }))
                 }
+
+            case .contactsChanged:
+                state.updateDependentCards()
+                return .none
 
             case let .setSortMode(mode):
                 state.sortMode = mode
@@ -702,6 +707,9 @@ struct DependentsView: View {
             contentView
                 .toolbar { toolbarContent }
                 .onAppear(perform: onAppear)
+                .onChange(of: store.contactsState.contacts) { _, _ in
+                    store.send(.contactsChanged)
+                }
                 .alert($store.scope(state: \.confirmationAlert, action: \.confirmationAlert))
                 .sheet(item: $store.scope(state: \.contactDetails, action: \.contactDetails)) { store in
                     ContactDetailsSheetView(store: store)

@@ -7,6 +7,8 @@ enum ContactDetailsAlert: Equatable {
     case confirmDelete
     case confirmRoleChange(ContactRole, Bool)
     case pingDisabled
+    case confirmSendPing
+    case confirmCancelPing
 }
 
 enum ContactRole: Equatable {
@@ -72,47 +74,38 @@ struct ContactDetailsSheetFeature {
                     return .none
                 }
                 
-                // Handle ping toggling
+                // Show confirmation alert for ping actions
+                let contactName = state.contact.name
                 if state.contact.hasOutgoingPing {
-                    // Clear existing ping
-                    return .run { [contact = state.contact] send in
-                        await haptics.impact(.medium)
-                        await send(.pingResponse(Result {
-                            // Clear the ping first
-                            var updatedContact = contact
-                            updatedContact.hasOutgoingPing = false
-                            updatedContact.outgoingPingTimestamp = nil
-                            await contactsClient.updateContact(updatedContact)
-                            
-                            // Send notification about clearing ping
-                            try await notificationClient.sendPingNotification(
-                                .cancelDependentPing,
-                                "Ping Cleared",
-                                "You cleared the ping to \(contact.name)",
-                                contact.id
-                            )
-                        }))
+                    // Confirm clearing existing ping
+                    state.alert = AlertState {
+                        TextState("Cancel Ping")
+                    } actions: {
+                        ButtonState(action: .confirmCancelPing) {
+                            TextState("Cancel Ping")
+                        }
+                        ButtonState(role: .cancel) {
+                            TextState("Keep Ping")
+                        }
+                    } message: {
+                        TextState("Are you sure you want to cancel the ping to \(contactName)?")
                     }
+                    return .none
                 } else {
-                    // Send new ping
-                    return .run { [contact = state.contact] send in
-                        await haptics.impact(.medium)
-                        await send(.pingResponse(Result {
-                            // Update contact to show outgoing ping
-                            var updatedContact = contact
-                            updatedContact.hasOutgoingPing = true
-                            updatedContact.outgoingPingTimestamp = Date()
-                            await contactsClient.updateContact(updatedContact)
-                            
-                            // Send ping notification
-                            try await notificationClient.sendPingNotification(
-                                .sendDependentPing,
-                                "Ping Sent",
-                                "You sent a ping to \(contact.name)",
-                                contact.id
-                            )
-                        }))
+                    // Confirm sending new ping
+                    state.alert = AlertState {
+                        TextState("Send Ping")
+                    } actions: {
+                        ButtonState(action: .confirmSendPing) {
+                            TextState("Send Ping")
+                        }
+                        ButtonState(role: .cancel) {
+                            TextState("Cancel")
+                        }
+                    } message: {
+                        TextState("Send a ping to \(contactName) to check on them?")
                     }
+                    return .none
                 }
                 
             case .callContact:
@@ -240,6 +233,52 @@ struct ContactDetailsSheetFeature {
                     }))
                 }
                 
+            case .alert(.presented(.confirmSendPing)):
+                return .run { [contact = state.contact] send in
+                    await haptics.impact(.medium)
+                    do {
+                        // Update contact to show outgoing ping
+                        var updatedContact = contact
+                        updatedContact.hasOutgoingPing = true
+                        updatedContact.outgoingPingTimestamp = Date()
+                        await contactsClient.updateContact(updatedContact)
+                        
+                        // Send ping notification
+                        try await notificationClient.sendPingNotification(
+                            .sendDependentPing,
+                            "Ping Sent",
+                            "You sent a ping to \(contact.name)",
+                            contact.id
+                        )
+                        await send(.pingResponse(.success(())))
+                    } catch {
+                        await send(.pingResponse(.failure(error)))
+                    }
+                }
+                
+            case .alert(.presented(.confirmCancelPing)):
+                return .run { [contact = state.contact] send in
+                    await haptics.impact(.medium)
+                    do {
+                        // Clear the ping
+                        var updatedContact = contact
+                        updatedContact.hasOutgoingPing = false
+                        updatedContact.outgoingPingTimestamp = nil
+                        await contactsClient.updateContact(updatedContact)
+                        
+                        // Send notification about clearing ping
+                        try await notificationClient.sendPingNotification(
+                            .cancelDependentPing,
+                            "Ping Cancelled",
+                            "You cancelled the ping to \(contact.name)",
+                            contact.id
+                        )
+                        await send(.pingResponse(.success(())))
+                    } catch {
+                        await send(.pingResponse(.failure(error)))
+                    }
+                }
+                
             case .alert:
                 return .none
                 
@@ -291,8 +330,12 @@ struct ContactDetailsSheetFeature {
                 if let updatedContact = contacts.contact(by: state.contact.id) {
                     state.contact = updatedContact
                 }
-                return .run { _ in
+                return .run { [haptics, notificationClient] _ in
                     await haptics.notification(.success)
+                    try? await notificationClient.sendSystemNotification(
+                        "Ping Updated",
+                        "Successfully updated ping status"
+                    )
                 }
                 
             case .pingResponse(.failure(let error)):
@@ -300,7 +343,7 @@ struct ContactDetailsSheetFeature {
                     await haptics.notification(.error)
                     try? await notificationClient.sendSystemNotification(
                         "Ping Failed",
-                        "Unable to send ping: \(error.localizedDescription)"
+                        "Unable to update ping: \(error.localizedDescription)"
                     )
                 }
                 
@@ -450,6 +493,7 @@ struct ContactDetailsSheetView: View {
                 .cornerRadius(12)
                 .opacity(store.contact.isDependent ? 1.0 : 0.5)
             }
+            .disabled(!store.contact.isDependent)
         }
         .padding(.horizontal)
     }

@@ -10,10 +10,13 @@ import Perception
 struct ApplicationFeature {
     @ObservableState
     struct State: Equatable {
-        @Shared(.currentUser) var currentUser: User? = nil
-        @Shared(.sessionState) var sessionState: SessionState = .unauthenticated
-        @Shared(.needsOnboarding) var needsOnboarding: Bool = false
+        // ApplicationFeature has read-only access to session and contacts state only
+        @Shared(.sessionInternalState) var sessionState: ReadOnlySessionState
         @Shared(.contacts) var contactsState: ReadOnlyContactsState
+        
+        // Legacy individual state access for backward compatibility (session-related only)
+        // Note: currentUser access removed - use sessionState.hasUserProfile instead
+        @Shared(.needsOnboarding) var needsOnboarding: Bool = false
         @Shared(.isNetworkConnected) var isNetworkConnected: Bool = true
         @Shared(.authenticationToken) var authenticationToken: String? = nil
 
@@ -26,11 +29,11 @@ struct ApplicationFeature {
         // Network connectivity handled via SessionClient
         var notifications = NotificationsHistorySheetFeature.State()
 
-        var isLoggedIn: Bool { sessionState.isAuthenticated && currentUser != nil }
-        var shouldShowOnboarding: Bool { sessionState.isAuthenticated && needsOnboarding }
-        var shouldShowMainTabs: Bool { sessionState.isAuthenticated && !needsOnboarding && currentUser != nil }
-        var hasValidSession: Bool { sessionState.isAuthenticated && authenticationToken != nil && currentUser != nil }
-        var isOnline: Bool { isNetworkConnected }
+        var isLoggedIn: Bool { sessionState.sessionState.isAuthenticated && sessionState.hasUserProfile }
+        var shouldShowOnboarding: Bool { sessionState.sessionState.isAuthenticated && sessionState.needsOnboarding }
+        var shouldShowMainTabs: Bool { sessionState.sessionState.isAuthenticated && !sessionState.needsOnboarding && sessionState.hasUserProfile }
+        var hasValidSession: Bool { sessionState.sessionState.isAuthenticated && sessionState.authenticationToken != nil && sessionState.hasUserProfile }
+        var isOnline: Bool { sessionState.isNetworkConnected }
 
         init() {}
     }
@@ -66,10 +69,9 @@ struct ApplicationFeature {
         case handleNotificationNavigation(String)
     }
 
-    @Dependency(\.userClient) var userClient
+    // ApplicationFeature integrates SessionClient for session management
+    // Only SessionClient can use other clients as dependencies
     @Dependency(\.sessionClient) var sessionClient
-    @Dependency(\.notificationClient) var notificationClient
-    @Dependency(\.logging) var logging
 
     init() {}
 
@@ -95,7 +97,6 @@ struct ApplicationFeature {
         Reduce { state, action in
             switch action {
             case .onAppear:
-                logging.info("Application appeared", [:])
                 return .run { send in
                     await send(.startNetworkMonitoring)
                     await send(.validateExistingSession)
@@ -103,7 +104,6 @@ struct ApplicationFeature {
 
             case .appDidBecomeActive:
                 state.isActive = true
-                logging.info("Application became active", ["hasSession": "\(sessionClient.isAuthenticated())"])
                 return .run { send in
                     // Validate session if we have one
                     if sessionClient.isAuthenticated() {
@@ -162,7 +162,7 @@ struct ApplicationFeature {
                     do {
                         try await sessionClient.endSession()
                     } catch {
-                        logging.error("Failed to end session during expiration", error, ["action": "sessionExpired"])
+                        // Handle error silently
                     }
                 }
                 
@@ -182,7 +182,6 @@ struct ApplicationFeature {
                 
             case .tokenRefreshFailed(let error):
                 state.error = error.localizedDescription
-                logging.error("Token refresh failed", error, ["sessionState": "\(state.sessionState)"])
                 return .run { send in
                     await send(.sessionExpired)
                 }
@@ -196,20 +195,15 @@ struct ApplicationFeature {
                 }
                 
             case .networkStatusChanged(let isConnected):
-                let wasConnected = state.isNetworkConnected
-                return .run { [wasConnected, sessionClient, notificationClient] send in
+                let wasConnected = state.sessionState.isNetworkConnected
+                return .run { [wasConnected, sessionClient] send in
                     await sessionClient.updateNetworkStatus(isConnected)
                     
-                    // Show system notification for connection state changes
+                    // Show system notification for connection state changes via SessionClient
                     if wasConnected != isConnected {
                         @Dependency(\.hapticClient) var haptics
                         await haptics.notification(isConnected ? .success : .warning)
-                        try? await notificationClient.sendSystemNotification(
-                            isConnected ? "Connection Restored" : "No Internet Connection",
-                            isConnected ? 
-                                "Your internet connection has been restored." : 
-                                "Please check your network settings and try again."
-                        )
+                        // SessionClient coordinates with NotificationClient for system notifications
                     }
                 }
 
@@ -300,6 +294,12 @@ struct AppRootView: View {
         }
         .onAppear {
             store.send(.onAppear)
+        }
+        .onChange(of: store.shouldShowOnboarding) { wasShowingOnboarding, isShowingOnboarding in
+            // If we're transitioning from onboarding to sign-in, reset the sign-in form
+            if wasShowingOnboarding && !isShowingOnboarding && !store.shouldShowMainTabs {
+                store.send(.signIn(.resetForm))
+            }
         }
         .overlay(alignment: .top) {
             if !store.isOnline {

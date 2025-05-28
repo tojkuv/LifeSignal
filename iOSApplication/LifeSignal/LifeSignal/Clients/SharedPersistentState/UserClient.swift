@@ -135,26 +135,31 @@ final class MockUserService: UserServiceProtocol {
     func getUser(_ request: GetUserRequest) async throws -> User_Proto {
         try await Task.sleep(for: .milliseconds(500))
         
-        // Create a mock user with recent check-in for testing
-        let now = Date()
-        let recentCheckIn = now.addingTimeInterval(-3600) // 1 hour ago
+        // Mock path 1: Existing user (UID: existing_user_uid_12345)
+        if request.uid == "existing_user_uid_12345" {
+            let now = Date()
+            let recentCheckIn = now.addingTimeInterval(-3600) // 1 hour ago
+            
+            return User_Proto(
+                id: request.uid,
+                name: "John Doe", // Existing user has complete profile
+                phoneNumber: "+1234567890",
+                phoneRegion: "US",
+                emergencyNote: "Emergency contact: Jane Doe (spouse) - 555-987-6543",
+                checkInInterval: 86400, // 24 hours
+                lastCheckedIn: Int64(recentCheckIn.timeIntervalSince1970),
+                notificationPreference: .thirtyMinutes,
+                isEmergencyAlertEnabled: false,
+                emergencyAlertTimestamp: nil,
+                qrCodeId: UUID().uuidString,
+                avatarURL: "",
+                lastModified: Int64(Date().timeIntervalSince1970),
+                biometricAuthEnabled: true
+            )
+        }
         
-        return User_Proto(
-            id: request.uid,
-            name: "Mock User",
-            phoneNumber: "+1234567890",
-            phoneRegion: "US",
-            emergencyNote: "",
-            checkInInterval: 115200, // 32 hours (default interval)
-            lastCheckedIn: Int64(recentCheckIn.timeIntervalSince1970),
-            notificationPreference: .thirtyMinutes,
-            isEmergencyAlertEnabled: false,
-            emergencyAlertTimestamp: nil,
-            qrCodeId: UUID().uuidString,
-            avatarURL: "",
-            lastModified: Int64(Date().timeIntervalSince1970),
-            biometricAuthEnabled: false
-        )
+        // Mock path 2: New user (any other UID) - user not found
+        throw UserClientError.userNotFound
     }
     
     func checkIn(_ request: CheckInRequest) async throws -> User_Proto {
@@ -502,6 +507,7 @@ struct User: Codable, Equatable, Identifiable, Sendable {
         lastModified = Date()
     }
 }
+
 
 // MARK: - Client Errors
 

@@ -8,6 +8,7 @@ import Perception
 struct SignInFeature {
     @ObservableState
     struct State: Equatable {
+        // Read-only access to shared state through SessionClient only (no direct mutation)
         @Shared(.currentUser) var currentUser: User? = nil
         @Shared(.sessionState) var sessionState: SessionState = .unauthenticated
         @Shared(.needsOnboarding) var needsOnboarding: Bool = false
@@ -69,6 +70,7 @@ struct SignInFeature {
         case handleVerificationCodeChange(String)
         case verifyCode
         case changeToPhoneEntryView
+        case resetForm
         
         // Authentication actions
         case signOut
@@ -82,9 +84,8 @@ struct SignInFeature {
         case debugSessionResult(Result<Void, Error>)
     }
 
+    // Features only use SessionClient, which orchestrates other clients
     @Dependency(\.sessionClient) var sessionClient
-    @Dependency(\.hapticClient) var haptics
-    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -154,16 +155,27 @@ struct SignInFeature {
                 
             case .changeToPhoneEntryView:
                 state.showPhoneEntry = true
+                state.phoneNumber = ""
                 state.verificationCode = ""
                 state.verificationID = nil
+                state.isLoading = false
                 return .none
 
+            case .resetForm:
+                state.phoneNumber = ""
+                state.verificationCode = ""
+                state.verificationID = nil
+                state.showPhoneEntry = true
+                state.showRegionPicker = false
+                state.phoneNumberFieldFocused = false
+                state.verificationCodeFieldFocused = false
+                state.isLoading = false
+                return .none
                 
             case .signOut:
                 return .run { send in
                     do {
                         try await sessionClient.endSession()
-                        await haptics.notification(.success)
                     } catch {
                         // Handle error silently, session cleanup should still happen
                     }
@@ -189,33 +201,23 @@ struct SignInFeature {
                 
             case let .verificationCodeSent(.failure(error)):
                 state.isLoading = false
-                return .run { send in
-                    await haptics.notification(.error)
-                }
+                return .none
                 
             case let .sessionStartResult(.success):
                 state.isLoading = false
-                return .run { send in
-                    await haptics.notification(.success)
-                }
+                return .none
                 
             case let .sessionStartResult(.failure(error)):
                 state.isLoading = false
-                return .run { send in
-                    await haptics.notification(.error)
-                }
+                return .none
                 
             case let .debugSessionResult(.success):
                 state.isLoading = false
-                return .run { send in
-                    await haptics.notification(.success)
-                }
+                return .none
                 
             case let .debugSessionResult(.failure(error)):
                 state.isLoading = false
-                return .run { send in
-                    await haptics.notification(.error)
-                }
+                return .none
 
             }
         }

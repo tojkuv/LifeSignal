@@ -13,6 +13,7 @@ struct SessionInternalState: Equatable, Codable {
     var authenticationToken: String?
     var sessionState: SessionState
     var needsOnboarding: Bool
+    var hasUserProfile: Bool
     var internalAuthUID: String?
     var internalIdToken: String?
     var internalRefreshToken: String?
@@ -25,6 +26,7 @@ struct SessionInternalState: Equatable, Codable {
         authenticationToken: String? = nil,
         sessionState: SessionState = .unauthenticated,
         needsOnboarding: Bool = false,
+        hasUserProfile: Bool = false,
         internalAuthUID: String? = nil,
         internalIdToken: String? = nil,
         internalRefreshToken: String? = nil,
@@ -36,6 +38,7 @@ struct SessionInternalState: Equatable, Codable {
         self.authenticationToken = authenticationToken
         self.sessionState = sessionState
         self.needsOnboarding = needsOnboarding
+        self.hasUserProfile = hasUserProfile
         self.internalAuthUID = internalAuthUID
         self.internalIdToken = internalIdToken
         self.internalRefreshToken = internalRefreshToken
@@ -76,6 +79,7 @@ struct ReadOnlySessionState: Equatable, Codable {
     var authenticationToken: String? { _state.authenticationToken }
     var sessionState: SessionState { _state.sessionState }
     var needsOnboarding: Bool { _state.needsOnboarding }
+    var hasUserProfile: Bool { _state.hasUserProfile }
     var internalAuthUID: String? { _state.internalAuthUID }
     var internalIdToken: String? { _state.internalIdToken }
     var internalRefreshToken: String? { _state.internalRefreshToken }
@@ -117,48 +121,48 @@ extension SharedReaderKey where Self == AppStorageKey<ReadOnlySessionState>.Defa
     }
 }
 
-// Legacy individual accessors for Features
-extension SharedReaderKey where Self == InMemoryKey<String?>.Default {
+// Legacy individual accessors for Features (Persisted for backward compatibility)
+extension SharedReaderKey where Self == AppStorageKey<String?>.Default {
     static var authenticationToken: Self {
-        Self[.inMemory("authenticationToken"), default: nil]
+        Self[.appStorage("authenticationToken"), default: nil]
     }
 }
 
-extension SharedReaderKey where Self == InMemoryKey<SessionState>.Default {
+extension SharedReaderKey where Self == AppStorageKey<SessionState>.Default {
     static var sessionState: Self {
-        Self[.inMemory("sessionState"), default: .unauthenticated]
+        Self[.appStorage("sessionState"), default: .unauthenticated]
     }
 }
 
 // MARK: - Authentication Shared State
 
-extension SharedReaderKey where Self == InMemoryKey<Bool>.Default {
+extension SharedReaderKey where Self == AppStorageKey<Bool>.Default {
     static var needsOnboarding: Self {
-        Self[.inMemory("needsOnboarding"), default: false]
+        Self[.appStorage("needsOnboarding"), default: false]
     }
 }
 
 // MARK: - Internal Auth State (Implementation Details - Read-Only Access for Clients)
 
-extension SharedReaderKey where Self == InMemoryKey<String?>.Default {
+extension SharedReaderKey where Self == AppStorageKey<String?>.Default {
     static var internalAuthUID: Self {
-        Self[.inMemory("internalAuthUID"), default: nil]
+        Self[.appStorage("internalAuthUID"), default: nil]
     }
 }
 
-private extension SharedReaderKey where Self == InMemoryKey<String?>.Default {
+private extension SharedReaderKey where Self == AppStorageKey<String?>.Default {
     static var internalIdToken: Self {
-        Self[.inMemory("internalIdToken"), default: nil]
+        Self[.appStorage("internalIdToken"), default: nil]
     }
     
     static var internalRefreshToken: Self {
-        Self[.inMemory("internalRefreshToken"), default: nil]
+        Self[.appStorage("internalRefreshToken"), default: nil]
     }
 }
 
-private extension SharedReaderKey where Self == InMemoryKey<Date?>.Default {
+private extension SharedReaderKey where Self == AppStorageKey<Date?>.Default {
     static var internalTokenExpiry: Self {
-        Self[.inMemory("internalTokenExpiry"), default: nil]
+        Self[.appStorage("internalTokenExpiry"), default: nil]
     }
 }
 
@@ -168,14 +172,13 @@ private extension SharedReaderKey where Self == InMemoryKey<InternalAuthUser?>.D
     }
 }
 
-// MARK: - Network Shared State
+// MARK: - Network Shared State (Network status should not persist across app restarts)
 
 extension SharedReaderKey where Self == InMemoryKey<Bool>.Default {
     static var isNetworkConnected: Self {
         Self[.inMemory("isNetworkConnected"), default: true]
     }
 }
-
 
 extension SharedReaderKey where Self == InMemoryKey<Date?>.Default {
     static var lastNetworkCheck: Self {
@@ -216,6 +219,7 @@ struct InternalAuthUser: Sendable, Equatable, Codable {
     let creationDate: Date
     let lastSignInDate: Date
 }
+
 
 // MARK: - Mapping Extensions
 
@@ -339,6 +343,17 @@ enum SessionClientError: Error, LocalizedError {
 // MARK: - Mock Auth Service
 
 final class MockAuthService: AuthServiceProtocol {
+    
+    /// Extracts phone number from mock verification ID
+    static func extractPhoneNumberFromVerificationID(_ verificationID: String) -> String {
+        // Format: "mock_verification_id_{phoneNumber}_{uuid}"
+        let components = verificationID.components(separatedBy: "_")
+        if components.count >= 4 && components[0] == "mock" && components[1] == "verification" && components[2] == "id" {
+            return components[3]
+        }
+        // Fallback for any malformed verification IDs
+        return "+1234567890"
+    }
     func sendVerificationCode(phoneNumber: String) async throws -> String {
         try await Task.sleep(for: SessionClient.MockDelays.authVerification)
         
@@ -348,8 +363,8 @@ final class MockAuthService: AuthServiceProtocol {
             throw SessionClientError.validationFailed("Phone number is required")
         }
         
-        // Mock sending verification code and return verification ID
-        return "mock_verification_id_\(UUID().uuidString)"
+        // Mock sending verification code and return verification ID with phone number embedded
+        return "mock_verification_id_\(phoneNumber)_\(UUID().uuidString)"
     }
     
     func verifyPhoneCode(verificationID: String, verificationCode: String) async throws -> AuthResult {
@@ -361,20 +376,41 @@ final class MockAuthService: AuthServiceProtocol {
             throw SessionClientError.validationFailed("Verification code must be 6 digits")
         }
         
-        // Simulate phone authentication
+        // Extract phone number from verification ID (mock implementation)
+        let phoneNumber = Self.extractPhoneNumberFromVerificationID(verificationID)
+        
+        // Mock path 1: Existing user (phone: +1234567890, code: 123456)
+        if phoneNumber == "+1234567890" && cleanedCode == "123456" {
+            let authUser = InternalAuthUser(
+                uid: "existing_user_uid_12345", // Fixed UID for existing user
+                phoneNumber: "+1234567890",
+                displayName: "Existing User",
+                creationDate: Date().addingTimeInterval(-2592000), // 30 days ago
+                lastSignInDate: Date()
+            )
+            
+            return AuthResult(
+                user: authUser,
+                idToken: "existing_user_token_\(UUID().uuidString)",
+                refreshToken: "existing_user_refresh_\(UUID().uuidString)",
+                expiresAt: Date().addingTimeInterval(3600)
+            )
+        }
+        
+        // Mock path 2: New user (any other phone/code combination)
         let authUser = InternalAuthUser(
-            uid: "mock_auth_uid_\(UUID().uuidString)",
-            phoneNumber: "+1234567890", // Would extract from verification flow
-            displayName: "Phone User",
+            uid: "new_user_uid_\(UUID().uuidString)",
+            phoneNumber: phoneNumber,
+            displayName: "New User",
             creationDate: Date(),
             lastSignInDate: Date()
         )
         
         return AuthResult(
             user: authUser,
-            idToken: "mock_auth_id_token_\(UUID().uuidString)",
-            refreshToken: "mock_auth_refresh_token_\(UUID().uuidString)",
-            expiresAt: Date().addingTimeInterval(3600) // 1 hour from now
+            idToken: "new_user_token_\(UUID().uuidString)",
+            refreshToken: "new_user_refresh_\(UUID().uuidString)",
+            expiresAt: Date().addingTimeInterval(3600)
         )
     }
     
@@ -433,9 +469,16 @@ final class MockAuthService: AuthServiceProtocol {
 
 /// The central client for managing user sessions, authentication, and network connectivity.
 /// 
-/// SessionClient consolidates functionality from the former AuthenticationClient and NetworkClient
-/// to provide a unified interface for all session-related operations. Features should only depend
-/// on SessionClient and never access authentication providers or network APIs directly.
+/// SessionClient is the ONLY client that can use other clients as dependencies.
+/// Features should only depend on SessionClient and never access authentication providers 
+/// or network APIs directly. SessionClient has mutability ownership of session-related shared state.
+///
+/// Architectural Principles:
+/// - Only SessionClient can use other clients as dependencies
+/// - ApplicationFeature integrates SessionClient for session management
+/// - SessionClient has mutability ownership of its respective shared state
+/// - Features have read-only access to shared state
+/// - Views only depend on their respective feature
 ///
 /// Key responsibilities:
 /// - Phone-only authentication flow (SMS verification, no passwords)
@@ -553,56 +596,83 @@ extension SessionClient: DependencyKey {
         
         // Session management
         validateExistingSession: {
-            @Shared(.sessionState) var sessionState
-            @Shared(.authenticationToken) var authToken
+            @Dependency(\.userClient) var userClient
+            @Dependency(\.notificationClient) var notificationClient
+            @Dependency(\.contactsClient) var contactsClient
+            
+            @Shared(.sessionInternalState) var sessionInternalState
             @Shared(.currentUser) var currentUser
             
-            // Set loading state
-            $sessionState.withLock { $0 = .loading }
+            // Set loading state using unified state pattern
+            Self.updateSessionState(.loading)
             
             do {
-                // Check if we have an authenticated user
-                let service = MockAuthService()
-                guard let firebaseUser = await service.getCurrentAuthUser() else {
+                // Check if we have persisted authentication data
+                guard let authUser = sessionInternalState.internalAuthUser,
+                      let idToken = sessionInternalState.internalIdToken else {
                     Self.setSessionUnauthenticated()
                     throw SessionClientError.authenticationFailed
                 }
                 
-                // Check if token is still valid
-                guard let token = try await service.getIdToken(forceRefresh: false) else {
-                    Self.setSessionUnauthenticated()
-                    throw SessionClientError.sessionExpired
+                // Check if token is still valid (not expired)
+                if let tokenExpiry = sessionInternalState.internalTokenExpiry,
+                   Date() >= tokenExpiry {
+                    // Token is expired, try to refresh
+                    do {
+                        let service = MockAuthService()
+                        let authResult = try await service.refreshToken()
+                        Self.updateInternalAuthState(from: authResult)
+                    } catch {
+                        Self.setSessionUnauthenticated()
+                        throw SessionClientError.sessionExpired
+                    }
+                } else {
+                    // Token is still valid, restore in-memory state from persisted state
+                    @Shared(.internalAuthUser) var inMemoryAuthUser
+                    @Shared(.internalIdToken) var inMemoryIdToken
+                    @Shared(.internalRefreshToken) var inMemoryRefreshToken
+                    @Shared(.internalTokenExpiry) var inMemoryTokenExpiry
+                    @Shared(.authenticationToken) var authToken
+                    
+                    $inMemoryAuthUser.withLock { $0 = authUser }
+                    $inMemoryIdToken.withLock { $0 = idToken }
+                    $inMemoryRefreshToken.withLock { $0 = sessionInternalState.internalRefreshToken }
+                    $inMemoryTokenExpiry.withLock { $0 = sessionInternalState.internalTokenExpiry }
+                    $authToken.withLock { $0 = idToken }
                 }
                 
-                // Store token in shared state
-                $authToken.withLock { $0 = token }
-                
-                // Load current user data via UserClient
-                @Dependency(\.userClient) var userClient
-                let loadedUser = try await userClient.getUser()
-                
-                // If user doesn't exist, session becomes unauthenticated
-                if currentUser == nil {
-                    Self.setSessionUnauthenticated()
-                    $authToken.withLock { $0 = nil }
-                    throw SessionClientError.userLoadFailed
+                // Load current user data via UserClient if we have a profile
+                if sessionInternalState.hasUserProfile {
+                    // User has a profile, so onboarding was completed before
+                    Self.updateOnboardingStatus(false)
+                    
+                    do {
+                        let loadedUser = try await userClient.getUser()
+                        Self.updateUserProfileStatus(true)
+                    } catch {
+                        // User profile couldn't be loaded but they had one before
+                        // Keep hasUserProfile as true since they completed onboarding
+                        // This handles temporary loading failures gracefully
+                        Self.updateUserProfileStatus(true)
+                    }
+                } else {
+                    // No user profile means they need onboarding
+                    Self.updateOnboardingStatus(true)
+                    Self.updateUserProfileStatus(false)
                 }
                 
                 // Initialize NotificationClient with session and start listening for real-time notifications
-                @Dependency(\.notificationClient) var notificationClient
-                try await notificationClient.initialize()
-                try await notificationClient.startListening()
+                // Only if user has completed their profile (don't depend on currentUser being loaded)
+                if sessionInternalState.hasUserProfile {
+                    try await notificationClient.initialize()
+                    try await notificationClient.startListening()
+                }
                 
-                // Start contact updates stream via ContactsClient
-                @Dependency(\.contactsClient) var contactsClient
-                // ContactsClient stream will be managed by features that need it
-                
-                // Set authenticated state
-                $sessionState.withLock { $0 = .authenticated }
+                // Set authenticated state using unified state pattern
+                Self.updateSessionState(.authenticated)
                 
             } catch {
                 // Stop any streams that may have started before error
-                @Dependency(\.notificationClient) var notificationClient
                 try? await notificationClient.stopListening()
                 
                 // Clear state on error
@@ -612,20 +682,21 @@ extension SessionClient: DependencyKey {
         },
         
         endSession: {
+            @Dependency(\.notificationClient) var notificationClient
+            @Dependency(\.userClient) var userClient
+            
             @Shared(.sessionState) var sessionState
             @Shared(.currentUser) var currentUser
             
-            // Set loading state
-            $sessionState.withLock { $0 = .loading }
+            // Set loading state using unified state pattern
+            Self.updateSessionState(.loading)
             
             do {
                 // Stop notification streams and clean up NotificationClient first
-                @Dependency(\.notificationClient) var notificationClient
                 try await notificationClient.stopListening()
                 try await notificationClient.cleanup()
                 
                 // Delete user data via UserClient
-                @Dependency(\.userClient) var userClient
                 if let user = currentUser {
                     try await userClient.deleteUser(user.id)
                 }
@@ -670,12 +741,15 @@ extension SessionClient: DependencyKey {
         
         
         verifyPhoneCodeAndStartSession: { verificationID, verificationCode in
+            @Dependency(\.userClient) var userClient
+            @Dependency(\.notificationClient) var notificationClient
+            
             @Shared(.sessionState) var sessionState
             @Shared(.authenticationToken) var authToken
             @Shared(.currentUser) var currentUser
             
-            // Set authenticating state
-            $sessionState.withLock { $0 = .authenticating }
+            // Set authenticating state using unified state pattern
+            Self.updateSessionState(.authenticating)
             
             do {
                 // Verify phone code via auth service
@@ -687,45 +761,43 @@ extension SessionClient: DependencyKey {
                 // Store authentication state
                 Self.updateInternalAuthState(from: authResult)
                 
-                @Shared(.needsOnboarding) var needsOnboarding
-                $needsOnboarding.withLock { $0 = true } // New phone users need onboarding
-                
-                // Set loading state while fetching user
-                $sessionState.withLock { $0 = .loading }
+                // Set loading state while fetching user using unified state pattern
+                Self.updateSessionState(.loading)
                 
                 // Try to load existing user via UserClient
-                @Dependency(\.userClient) var userClient
+                var userExists = false
                 do {
                     let loadedUser = try await userClient.getUser()
                     // UserClient handles shared state updates
+                    // If user exists, they don't need onboarding and have a profile
+                    Self.updateOnboardingStatus(false)
+                    Self.updateUserProfileStatus(true)
+                    userExists = true
                 } catch {
                     // User doesn't exist - this is expected for new phone users
-                    // Keep auth state for user creation flow
+                    // Keep auth state for user creation flow - onboarding is needed
+                    Self.updateOnboardingStatus(true)
+                    Self.updateUserProfileStatus(false)
+                    userExists = false
                 }
                 
-                // If user doesn't exist, session remains unauthenticated (needs user creation)
-                if currentUser == nil {
-                    Self.setSessionUnauthenticated()
-                    // Keep Firebase auth but clear session token since no user profile exists
-                    $authToken.withLock { $0 = nil }
-                    throw SessionClientError.userLoadFailed
-                }
+                // Set authenticated state for both existing and new users
+                // New users will go through onboarding, existing users go to main tabs
+                Self.updateSessionState(.authenticated)
                 
                 // Initialize NotificationClient for authenticated session and start streams
-                @Dependency(\.notificationClient) var notificationClient
-                try await notificationClient.initialize()
-                try await notificationClient.startListening()
-                
-                // Set authenticated state
-                $sessionState.withLock { $0 = .authenticated }
+                // Only if user exists (has completed profile)
+                if userExists {
+                    try await notificationClient.initialize()
+                    try await notificationClient.startListening()
+                }
                 
             } catch {
                 // Stop any streams that may have started before error  
-                @Dependency(\.notificationClient) var notificationClient
                 try? await notificationClient.stopListening()
                 
                 // Clear session state on error but preserve auth for potential user creation
-                $sessionState.withLock { $0 = .error }
+                Self.updateSessionState(.error)
                 $authToken.withLock { $0 = nil }
                 $currentUser.withLock { $0 = nil }
                 throw error
@@ -736,36 +808,75 @@ extension SessionClient: DependencyKey {
         
         startOnboarding: {
             // SessionClient handles setting onboarding state
-            @Shared(.needsOnboarding) var needsOnboarding
-            needsOnboarding = true
+            Self.updateOnboardingStatus(true)
         },
         
         completeUserProfile: { firstName, lastName, emergencyNote, checkInInterval, reminderMinutes, biometricAuthEnabled in
             @Shared(.currentUser) var currentUser
-            guard var user = currentUser else {
-                throw SessionClientError.userLoadFailed
-            }
-            
-            // Update user with all onboarding data
-            let fullName = "\(firstName) \(lastName)"
-            user.name = fullName
-            user.emergencyNote = emergencyNote
-            user.checkInInterval = checkInInterval
-            
-            // Convert reminderMinutes to NotificationPreference
-            let notificationPreference: NotificationPreference = switch reminderMinutes {
-            case 0: .disabled
-            case 30: .thirtyMinutes
-            case 120: .twoHours
-            default: .thirtyMinutes
-            }
-            user.notificationPreference = notificationPreference
-            user.biometricAuthEnabled = biometricAuthEnabled
-            user.lastModified = Date()
-            
-            // Update user via UserClient - it handles shared state updates
+            @Shared(.internalAuthUser) var internalAuthUser
             @Dependency(\.userClient) var userClient
-            try await userClient.updateUser(user)
+            
+            if var user = currentUser {
+                // User already exists, update their profile
+                let fullName = "\(firstName) \(lastName)"
+                user.name = fullName
+                user.emergencyNote = emergencyNote
+                user.checkInInterval = checkInInterval
+                
+                // Convert reminderMinutes to NotificationPreference
+                let notificationPreference: NotificationPreference = switch reminderMinutes {
+                case 0: .disabled
+                case 30: .thirtyMinutes
+                case 120: .twoHours
+                default: .thirtyMinutes
+                }
+                user.notificationPreference = notificationPreference
+                user.biometricAuthEnabled = biometricAuthEnabled
+                user.lastModified = Date()
+                
+                // Update user via UserClient - it handles shared state updates
+                try await userClient.updateUser(user)
+            } else {
+                // No user exists yet, create a new one
+                guard let authUser = internalAuthUser else {
+                    throw SessionClientError.userLoadFailed
+                }
+                
+                let fullName = "\(firstName) \(lastName)"
+                
+                // Create user via UserClient - it handles shared state updates
+                try await userClient.createUser(
+                    authUser.uid,        // firebaseUID
+                    fullName,            // name  
+                    authUser.phoneNumber, // phoneNumber
+                    "US"                 // phoneRegion - default to US for mock
+                )
+                
+                // Now update the newly created user with additional onboarding data
+                guard var newUser = currentUser else {
+                    throw SessionClientError.userLoadFailed
+                }
+                
+                newUser.emergencyNote = emergencyNote
+                newUser.checkInInterval = checkInInterval
+                
+                // Convert reminderMinutes to NotificationPreference
+                let notificationPreference: NotificationPreference = switch reminderMinutes {
+                case 0: .disabled
+                case 30: .thirtyMinutes
+                case 120: .twoHours
+                default: .thirtyMinutes
+                }
+                newUser.notificationPreference = notificationPreference
+                newUser.biometricAuthEnabled = biometricAuthEnabled
+                newUser.lastModified = Date()
+                
+                // Update user via UserClient - it handles shared state updates
+                try await userClient.updateUser(newUser)
+            }
+            
+            // Mark that the user now has a profile
+            Self.updateUserProfileStatus(true)
         },
         
         completeOnboarding: {
@@ -863,6 +974,7 @@ extension SessionClient: DependencyKey {
                 authenticationToken: currentState.authenticationToken,
                 sessionState: currentState.sessionState,
                 needsOnboarding: currentState.needsOnboarding,
+                hasUserProfile: currentState.hasUserProfile,
                 internalAuthUID: currentState.internalAuthUID,
                 internalIdToken: currentState.internalIdToken,
                 internalRefreshToken: currentState.internalRefreshToken,
@@ -907,8 +1019,10 @@ extension SessionClient: DependencyKey {
         },
         
         isAuthenticated: {
-            @Shared(.sessionState) var sessionState
-            return sessionState.isAuthenticated
+            @Shared(.sessionInternalState) var sessionInternalState
+            return sessionInternalState.sessionState.isAuthenticated && 
+                   sessionInternalState.internalAuthUser != nil &&
+                   sessionInternalState.internalIdToken != nil
         },
         
         checkConnectivity: {
@@ -970,6 +1084,7 @@ extension SessionClient: DependencyKey {
                 authenticationToken: mockIdToken,
                 sessionState: .authenticated,
                 needsOnboarding: false,
+                hasUserProfile: true,
                 internalAuthUID: mockAuthUser.uid,
                 internalIdToken: mockIdToken,
                 internalRefreshToken: mockRefreshToken,
@@ -998,7 +1113,7 @@ extension SessionClient: DependencyKey {
             $internalAuthUser.withLock { $0 = mockAuthUser }
             $authToken.withLock { $0 = mockIdToken }
             $needsOnboarding.withLock { $0 = false }
-            $sessionState.withLock { $0 = .authenticated }
+            Self.updateSessionState(.authenticated)
             
             // Create mock user via UserClient
             @Dependency(\.userClient) var userClient
@@ -1115,6 +1230,7 @@ extension SessionClient {
             authenticationToken: nil,
             sessionState: .unauthenticated,
             needsOnboarding: false,
+            hasUserProfile: false,
             internalAuthUID: nil,
             internalIdToken: nil,
             internalRefreshToken: nil,
@@ -1146,7 +1262,7 @@ extension SessionClient {
         $internalAuthUser.withLock { $0 = nil }
         $needsOnboarding.withLock { $0 = false }
         $currentUser.withLock { $0 = nil }
-        $sessionState.withLock { $0 = .unauthenticated }
+        Self.updateSessionState(.unauthenticated)
         $authToken.withLock { $0 = nil }
         $qrCodeImage.withLock { $0 = nil }
         $shareableQRCodeImage.withLock { $0 = nil }
@@ -1155,27 +1271,7 @@ extension SessionClient {
     
     /// Sets the onboarding completion status
     static func setOnboardingCompleted() {
-        @Shared(.sessionInternalState) var sharedSessionState
-        let currentState = sharedSessionState
-        
-        // Update shared state using read-only wrapper pattern
-        let mutableState = SessionInternalState(
-            authenticationToken: currentState.authenticationToken,
-            sessionState: currentState.sessionState,
-            needsOnboarding: false,
-            internalAuthUID: currentState.internalAuthUID,
-            internalIdToken: currentState.internalIdToken,
-            internalRefreshToken: currentState.internalRefreshToken,
-            internalTokenExpiry: currentState.internalTokenExpiry,
-            internalAuthUser: currentState.internalAuthUser,
-            isNetworkConnected: currentState.isNetworkConnected,
-            lastNetworkCheck: currentState.lastNetworkCheck
-        )
-        $sharedSessionState.withLock { $0 = ReadOnlySessionState(mutableState) }
-        
-        // Update legacy shared state for Features
-        @Shared(.needsOnboarding) var needsOnboarding
-        $needsOnboarding.withLock { $0 = false }
+        Self.updateOnboardingStatus(false)
     }
     
     /// Gets the current onboarding status
@@ -1219,6 +1315,7 @@ extension SessionClient {
             authenticationToken: nil,
             sessionState: .error,
             needsOnboarding: currentState.needsOnboarding,
+            hasUserProfile: currentState.hasUserProfile,
             internalAuthUID: currentState.internalAuthUID,
             internalIdToken: currentState.internalIdToken,
             internalRefreshToken: currentState.internalRefreshToken,
@@ -1234,21 +1331,27 @@ extension SessionClient {
         @Shared(.authenticationToken) var authToken
         @Shared(.currentUser) var currentUser
         
-        $sessionState.withLock { $0 = .error }
+        Self.updateSessionState(.error)
         $authToken.withLock { $0 = nil }
         $currentUser.withLock { $0 = nil }
     }
     
     /// Sets session state to unauthenticated
     static func setSessionUnauthenticated() {
+        Self.updateSessionState(.unauthenticated)
+    }
+    
+    /// Updates session state using unified state pattern
+    static func updateSessionState(_ newState: SessionState) {
         @Shared(.sessionInternalState) var sharedSessionState
         let currentState = sharedSessionState
         
         // Update shared state using read-only wrapper pattern
         let mutableState = SessionInternalState(
             authenticationToken: currentState.authenticationToken,
-            sessionState: .unauthenticated,
+            sessionState: newState,
             needsOnboarding: currentState.needsOnboarding,
+            hasUserProfile: currentState.hasUserProfile,
             internalAuthUID: currentState.internalAuthUID,
             internalIdToken: currentState.internalIdToken,
             internalRefreshToken: currentState.internalRefreshToken,
@@ -1261,7 +1364,55 @@ extension SessionClient {
         
         // Update legacy shared state for Features
         @Shared(.sessionState) var sessionState
-        $sessionState.withLock { $0 = .unauthenticated }
+        $sessionState.withLock { $0 = newState }
+    }
+    
+    /// Updates onboarding status in unified state pattern
+    static func updateOnboardingStatus(_ needsOnboarding: Bool) {
+        @Shared(.sessionInternalState) var sharedSessionState
+        let currentState = sharedSessionState
+        
+        // Update shared state using read-only wrapper pattern
+        let mutableState = SessionInternalState(
+            authenticationToken: currentState.authenticationToken,
+            sessionState: currentState.sessionState,
+            needsOnboarding: needsOnboarding,
+            hasUserProfile: currentState.hasUserProfile,
+            internalAuthUID: currentState.internalAuthUID,
+            internalIdToken: currentState.internalIdToken,
+            internalRefreshToken: currentState.internalRefreshToken,
+            internalTokenExpiry: currentState.internalTokenExpiry,
+            internalAuthUser: currentState.internalAuthUser,
+            isNetworkConnected: currentState.isNetworkConnected,
+            lastNetworkCheck: currentState.lastNetworkCheck
+        )
+        $sharedSessionState.withLock { $0 = ReadOnlySessionState(mutableState) }
+        
+        // Update legacy shared state for Features
+        @Shared(.needsOnboarding) var legacyNeedsOnboarding
+        $legacyNeedsOnboarding.withLock { $0 = needsOnboarding }
+    }
+    
+    /// Updates user profile status in unified state pattern
+    static func updateUserProfileStatus(_ hasUserProfile: Bool) {
+        @Shared(.sessionInternalState) var sharedSessionState
+        let currentState = sharedSessionState
+        
+        // Update shared state using read-only wrapper pattern
+        let mutableState = SessionInternalState(
+            authenticationToken: currentState.authenticationToken,
+            sessionState: currentState.sessionState,
+            needsOnboarding: currentState.needsOnboarding,
+            hasUserProfile: hasUserProfile,
+            internalAuthUID: currentState.internalAuthUID,
+            internalIdToken: currentState.internalIdToken,
+            internalRefreshToken: currentState.internalRefreshToken,
+            internalTokenExpiry: currentState.internalTokenExpiry,
+            internalAuthUser: currentState.internalAuthUser,
+            isNetworkConnected: currentState.isNetworkConnected,
+            lastNetworkCheck: currentState.lastNetworkCheck
+        )
+        $sharedSessionState.withLock { $0 = ReadOnlySessionState(mutableState) }
     }
     
     /// Updates internal auth state from auth result
@@ -1274,6 +1425,7 @@ extension SessionClient {
             authenticationToken: authResult.idToken,
             sessionState: currentState.sessionState,
             needsOnboarding: currentState.needsOnboarding,
+            hasUserProfile: currentState.hasUserProfile,
             internalAuthUID: authResult.user.uid,
             internalIdToken: authResult.idToken,
             internalRefreshToken: authResult.refreshToken,
