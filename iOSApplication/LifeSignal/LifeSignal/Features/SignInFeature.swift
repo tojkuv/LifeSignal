@@ -235,14 +235,23 @@ struct SignInView: View {
     var body: some View {
         WithPerceptionTracking {
             NavigationStack {
-                VStack {
-                    if store.showPhoneEntry {
-                        phoneEntryView()
-                    } else {
-                        verificationView()
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 24) {
+                        if store.showPhoneEntry {
+                            phoneEntryView()
+                        } else {
+                            verificationView()
+                        }
+                        
+                        // Add extra padding at the bottom
+                        Spacer()
+                            .frame(height: 20)
                     }
+                    .padding(.horizontal)
+                    .padding(.bottom, 50)
                 }
-                .padding()
+                .background(Color(UIColor.systemGroupedBackground))
+                .edgesIgnoringSafeArea(.bottom)
                 .navigationTitle("Sign In")
                 .onAppear {
                     store.send(.focusPhoneNumberField)
@@ -253,7 +262,6 @@ struct SignInView: View {
                 .onChange(of: store.verificationCodeFieldFocused) { _, newValue in
                     verificationCodeFieldFocused = newValue
                 }
-                .background(Color(UIColor.systemGroupedBackground))
             }
         }
     }
@@ -266,111 +274,54 @@ struct SignInView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 120, height: 120)
-                .padding(.top, 40)
+                .padding(.top, 20)
 
             // Debug button (only shown in debug builds)
-            #if DEBUG
-            Button(action: {
-                store.send(.debugSkipSignInAndOnboarding, animation: .default)
-            }) {
-                Text("🚀 DEBUG: Skip Sign In & Onboarding")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundColor(.primary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(.quaternary, lineWidth: 0.5)
-                    )
-            }
-            .disabled(store.isLoading)
-            .padding(.horizontal)
-            .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-            #endif
+            // #if DEBUG
+            // Button(action: {
+            //     store.send(.debugSkipSignInAndOnboarding, animation: .default)
+            // }) {
+            //     Text("🚀 DEBUG: Skip Sign In & Onboarding")
+            //         .font(.system(size: 13, weight: .medium, design: .rounded))
+            //         .foregroundColor(.primary)
+            //         .frame(maxWidth: .infinity)
+            //         .padding(.vertical, 12)
+            //         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            //         .overlay(
+            //             RoundedRectangle(cornerRadius: 12)
+            //                 .stroke(.quaternary, lineWidth: 0.5)
+            //         )
+            // }
+            // .disabled(store.isLoading)
+            // .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+            // #endif
 
             Text("Enter your phone number")
                 .font(.title2)
                 .fontWeight(.bold)
 
-            VStack(alignment: .leading, spacing: 16) {
-                // Region picker
-                HStack {
-                    Text("Region")
-                        .font(.body)
-
-                    Spacer()
-
-                    Button(action: {
-                        store.send(.toggleRegionPicker)
-                    }) {
-                        HStack {
-                            // Show the currently selected region
-                            let selectedRegionInfo = SignInFeature.State.regions.first { $0.0 == store.selectedRegion }!
-                            Text("\(selectedRegionInfo.0) (\(selectedRegionInfo.1))")
-                                .foregroundColor(.primary)
-
-                            Image(systemName: "chevron.down")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .popover(isPresented: $store.showRegionPicker) {
-                        List {
-                            ForEach(SignInFeature.State.regions, id: \.0) { region in
-                                Button(action: {
-                                    store.send(.updateSelectedRegion(region))
-                                }) {
-                                    HStack {
-                                        Text("\(region.0) (\(region.1))")
-
-                                        Spacer()
-
-                                        if store.selectedRegion == region.0 {
-                                            Image(systemName: "checkmark")
-                                                .foregroundColor(.blue)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        .presentationDetents([.medium])
-                    }
-                }
-                .padding(.horizontal, 4)
-
-                // Phone number field with formatting
-                TextField(store.phoneNumberPlaceholder, text: $store.phoneNumber)
-                    .keyboardType(.phonePad)
-                    .font(.body)
-                    .padding(.vertical, 12)
-                    .padding(.horizontal)
-                    .background(Color(UIColor.secondarySystemGroupedBackground))
-                    .cornerRadius(12)
-                    .foregroundColor(.primary)
-                    .multilineTextAlignment(.center)
-                    .focused($phoneNumberFieldFocused)
-                    .disabled(store.isLoading)
-                    .onChange(of: store.phoneNumber) { _, newValue in
-                        let formattedValue = phoneNumberFormatter.formatAsYouType(newValue)
-                        store.send(.handlePhoneNumberChange(formattedValue))
-                    }
-
-                Button(action: {
+            PhoneNumberEntryComponent(
+                selectedRegion: store.selectedRegion,
+                regions: SignInFeature.State.regions,
+                phoneNumber: store.phoneNumber,
+                phoneNumberPlaceholder: store.phoneNumberPlaceholder,
+                buttonTitle: "Send Verification Code",
+                isLoading: store.isLoading,
+                canSendCode: store.canSendCode,
+                showRegionPicker: store.showRegionPicker,
+                onRegionPickerToggle: {
+                    store.send(.toggleRegionPicker)
+                },
+                onRegionSelection: { region in
+                    store.send(.updateSelectedRegion(region))
+                },
+                onPhoneNumberChange: { newValue in
+                    store.send(.handlePhoneNumberChange(newValue))
+                },
+                onButtonTap: {
                     store.send(.sendVerificationCode, animation: .default)
-                }) {
-                    Text("Send Verification Code")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding()
                 }
-                .disabled(store.isLoading)
-                .background(store.isLoading || !store.canSendCode ? Color.gray : Color.blue)
-                .cornerRadius(12)
-                .disabled(store.isLoading || !store.canSendCode)
-            }
-            .padding(.horizontal)
+            )
 
             Spacer()
         }
@@ -384,52 +335,29 @@ struct SignInView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 120, height: 120)
-                .padding(.top, 40)
+                .padding(.top, 20)
 
 
             Text("Enter verification code")
                 .font(.title2)
                 .fontWeight(.bold)
 
-            // Verification code field with improved formatting
-            TextField("XXX-XXX", text: $store.verificationCode)
-                .keyboardType(.numberPad)
-                .font(.body)
-                .padding(.vertical, 12)
-                .padding(.horizontal)
-                .background(Color(UIColor.secondarySystemGroupedBackground))
-                .cornerRadius(12)
-                .foregroundColor(.primary)
-                .multilineTextAlignment(.center)
-                .focused($verificationCodeFieldFocused)
-                .disabled(store.isLoading)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal)
-                .onChange(of: store.verificationCode) { _, newValue in
+            VerificationCodeEntryComponent(
+                verificationCode: store.verificationCode,
+                buttonTitle: "Verify",
+                isLoading: store.isLoading,
+                canVerifyCode: store.canVerifyCode,
+                changePhoneButtonTitle: "Change phone number",
+                onVerificationCodeChange: { newValue in
                     store.send(.handleVerificationCodeChange(newValue))
+                },
+                onButtonTap: {
+                    store.send(.verifyCode, animation: .default)
+                },
+                onChangePhoneNumber: {
+                    store.send(.changeToPhoneEntryView, animation: .default)
                 }
-
-            Button(action: {
-                store.send(.verifyCode, animation: .default)
-            }) {
-                Text("Verify")
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-            }
-            .background(store.canVerifyCode ? Color.blue : Color.gray)
-            .cornerRadius(12)
-            .padding(.horizontal)
-            .disabled(!store.canVerifyCode)
-
-            Button(action: {
-                store.send(.changeToPhoneEntryView, animation: .default)
-            }) {
-                Text("Change phone number")
-                    .foregroundColor(.blue)
-            }
-            .disabled(store.isLoading)
+            )
 
             Spacer()
         }

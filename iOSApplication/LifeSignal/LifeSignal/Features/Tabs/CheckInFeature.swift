@@ -68,6 +68,11 @@ struct CheckInFeature {
         case deactivateAlert
         case alertResponse(Result<Void, Error>)
         
+        // Biometric authentication
+        case authenticateBiometricForCheckIn
+        case authenticateBiometricForAlertDeactivation
+        case biometricAuthenticationResult(Result<Bool, Error>)
+        
         // Alert button interactions
         case alertButtonTapped
         case startActivationAnimation
@@ -93,6 +98,7 @@ struct CheckInFeature {
     @Dependency(\.userClient) var userClient
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.notificationClient) var notificationClient
+    @Dependency(\.biometricClient) var biometricClient
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -115,6 +121,11 @@ struct CheckInFeature {
                 // Check if in cooldown period
                 if state.isCheckInButtonCoolingDown {
                     return .send(.checkInCooldownNotification)
+                }
+                
+                // Check biometric requirement first
+                if state.currentUser?.biometricAuthEnabled == true {
+                    return .send(.authenticateBiometricForCheckIn)
                 }
                 
                 state.isCheckingIn = true
@@ -187,6 +198,116 @@ struct CheckInFeature {
                     await haptics.notification(.warning)
                 }
                 
+            // Biometric authentication
+            case .authenticateBiometricForCheckIn:
+                return .run { [biometricClient] send in
+                    await send(.biometricAuthenticationResult(Result {
+                        try await biometricClient.authenticate("Authenticate to check in")
+                    }))
+                }
+                
+            case .authenticateBiometricForAlertDeactivation:
+                return .run { [biometricClient] send in
+                    await send(.biometricAuthenticationResult(Result {
+                        try await biometricClient.authenticate("Authenticate to deactivate emergency alert")
+                    }))
+                }
+                
+            case let .biometricAuthenticationResult(.success(success)):
+                if success {
+                    // Determine which action to perform based on the last biometric request
+                    // For simplicity, check current state to determine action
+                    if state.isAlertActive && state.canDeactivateAlert {
+                        // Was authenticating for alert deactivation
+                        return .run { [currentUser = state.currentUser] send in
+                            do {
+                                guard var user = currentUser else {
+                                    await send(.alertResponse(.failure(UserClientError.userNotFound)))
+                                    return
+                                }
+                                
+                                // Disable emergency alert
+                                user.setEmergencyAlertEnabled(false)
+                                
+                                // Call updateUser to persist the alert deactivation
+                                try await userClient.updateUser(user)
+                                
+                                // Notify contacts about emergency alert deactivation
+                                try await notificationClient.notifyEmergencyAlertToggled(user.id, false)
+                                
+                                await haptics.notification(.success)
+                                await send(.alertResponse(.success(())))
+                            } catch {
+                                await send(.alertResponse(.failure(error)))
+                            }
+                        }
+                    } else {
+                        // Was authenticating for check-in
+                        if state.isCheckInButtonCoolingDown {
+                            return .send(.checkInCooldownNotification)
+                        }
+                        
+                        state.isCheckingIn = true
+                        
+                        return .run { [currentUser = state.currentUser] send in
+                            do {
+                                guard let user = currentUser else {
+                                    await send(.checkInResponse(.failure(UserClientError.userNotFound)))
+                                    return
+                                }
+                                
+                                // Update user with new check-in timestamp
+                                var updatedUser = user
+                                updatedUser.lastCheckedIn = Date()
+                                updatedUser.lastModified = Date()
+                                
+                                // Call updateUser to persist the check-in
+                                try await userClient.updateUser(updatedUser)
+                                
+                                // Send success system notification
+                                try? await notificationClient.sendSystemNotification(
+                                    "Check-in Complete",
+                                    "You've successfully checked in"
+                                )
+                                
+                                await send(.checkInResponse(.success(())))
+                            } catch {
+                                await send(.checkInResponse(.failure(error)))
+                            }
+                        }
+                    }
+                } else {
+                    return .run { _ in
+                        await haptics.notification(.error)
+                    }
+                }
+                
+            case let .biometricAuthenticationResult(.failure(error)):
+                return .run { [notificationClient] _ in
+                    await haptics.notification(.error)
+                    
+                    let message: String
+                    if let biometricError = error as? BiometricClientError {
+                        switch biometricError {
+                        case .userCancel:
+                            message = "Biometric authentication was cancelled."
+                        case .notAvailable:
+                            message = "Biometric authentication is not available."
+                        case .notEnrolled:
+                            message = "No biometric data is enrolled on this device."
+                        default:
+                            message = biometricError.errorDescription ?? "Biometric authentication failed."
+                        }
+                    } else {
+                        message = "Biometric authentication failed."
+                    }
+                    
+                    try? await notificationClient.sendSystemNotification(
+                        "Authentication Failed",
+                        message
+                    )
+                }
+                
             // Alert system
             case .activateAlert:
                 guard state.canActivateAlert else { return .none }
@@ -220,6 +341,11 @@ struct CheckInFeature {
                 
             case .deactivateAlert:
                 guard state.canDeactivateAlert else { return .none }
+                
+                // Check biometric requirement for alert deactivation
+                if state.currentUser?.biometricAuthEnabled == true {
+                    return .send(.authenticateBiometricForAlertDeactivation)
+                }
                 
                 return .run { [currentUser = state.currentUser] send in
                     do {
@@ -534,9 +660,9 @@ struct CheckInView: View {
                     checkInButtonView()
 
                     // Debug button (only in debug builds)
-                    #if DEBUG
-                    debugButtonView()
-                    #endif
+                    // #if DEBUG
+                    // debugButtonView()
+                    // #endif
 
                     // Add extra padding at the bottom to ensure content doesn't overlap with tab bar
                     Spacer()
@@ -684,26 +810,26 @@ struct CheckInView: View {
         }
     }
     
-    #if DEBUG
-    @ViewBuilder
-    private func debugButtonView() -> some View {
-        Button(action: {
-            store.send(.debugCycleCheckInState)
-        }) {
-            Text("🔄 DEBUG: Cycle Check-in State")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundColor(.primary)
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(.quaternary, lineWidth: 0.5)
-                )
-        }
-        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-    }
-    #endif
+    // #if DEBUG
+    // @ViewBuilder
+    // private func debugButtonView() -> some View {
+    //     Button(action: {
+    //         store.send(.debugCycleCheckInState)
+    //     }) {
+    //         Text("🔄 DEBUG: Cycle Check-in State")
+    //             .font(.system(size: 13, weight: .medium, design: .rounded))
+    //             .foregroundColor(.primary)
+    //             .frame(maxWidth: .infinity)
+    //             .frame(height: 44)
+    //             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    //             .overlay(
+    //                 RoundedRectangle(cornerRadius: 12)
+    //                     .stroke(.quaternary, lineWidth: 0.5)
+    //             )
+    //     }
+    //     .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+    // }
+    // #endif
 }
 
 #Preview {

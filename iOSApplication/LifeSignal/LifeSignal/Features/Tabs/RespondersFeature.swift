@@ -225,12 +225,17 @@ struct RespondersFeature {
         case removeResponse(Result<Void, Error>)
         case refreshResponse(Result<Void, Error>)
         case checkInResponse(Result<Void, Error>)
+        
+        // Biometric authentication
+        case authenticateBiometricForPingClear
+        case biometricAuthenticationResult(Result<Bool, Error>)
     }
 
     @Dependency(\.contactsClient) var contactsClient
     @Dependency(\.notificationClient) var notificationClient
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.userClient) var userClient
+    @Dependency(\.biometricClient) var biometricClient
 
     var body: some ReducerOf<Self> {
         Reduce { state, action in
@@ -345,6 +350,11 @@ struct RespondersFeature {
                 }
 
             case .confirmationAlert(.presented(.confirmClearAllPings)):
+                // Check biometric requirement before clearing pings
+                if state.currentUser?.biometricAuthEnabled == true {
+                    return .send(.authenticateBiometricForPingClear)
+                }
+                
                 state.isLoading = true
                 state.showClearAllPingsConfirmation = false
 
@@ -476,6 +486,104 @@ struct RespondersFeature {
                     try? await notificationClient.sendSystemNotification(
                         "Check-in Issue",
                         "Unable to complete check-in but pings were cleared: \(error.localizedDescription)"
+                    )
+                }
+                
+            // Biometric authentication
+            case .authenticateBiometricForPingClear:
+                return .run { [biometricClient] send in
+                    await send(.biometricAuthenticationResult(Result {
+                        try await biometricClient.authenticate("Authenticate to respond to pings")
+                    }))
+                }
+                
+            case let .biometricAuthenticationResult(.success(success)):
+                if success {
+                    // Proceed with ping clearing
+                    state.isLoading = true
+                    state.showClearAllPingsConfirmation = false
+
+                    // Get contacts that need ping clearing before updating them
+                    let contactsToNotify = state.contactsState.contacts.filter { $0.isResponder && $0.hasIncomingPing }
+                    let contactsToUpdate = contactsToNotify.map { contact in
+                        var updatedContact = contact
+                        updatedContact.hasIncomingPing = false
+                        updatedContact.incomingPingTimestamp = nil
+                        return updatedContact
+                    }
+
+                    return .run { [haptics, notificationClient, contactsClient, userClient, currentUser = state.currentUser] send in
+                        await haptics.notification(.success)
+                        
+                        // First: Perform check-in since responding to pings means user is safe
+                        await send(.checkInResponse(Result {
+                            guard let user = currentUser else {
+                                throw UserClientError.userNotFound
+                            }
+                            
+                            // Update user with new check-in timestamp
+                            var updatedUser = user
+                            updatedUser.lastCheckedIn = Date()
+                            updatedUser.lastModified = Date()
+                            
+                            // Call updateUser to persist the check-in
+                            try await userClient.updateUser(updatedUser)
+                        }))
+                        
+                        // Second: Send acknowledgment notifications to each contact who sent pings
+                        for originalContact in contactsToNotify {
+                            do {
+                                try await notificationClient.sendPingNotification(
+                                    .receiveDependentPingResponded,
+                                    "Ping Acknowledged",
+                                    "Your ping has been acknowledged",
+                                    originalContact.id
+                                )
+                            } catch {
+                                // Continue with other notifications even if one fails
+                                print("Failed to send acknowledgment to \(originalContact.name): \(error)")
+                            }
+                        }
+                        
+                        // Third: Update each contact's state to clear the pings
+                        for contact in contactsToUpdate {
+                            await contactsClient.updateContact(contact)
+                        }
+                        
+                        await send(.pingResponse(Result {
+                            // Clear notification history (but don't send duplicate notifications)
+                            try await notificationClient.clearAllReceivedPings()
+                        }))
+                    }
+                } else {
+                    return .run { _ in
+                        await haptics.notification(.error)
+                    }
+                }
+                
+            case let .biometricAuthenticationResult(.failure(error)):
+                return .run { [notificationClient] _ in
+                    await haptics.notification(.error)
+                    
+                    let message: String
+                    if let biometricError = error as? BiometricClientError {
+                        switch biometricError {
+                        case .userCancel:
+                            message = "Biometric authentication was cancelled."
+                        case .notAvailable:
+                            message = "Biometric authentication is not available."
+                        case .notEnrolled:
+                            message = "No biometric data is enrolled on this device."
+                        default:
+                            message = biometricError.errorDescription ?? "Biometric authentication failed."
+                        }
+                    } else {
+                        message = "Biometric authentication failed."
+                    }
+                    
+                    try? await notificationClient.sendSystemNotification(
+                        "Authentication Failed",
+                        message
                     )
                 }
             }

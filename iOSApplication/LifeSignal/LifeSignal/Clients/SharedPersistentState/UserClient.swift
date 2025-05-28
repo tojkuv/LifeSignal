@@ -32,6 +32,7 @@ struct CreateUserRequest: Sendable {
     let phoneRegion: String
     let notificationPreference: NotificationPreference
     let isEmergencyAlertEnabled: Bool
+    let biometricAuthEnabled: Bool
     let authToken: String
 }
 
@@ -47,6 +48,7 @@ struct UpdateUserRequest: Sendable {
     let isEmergencyAlertEnabled: Bool
     let qrCodeId: UUID
     let avatarURL: String
+    let biometricAuthEnabled: Bool
     let authToken: String
 }
 
@@ -124,6 +126,7 @@ struct User_Proto: Sendable {
     var qrCodeId: String
     var avatarURL: String
     var lastModified: Int64
+    var biometricAuthEnabled: Bool
 }
 
 // MARK: - Mock gRPC Service
@@ -149,7 +152,8 @@ final class MockUserService: UserServiceProtocol {
             emergencyAlertTimestamp: nil,
             qrCodeId: UUID().uuidString,
             avatarURL: "",
-            lastModified: Int64(Date().timeIntervalSince1970)
+            lastModified: Int64(Date().timeIntervalSince1970),
+            biometricAuthEnabled: false
         )
     }
     
@@ -168,7 +172,8 @@ final class MockUserService: UserServiceProtocol {
             emergencyAlertTimestamp: nil,
             qrCodeId: UUID().uuidString,
             avatarURL: "",
-            lastModified: Int64(Date().timeIntervalSince1970)
+            lastModified: Int64(Date().timeIntervalSince1970),
+            biometricAuthEnabled: false
         )
     }
 
@@ -187,7 +192,8 @@ final class MockUserService: UserServiceProtocol {
             emergencyAlertTimestamp: nil,
             qrCodeId: UUID().uuidString,
             avatarURL: "",
-            lastModified: Int64(Date().timeIntervalSince1970)
+            lastModified: Int64(Date().timeIntervalSince1970),
+            biometricAuthEnabled: request.biometricAuthEnabled
         )
     }
 
@@ -207,7 +213,8 @@ final class MockUserService: UserServiceProtocol {
             emergencyAlertTimestamp: request.isEmergencyAlertEnabled ? Int64(Date().timeIntervalSince1970) : nil,
             qrCodeId: request.qrCodeId.uuidString,
             avatarURL: request.avatarURL,
-            lastModified: Int64(Date().timeIntervalSince1970)
+            lastModified: Int64(Date().timeIntervalSince1970),
+            biometricAuthEnabled: request.biometricAuthEnabled
         )
     }
 
@@ -236,7 +243,8 @@ final class MockUserService: UserServiceProtocol {
             emergencyAlertTimestamp: nil,
             qrCodeId: UUID().uuidString,
             avatarURL: supabaseAvatarURL,
-            lastModified: Int64(Date().timeIntervalSince1970)
+            lastModified: Int64(Date().timeIntervalSince1970),
+            biometricAuthEnabled: false
         )
         
         return UpdateAvatarResponse(
@@ -262,7 +270,8 @@ final class MockUserService: UserServiceProtocol {
             emergencyAlertTimestamp: nil,
             qrCodeId: UUID().uuidString,
             avatarURL: "", // Cleared avatar URL after Supabase deletion
-            lastModified: Int64(Date().timeIntervalSince1970)
+            lastModified: Int64(Date().timeIntervalSince1970),
+            biometricAuthEnabled: false
         )
     }
     
@@ -286,7 +295,8 @@ extension User_Proto {
             emergencyAlertTimestamp: emergencyAlertTimestamp.map { Date(timeIntervalSince1970: TimeInterval($0)) },
             qrCodeId: UUID(uuidString: qrCodeId) ?? UUID(),
             avatarURL: avatarURL.isEmpty ? nil : avatarURL,
-            lastModified: Date(timeIntervalSince1970: TimeInterval(lastModified))
+            lastModified: Date(timeIntervalSince1970: TimeInterval(lastModified)),
+            biometricAuthEnabled: biometricAuthEnabled
         )
     }
 }
@@ -479,6 +489,7 @@ struct User: Codable, Equatable, Identifiable, Sendable {
     var qrCodeId: UUID
     var avatarURL: String?
     var lastModified: Date
+    var biometricAuthEnabled: Bool
     
     // MARK: - Helper Methods
     
@@ -785,6 +796,7 @@ extension UserClient: DependencyKey {
                 phoneRegion: phoneRegion,
                 notificationPreference: .thirtyMinutes, // Default to 30 minutes
                 isEmergencyAlertEnabled: false, // Default disabled
+                biometricAuthEnabled: false, // Default disabled
                 authToken: authInfo.token
             )
             
@@ -823,6 +835,7 @@ extension UserClient: DependencyKey {
                 isEmergencyAlertEnabled: user.isEmergencyAlertEnabled,
                 qrCodeId: user.qrCodeId,
                 avatarURL: user.avatarURL ?? "",
+                biometricAuthEnabled: user.biometricAuthEnabled,
                 authToken: authInfo.token
             )
             
@@ -964,6 +977,7 @@ extension UserClient: DependencyKey {
                 isEmergencyAlertEnabled: user.isEmergencyAlertEnabled,
                 qrCodeId: newQRCodeId,
                 avatarURL: user.avatarURL ?? "",
+                biometricAuthEnabled: user.biometricAuthEnabled,
                 authToken: authInfo.token
             )
             
@@ -1027,7 +1041,8 @@ extension User {
         emergencyAlertTimestamp: nil,
         qrCodeId: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
         avatarURL: nil,
-        lastModified: Date()
+        lastModified: Date(),
+        biometricAuthEnabled: false
     )
     
     /// Mock user with active emergency alert
@@ -1044,7 +1059,8 @@ extension User {
         emergencyAlertTimestamp: Date().addingTimeInterval(-600), // 10 minutes ago
         qrCodeId: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
         avatarURL: nil,
-        lastModified: Date()
+        lastModified: Date(),
+        biometricAuthEnabled: false
     )
     
     /// Mock user with overdue check-in
@@ -1061,7 +1077,8 @@ extension User {
         emergencyAlertTimestamp: nil,
         qrCodeId: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
         avatarURL: nil,
-        lastModified: Date()
+        lastModified: Date(),
+        biometricAuthEnabled: false
     )
     
     /// Create a mock user with specific characteristics for testing
@@ -1077,7 +1094,8 @@ extension User {
         isEmergencyAlertEnabled: Bool = false,
         emergencyAlertTimestamp: Date? = nil,
         qrCodeId: UUID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
-        avatarURL: String? = nil
+        avatarURL: String? = nil,
+        biometricAuthEnabled: Bool = false
     ) -> User {
         User(
             id: id,
@@ -1092,7 +1110,8 @@ extension User {
             emergencyAlertTimestamp: emergencyAlertTimestamp,
             qrCodeId: qrCodeId,
             avatarURL: avatarURL,
-            lastModified: Date()
+            lastModified: Date(),
+            biometricAuthEnabled: biometricAuthEnabled
         )
     }
 }

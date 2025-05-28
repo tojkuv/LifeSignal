@@ -9,6 +9,11 @@ struct PhoneNumberFormatterClient {
     var cleanPhoneNumber: @Sendable (String) -> String = { _ in "" }
     var isValidPhoneNumber: @Sendable (String) -> Bool = { _ in false }
     var formatAsYouType: @Sendable (String) -> String = { _ in "" }
+    var formatVerificationCode: @Sendable (String) -> String = { _ in "" }
+    var cleanVerificationCode: @Sendable (String) -> String = { _ in "" }
+    var isValidVerificationCode: @Sendable (String) -> Bool = { _ in false }
+    var limitVerificationCodeLength: @Sendable (String) -> String = { _ in "" }
+    var limitPhoneNumberLength: @Sendable (String) -> String = { _ in "" }
 }
 
 extension PhoneNumberFormatterClient: DependencyKey {
@@ -99,6 +104,37 @@ extension PhoneNumberFormatterClient: DependencyKey {
                 // International format
                 return "+\(cleaned)"
             }
+        },
+        
+        formatVerificationCode: { code in
+            let cleaned = Self.cleanVerificationCode(code)
+            guard cleaned.count >= 3 else { return cleaned }
+            
+            // Format as XXX-XXX for 6-digit codes
+            if cleaned.count <= 6 {
+                let first = String(cleaned.prefix(3))
+                let second = String(cleaned.dropFirst(3))
+                return second.isEmpty ? first : "\(first)-\(second)"
+            }
+            return cleaned
+        },
+        
+        cleanVerificationCode: Self.cleanVerificationCode,
+        
+        isValidVerificationCode: { code in
+            let cleaned = Self.cleanVerificationCode(code)
+            return cleaned.count == 6
+        },
+        
+        limitVerificationCodeLength: { code in
+            let cleaned = Self.cleanVerificationCode(code)
+            return String(cleaned.prefix(6))
+        },
+        
+        limitPhoneNumberLength: { phone in
+            let cleaned = Self.cleanPhoneNumber(phone)
+            // Allow up to 15 digits for international numbers
+            return String(cleaned.prefix(15))
         }
     )
     
@@ -107,7 +143,12 @@ extension PhoneNumberFormatterClient: DependencyKey {
         formatPhoneNumberForDisplay: { $0 },
         cleanPhoneNumber: { $0 },
         isValidPhoneNumber: { _ in true },
-        formatAsYouType: { $0 }
+        formatAsYouType: { $0 },
+        formatVerificationCode: { $0 },
+        cleanVerificationCode: { $0 },
+        isValidVerificationCode: { _ in true },
+        limitVerificationCodeLength: { $0 },
+        limitPhoneNumberLength: { $0 }
     )
     
     static let mockValue = PhoneNumberFormatterClient(
@@ -155,12 +196,42 @@ extension PhoneNumberFormatterClient: DependencyKey {
                 let number = String(cleaned.dropFirst(6))
                 return "(\(areaCode)) \(exchange)-\(number)"
             }
+        },
+        formatVerificationCode: { code in
+            let cleaned = code.filter { $0.isNumber }
+            guard cleaned.count >= 3 else { return cleaned }
+            
+            if cleaned.count <= 6 {
+                let first = String(cleaned.prefix(3))
+                let second = String(cleaned.dropFirst(3))
+                return second.isEmpty ? first : "\(first)-\(second)"
+            }
+            return cleaned
+        },
+        cleanVerificationCode: { code in
+            code.filter { $0.isNumber }
+        },
+        isValidVerificationCode: { code in
+            let cleaned = code.filter { $0.isNumber }
+            return cleaned.count == 6
+        },
+        limitVerificationCodeLength: { code in
+            let cleaned = code.filter { $0.isNumber }
+            return String(cleaned.prefix(6))
+        },
+        limitPhoneNumberLength: { phone in
+            let cleaned = phone.filter { $0.isNumber }
+            return String(cleaned.prefix(15))
         }
     )
     
-    // Helper method for cleaning phone numbers
+    // Helper methods for cleaning input
     private static func cleanPhoneNumber(_ phoneNumber: String) -> String {
         return phoneNumber.filter { $0.isNumber }
+    }
+    
+    private static func cleanVerificationCode(_ code: String) -> String {
+        return code.filter { $0.isNumber }
     }
 }
 

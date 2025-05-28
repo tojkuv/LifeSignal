@@ -1049,56 +1049,33 @@ extension ProfileView {
                 .padding(.horizontal, 4)
                 .padding(.top, 8)
 
-            // Region picker
-            HStack {
-                Text("Region")
-                    .font(.body)
-
-                Spacer()
-
-                Picker("Region", selection: $store.selectedPhoneRegion) {
-                    ForEach(ProfileFeature.State.phoneRegions, id: \.0) { region in
-                        Text("\(region.0) (\(region.1))").tag(region.0)
-                    }
+            PhoneNumberEntryComponent(
+                selectedRegion: store.selectedPhoneRegion,
+                regions: ProfileFeature.State.phoneRegions,
+                phoneNumber: store.newPhoneNumber,
+                phoneNumberPlaceholder: store.phoneNumberPlaceholder,
+                buttonTitle: "Send Verification Code",
+                isLoading: false,
+                canSendCode: store.isPhoneNumberValid,
+                showRegionPicker: store.showPhoneRegionPicker,
+                onRegionPickerToggle: {
+                    store.send(.togglePhoneRegionPicker)
+                },
+                onRegionSelection: { region in
+                    store.send(.updateSelectedPhoneRegion(region))
+                },
+                onPhoneNumberChange: { newValue in
+                    store.send(.handlePhoneNumberChange(newValue))
+                },
+                onButtonTap: {
+                    store.send(.sendPhoneVerificationCode, animation: .default)
                 }
-                .pickerStyle(MenuPickerStyle())
-            }
-            .padding(.horizontal, 4)
-
-            TextField(store.phoneNumberPlaceholder, text: $store.newPhoneNumber)
-                .keyboardType(.phonePad)
-                .font(.body)
-                .padding(.vertical, 12)
-                .padding(.horizontal)
-                .background(Color(UIColor.secondarySystemGroupedBackground))
-                .cornerRadius(12)
-                .foregroundColor(.primary)
-                .multilineTextAlignment(.leading) // Left align the text
-                .focused($phoneNumberFieldFocused)
-                .onChange(of: store.newPhoneNumber) { _, newValue in
-                    let formattedValue = phoneNumberFormatter.formatAsYouType(newValue)
-                    store.send(.handlePhoneNumberChange(formattedValue))
-                }
+            )
 
             Text("Enter your new phone number. We'll send a verification code to confirm.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.horizontal, 4)
-
-
-            Button(action: {
-                store.send(.sendPhoneVerificationCode, animation: .default)
-            }) {
-                Text("Send Verification Code")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(!store.isPhoneNumberValid ? Color.gray : Color.blue)
-                    .cornerRadius(12)
-            }
-            .disabled(!store.isPhoneNumberValid)
-            .padding(.top, 16)
         }
         .padding(.horizontal)
         .padding(.top, 24)
@@ -1116,32 +1093,20 @@ extension ProfileView {
                 .font(.body)
                 .padding(.horizontal, 4)
 
-            TextField("XXX-XXX", text: $store.phoneVerificationCode)
-                .keyboardType(.numberPad)
-                .font(.body)
-                .padding(.vertical, 12)
-                .padding(.horizontal)
-                .background(Color(UIColor.secondarySystemGroupedBackground))
-                .cornerRadius(12)
-                .foregroundColor(.primary)
-                .focused($phoneVerificationCodeFieldFocused)
-                .onChange(of: store.phoneVerificationCode) { _, newValue in
+            VerificationCodeEntryComponent(
+                verificationCode: store.phoneVerificationCode,
+                buttonTitle: "Verify Code",
+                isLoading: false,
+                canVerifyCode: store.isVerificationCodeValid,
+                changePhoneButtonTitle: nil,
+                onVerificationCodeChange: { newValue in
                     store.send(.handlePhoneVerificationCodeChange(newValue))
-                }
-
-            Button(action: {
-                store.send(.verifyPhoneNumber, animation: .default)
-            }) {
-                Text("Verify Code")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(!store.isVerificationCodeValid ? Color.gray : Color.blue)
-                    .cornerRadius(12)
-            }
-            .disabled(!store.isVerificationCodeValid)
-            .padding(.top, 16)
+                },
+                onButtonTap: {
+                    store.send(.verifyPhoneNumber, animation: .default)
+                },
+                onChangePhoneNumber: nil
+            )
         }
         .padding(.horizontal)
         .padding(.top, 24)

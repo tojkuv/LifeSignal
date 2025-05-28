@@ -58,5 +58,7 @@
 	</array>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>LifeSignal needs to send you notifications about check-in reminders and alerts from your dependents.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>LifeSignal uses Face ID to securely authenticate check-ins, emergency alert deactivation, and ping responses. This ensures only you can perform these critical safety actions.</string>
 </dict>
 </plist>

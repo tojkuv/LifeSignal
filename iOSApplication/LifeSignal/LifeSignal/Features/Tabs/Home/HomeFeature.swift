@@ -102,6 +102,10 @@ struct HomeFeature {
 
         // Notification settings
         case updateNotificationSettings(enabled: Bool, notify30Min: Bool, notify2Hours: Bool)
+        
+        // Biometric authentication settings
+        case updateBiometricAuthSetting(Bool)
+        case biometricAuthResponse(Result<Void, Error>)
 
         // Contact management
         case createContactFromQRCode(String)
@@ -132,6 +136,7 @@ struct HomeFeature {
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.contactsClient) var contactsClient
     @Dependency(\.sessionClient) var sessionClient
+    @Dependency(\.biometricClient) var biometricClient
 
     /// Home reducer body implementing business logic
     var body: some ReducerOf<Self> {
@@ -205,6 +210,23 @@ struct HomeFeature {
             
         case let .updateNotificationSettings(enabled, notify30Min, notify2Hours):
             return updateNotificationSettingsEffect(state: state, enabled: enabled, notify30Min: notify30Min, notify2Hours: notify2Hours)
+            
+        case let .updateBiometricAuthSetting(enabled):
+            return updateBiometricAuthSettingEffect(state: state, enabled: enabled)
+            
+        case .biometricAuthResponse(.success):
+            return .run { _ in
+                await haptics.notification(.success)
+            }
+            
+        case let .biometricAuthResponse(.failure(error)):
+            return .run { [notificationClient] _ in
+                await haptics.notification(.error)
+                try? await notificationClient.sendSystemNotification(
+                    "Biometric Settings Issue",
+                    "Unable to update biometric authentication setting. Please try again."
+                )
+            }
             
         default:
             return handleOtherActions(state: &state, action: action)
@@ -491,6 +513,51 @@ struct HomeFeature {
                     "Notification Settings Issue",
                     "Unable to update notification preferences. Please try again."
                 )
+            }
+        }
+    }
+    
+    private func updateBiometricAuthSettingEffect(state: State, enabled: Bool) -> Effect<Action> {
+        .run { [currentUser = state.currentUser, userClient, biometricClient, haptics, notificationClient] send in
+            do {
+                guard var user = currentUser else {
+                    await send(.biometricAuthResponse(.failure(UserClientError.userNotFound)))
+                    return
+                }
+                
+                // If enabling biometric auth, verify it's available and authenticate first
+                if enabled {
+                    let biometricType = biometricClient.getBiometricType()
+                    guard biometricType != .none else {
+                        await send(.biometricAuthResponse(.failure(BiometricClientError.notAvailable)))
+                        return
+                    }
+                    
+                    // Authenticate to confirm user can use biometric auth
+                    let reason = "Enable \(biometricType.displayName) authentication for LifeSignal"
+                    let success = try await biometricClient.authenticate(reason)
+                    
+                    guard success else {
+                        await send(.biometricAuthResponse(.failure(BiometricClientError.authenticationFailed)))
+                        return
+                    }
+                }
+                
+                // Update user setting
+                user.biometricAuthEnabled = enabled
+                user.lastModified = Date()
+                try await userClient.updateUser(user)
+                
+                await send(.biometricAuthResponse(.success(())))
+                
+                // Send success notification
+                let statusText = enabled ? "enabled" : "disabled"
+                try? await notificationClient.sendSystemNotification(
+                    "Biometric Authentication \(statusText.capitalized)",
+                    "Biometric authentication has been \(statusText) for secure actions."
+                )
+            } catch {
+                await send(.biometricAuthResponse(.failure(error)))
             }
         }
     }
@@ -1129,12 +1196,15 @@ struct HomeView: View {
 
     @ViewBuilder
     private func settingsSection() -> some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 16) {
+            // Check-in Notification
+            notificationsSection()
+
             // Check-in Interval
             checkInIntervalSection()
-
-            // Notifications
-            notificationsSection()
+            
+            // Biometric Authentication
+            biometricSection()
 
             // Help/Instructions
             helpSection()
@@ -1228,6 +1298,33 @@ struct HomeView: View {
     }
 
     @ViewBuilder
+    private func biometricSection() -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Biometric Authentication")
+                        .font(.body)
+                        .foregroundColor(.primary)
+                    Text("Use Face ID to secure check-in and alerts")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { store.currentUser?.biometricAuthEnabled ?? false },
+                    set: { store.send(.updateBiometricAuthSetting($0)) }
+                ))
+                .labelsHidden()
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal)
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .cornerRadius(12)
+            .padding(.horizontal)
+        }
+    }
+
+    @ViewBuilder
     private func helpSection() -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Button(action: {
@@ -1235,8 +1332,14 @@ struct HomeView: View {
                 store.send(.setShowInstructions(true))
             }) {
                 HStack {
-                    Text("Review instructions")
-                        .foregroundColor(.primary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Review instructions")
+                            .font(.body)
+                            .foregroundColor(.primary)
+                        Text("Learn how to use LifeSignal effectively")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                     Spacer()
                     Image(systemName: "chevron.right")
                         .foregroundColor(.secondary)
@@ -1247,6 +1350,7 @@ struct HomeView: View {
                 .background(Color(UIColor.secondarySystemGroupedBackground))
                 .cornerRadius(12)
             }
+            .buttonStyle(PlainButtonStyle())
             .padding(.horizontal)
         }
     }

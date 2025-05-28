@@ -8,11 +8,9 @@ import UserNotifications
 struct OnboardingFeature {
     @ObservableState
     struct State: Equatable {
-        @Shared(.needsOnboarding) var needsOnboarding: Bool = false
-        @Shared(.currentUser) var currentUser: User? = nil
-
         var currentStep = 0
         var showInstructions = false
+        var isLoading = false
         
         // Name entry fields
         var firstName = ""
@@ -23,10 +21,16 @@ struct OnboardingFeature {
         var firstNameFieldFocused = false
         var lastNameFieldFocused = false
         var noteFieldFocused = false
-        var isLoading = false
+        
+        // New onboarding settings
+        var checkInInterval: TimeInterval = 86400  // 1 day default
+        var reminderMinutesBefore: Int = 30
+        var biometricAuthEnabled: Bool = false
+        var intervalPickerUnit: String = "days"
+        var intervalPickerValue: Int = 1
 
         var progress: Double {
-            Double(currentStep) / 1.0  // 2 steps total (0 and 1)
+            Double(currentStep) / 4.0  // 5 steps total (0-4)
         }
 
         var areBothNamesFilled: Bool {
@@ -40,6 +44,31 @@ struct OnboardingFeature {
             let cleaned = input.trimmingCharacters(in: .whitespacesAndNewlines)
             return cleaned.prefix(1).capitalized + cleaned.dropFirst().lowercased()
         }
+        
+        // Interval picker helpers
+        var dayValues: [Int] { Array(1...7) }
+        var hourValues: [Int] { [8, 16, 32] }
+        var isDayUnit: Bool { intervalPickerUnit == "days" }
+        
+        // Get computed interval in seconds from picker values
+        func getComputedIntervalInSeconds() -> TimeInterval {
+            if intervalPickerUnit == "days" {
+                return TimeInterval(intervalPickerValue * 86400)
+            } else {
+                return TimeInterval(intervalPickerValue * 3600)
+            }
+        }
+        
+        // Format an interval for display
+        func formatInterval(_ interval: TimeInterval) -> String {
+            let hours = Int(interval / 3600)
+            let days = hours / 24
+            if days > 0 {
+                return "\(days) day\(days == 1 ? "" : "s")"
+            } else {
+                return "\(hours) hour\(hours == 1 ? "" : "s")"
+            }
+        }
     }
 
     @CasePathable
@@ -50,12 +79,13 @@ struct OnboardingFeature {
         case startOnboarding
         case nextStep
         case previousStep
-        case completeOnboarding(completion: (Bool) -> Void)
+        case completeOnboarding
         case onboardingCompleted
         
         // User profile creation
         case createUserProfile
-        case userProfileCreated(Result<Void, Error>)
+        case userProfileCreatedSuccess
+        case userProfileCreatedFailure(String)
         
         // Instructions
         case handleInstructionsDismissal
@@ -65,6 +95,17 @@ struct OnboardingFeature {
         case setFirstNameFieldFocused(Bool)
         case setLastNameFieldFocused(Bool)
         case setNoteFieldFocused(Bool)
+        
+        // Interval management
+        case updateIntervalPickerUnit(String)
+        case updateIntervalPickerValue(Int)
+        case setCheckInInterval(TimeInterval)
+        
+        // Notification preference
+        case setReminderMinutes(Int)
+        
+        // Biometric auth
+        case setBiometricAuth(Bool)
     }
 
     @Dependency(\.hapticClient) var haptics
@@ -90,17 +131,23 @@ struct OnboardingFeature {
                 }
 
             case .nextStep:
-                guard state.areBothNamesFilled else { return .none }
-                
-                state.currentStep = 1
-
+                if state.currentStep == 0 && !state.areBothNamesFilled {
+                    return .none
+                }
+                if state.currentStep == 2 {
+                    state.checkInInterval = state.getComputedIntervalInSeconds()
+                }
+                if state.currentStep < 4 {
+                    state.currentStep += 1
+                }
                 return .run { _ in
                     await haptics.impact(.medium)
                 }
 
             case .previousStep:
-                state.currentStep = 0
-
+                if state.currentStep > 0 {
+                    state.currentStep -= 1
+                }
                 return .run { _ in
                     await haptics.impact(.medium)
                 }
@@ -113,14 +160,30 @@ struct OnboardingFeature {
                 }
 
             case .createUserProfile:
-                return .run { [firstName = state.firstName, lastName = state.lastName, emergencyNote = state.emergencyNote] send in
-                    let result = await Result {
-                        try await sessionClient.completeUserProfile(firstName, lastName, emergencyNote)
+                return .run { [
+                    firstName = state.firstName, 
+                    lastName = state.lastName, 
+                    emergencyNote = state.emergencyNote,
+                    checkInInterval = state.checkInInterval,
+                    reminderMinutes = state.reminderMinutesBefore,
+                    biometricAuthEnabled = state.biometricAuthEnabled
+                ] send in
+                    do {
+                        try await sessionClient.completeUserProfile(
+                            firstName, 
+                            lastName, 
+                            emergencyNote,
+                            checkInInterval: checkInInterval,
+                            reminderMinutes: reminderMinutes,
+                            biometricAuthEnabled: biometricAuthEnabled
+                        )
+                        await send(.userProfileCreatedSuccess)
+                    } catch {
+                        await send(.userProfileCreatedFailure(error.localizedDescription))
                     }
-                    await send(.userProfileCreated(result))
                 }
 
-            case let .userProfileCreated(.success):
+            case .userProfileCreatedSuccess:
                 state.isLoading = false
                 state.showInstructions = true
                 
@@ -128,7 +191,8 @@ struct OnboardingFeature {
                     await haptics.notification(.success)
                 }
 
-            case let .userProfileCreated(.failure(error)):
+            case let .userProfileCreatedFailure(errorMessage):
+                state.isLoading = false
                 
                 return .run { _ in
                     await haptics.notification(.error)
@@ -162,6 +226,41 @@ struct OnboardingFeature {
             case let .setNoteFieldFocused(focused):
                 state.noteFieldFocused = focused
                 return .none
+                
+            // Interval management
+            case let .updateIntervalPickerUnit(newUnit):
+                state.intervalPickerUnit = newUnit
+                if newUnit == "days" {
+                    state.intervalPickerValue = 1
+                } else {
+                    state.intervalPickerValue = 8
+                }
+                return .run { _ in
+                    await haptics.selection()
+                }
+                
+            case let .updateIntervalPickerValue(value):
+                state.intervalPickerValue = value
+                return .none
+                
+            case let .setCheckInInterval(interval):
+                state.checkInInterval = interval
+                return .none
+                
+            // Notification preference
+            case let .setReminderMinutes(minutes):
+                state.reminderMinutesBefore = minutes
+                return .run { _ in
+                    await haptics.selection()
+                }
+                
+            // Biometric auth
+            case let .setBiometricAuth(enabled):
+                state.biometricAuthEnabled = enabled
+                return .run { _ in
+                    await haptics.selection()
+                }
+                
 
             case .onboardingCompleted:
                 return .none
@@ -179,20 +278,30 @@ struct OnboardingView: View {
     var body: some View {
         WithPerceptionTracking {
             NavigationStack {
-                VStack {
-                    // Progress indicator - fixed position
-                    progressIndicator()
+                ScrollView {
+                    VStack {
+                        // Progress indicator - fixed position
+                        progressIndicator()
 
-                    // Content based on current step
-                    if store.currentStep == 0 {
-                        nameEntryView()
-                    } else {
-                        emergencyNoteView()
+                        // Content based on current step
+                        switch store.currentStep {
+                        case 0:
+                            nameEntryView()
+                        case 1:
+                            emergencyNoteView()
+                        case 2:
+                            checkInIntervalView()
+                        case 3:
+                            reminderSettingsView()
+                        case 4:
+                            biometricAuthView()
+                        default:
+                            nameEntryView()
+                        }
                     }
                 }
-                .padding()
-                .navigationTitle("Welcome to LifeSignal")
-                .navigationBarTitleDisplayMode(.inline)
+                .padding(.horizontal)
+                .padding(.bottom, 50)
                 .background(Color(UIColor.systemGroupedBackground))
                 .onChange(of: store.firstNameFieldFocused) { _, newValue in
                     firstNameFieldFocused = newValue
@@ -224,10 +333,10 @@ struct OnboardingView: View {
     @ViewBuilder
     private func progressIndicator() -> some View {
         HStack(spacing: 8) {
-            ForEach(0..<2) { step in
+            ForEach(0..<5) { step in
                 RoundedRectangle(cornerRadius: 4)
                     .fill(step == store.currentStep ? Color.blue : Color.gray.opacity(0.3))
-                    .frame(width: 30, height: 6)
+                    .frame(width: 24, height: 6)
             }
         }
         .padding(.top, 16)
@@ -265,7 +374,6 @@ struct OnboardingView: View {
                         lastNameFieldFocused = true
                     }
             }
-            .padding(.horizontal)
 
             // Last Name Field
             VStack(alignment: .leading, spacing: 8) {
@@ -288,7 +396,6 @@ struct OnboardingView: View {
                     .focused($lastNameFieldFocused)
                     .submitLabel(.done)
             }
-            .padding(.horizontal)
 
             Button(action: {
                 if store.areBothNamesFilled {
@@ -304,7 +411,6 @@ struct OnboardingView: View {
                     .cornerRadius(12)
             }
             .disabled(!store.areBothNamesFilled)
-            .padding(.horizontal)
 
             Spacer()
         }
@@ -329,39 +435,216 @@ struct OnboardingView: View {
                     .cornerRadius(12)
                     .focused($noteFieldFocused)
             }
-            .padding(.horizontal)
 
-            HStack {
-                Button(action: {
-                    store.send(.previousStep, animation: .default)
-                }) {
-                    HStack {
-                        Image(systemName: "arrow.left")
-                        Text("Back")
-                    }
-                    .foregroundColor(.blue)
-                }
-
-                Spacer()
-
-                Button(action: {
-                    store.send(.completeOnboarding { success in
-                        if !success {
-                            // Error handled by reducer
-                        }
-                    }, animation: .default)
-                }) {
-                    Text("Complete")
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .frame(width: 120)
-                        .padding()
-                }
-                .background(store.isLoading ? Color.gray : Color.blue)
-                .cornerRadius(12)
-                .disabled(store.isLoading)
+            Button(action: {
+                store.send(.nextStep, animation: .default)
+            }) {
+                Text("Continue")
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .cornerRadius(12)
             }
-            .padding(.horizontal)
+
+            Button(action: {
+                store.send(.previousStep, animation: .default)
+            }) {
+                HStack {
+                    Image(systemName: "arrow.left")
+                    Text("Back")
+                }
+                .foregroundColor(.blue)
+            }
+
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private func checkInIntervalView() -> some View {
+        VStack(spacing: 24) {
+            Text("How often should you check in?")
+                .font(.title2)
+                .fontWeight(.bold)
+                
+            Text("Choose how long before your contacts are alerted")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+
+            VStack(spacing: 16) {
+                Picker("Unit", selection: $store.intervalPickerUnit) {
+                    Text("Days").tag("days")
+                    Text("Hours").tag("hours")
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .onChange(of: store.intervalPickerUnit) { oldUnit, newUnit in
+                    store.send(.updateIntervalPickerUnit(newUnit))
+                }
+
+                Picker("Value", selection: $store.intervalPickerValue) {
+                    if store.isDayUnit {
+                        ForEach(store.dayValues, id: \.self) { day in
+                            Text("\(day) day\(day > 1 ? "s" : "")").tag(day)
+                        }
+                    } else {
+                        ForEach(store.hourValues, id: \.self) { hour in
+                            Text("\(hour) hours").tag(hour)
+                        }
+                    }
+                }
+                .pickerStyle(WheelPickerStyle())
+                .frame(height: 120)
+                .clipped()
+                .onChange(of: store.intervalPickerValue) { _, newValue in
+                    store.send(.updateIntervalPickerValue(newValue))
+                }
+            }
+            .padding()
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .cornerRadius(12)
+
+            Button(action: {
+                store.send(.nextStep, animation: .default)
+            }) {
+                Text("Continue")
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .cornerRadius(12)
+            }
+
+            Button(action: {
+                store.send(.previousStep, animation: .default)
+            }) {
+                HStack {
+                    Image(systemName: "arrow.left")
+                    Text("Back")
+                }
+                .foregroundColor(.blue)
+            }
+
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private func reminderSettingsView() -> some View {
+        VStack(spacing: 24) {
+            Text("When should we remind you?")
+                .font(.title2)
+                .fontWeight(.bold)
+                
+            Text("Get notified before your check-in expires")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+
+            VStack(spacing: 16) {
+                Text("Check-in notification")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+
+                Picker("Check-in notification", selection: Binding<Int>(
+                    get: { store.reminderMinutesBefore },
+                    set: { store.send(.setReminderMinutes($0)) }
+                )) {
+                    Text("Disabled").tag(0)
+                    Text("30 mins").tag(30)
+                    Text("2 hours").tag(120)
+                }
+                .pickerStyle(.segmented)
+            }
+            .padding()
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .cornerRadius(12)
+
+            Button(action: {
+                store.send(.nextStep, animation: .default)
+            }) {
+                Text("Continue")
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .cornerRadius(12)
+            }
+
+            Button(action: {
+                store.send(.previousStep, animation: .default)
+            }) {
+                HStack {
+                    Image(systemName: "arrow.left")
+                    Text("Back")
+                }
+                .foregroundColor(.blue)
+            }
+
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private func biometricAuthView() -> some View {
+        VStack(spacing: 24) {
+            Text("Secure your account")
+                .font(.title2)
+                .fontWeight(.bold)
+                
+            Text("Use Face ID to secure check-in and alerts")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+
+            VStack(spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Biometric Authentication")
+                            .font(.body)
+                            .foregroundColor(.primary)
+                        Text("Enable Face ID for secure actions")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { store.biometricAuthEnabled },
+                        set: { store.send(.setBiometricAuth($0)) }
+                    ))
+                    .labelsHidden()
+                }
+                .padding()
+                .background(Color(UIColor.secondarySystemGroupedBackground))
+                .cornerRadius(12)
+            }
+
+            Button(action: {
+                store.send(.completeOnboarding, animation: .default)
+            }) {
+                Text("Complete")
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(store.isLoading ? Color.gray : Color.blue)
+                    .cornerRadius(12)
+            }
+            .disabled(store.isLoading)
+
+            Button(action: {
+                store.send(.previousStep, animation: .default)
+            }) {
+                HStack {
+                    Image(systemName: "arrow.left")
+                    Text("Back")
+                }
+                .foregroundColor(.blue)
+            }
 
             Spacer()
         }

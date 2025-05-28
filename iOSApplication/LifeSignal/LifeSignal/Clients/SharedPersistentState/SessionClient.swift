@@ -477,8 +477,11 @@ struct SessionClient {
     // MARK: - Authentication State
     
     
+    /// Starts the onboarding process.
+    var startOnboarding: @Sendable () async throws -> Void = { }
+    
     /// Updates user profile during onboarding and marks onboarding as completed.
-    var completeUserProfile: @Sendable (String, String, String) async throws -> Void = { _, _, _ in }
+    var completeUserProfile: @Sendable (String, String, String, TimeInterval, Int, Bool) async throws -> Void = { _, _, _, _, _, _ in }
     
     /// Marks onboarding as completed for the current user.
     var completeOnboarding: @Sendable () async throws -> Void = { }
@@ -731,16 +734,33 @@ extension SessionClient: DependencyKey {
         
         // Authentication state
         
-        completeUserProfile: { firstName, lastName, emergencyNote in
+        startOnboarding: {
+            // SessionClient handles setting onboarding state
+            @Shared(.needsOnboarding) var needsOnboarding
+            needsOnboarding = true
+        },
+        
+        completeUserProfile: { firstName, lastName, emergencyNote, checkInInterval, reminderMinutes, biometricAuthEnabled in
             @Shared(.currentUser) var currentUser
             guard var user = currentUser else {
                 throw SessionClientError.userLoadFailed
             }
             
-            // Update user with onboarding data
+            // Update user with all onboarding data
             let fullName = "\(firstName) \(lastName)"
             user.name = fullName
             user.emergencyNote = emergencyNote
+            user.checkInInterval = checkInInterval
+            
+            // Convert reminderMinutes to NotificationPreference
+            let notificationPreference: NotificationPreference = switch reminderMinutes {
+            case 0: .disabled
+            case 30: .thirtyMinutes
+            case 120: .twoHours
+            default: .thirtyMinutes
+            }
+            user.notificationPreference = notificationPreference
+            user.biometricAuthEnabled = biometricAuthEnabled
             user.lastModified = Date()
             
             // Update user via UserClient - it handles shared state updates
