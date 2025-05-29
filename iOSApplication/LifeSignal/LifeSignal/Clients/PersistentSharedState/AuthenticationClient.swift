@@ -435,28 +435,7 @@ struct AuthenticationClient: ClientContext {
     var changePhoneNumber: @Sendable (String, String) async throws -> Void = { _, _ in throw AuthenticationClientError.authenticationFailed }
 }
 
-// MARK: - StateOwner Implementation
-
-extension AuthenticationClient {
-    nonisolated(unsafe) static var mutationLog: LockIsolated<[StateMutation]> = StateOwnershipHelpers.createMutationLog()
-    
-    /// Performs tracked mutation on authentication state
-    static func updateAuthState(_ operation: String, _ mutation: @escaping (inout AuthClientState) -> Void) {
-        logMutation(operation, stateType: "AuthClientState")
-        
-        @Shared(.authenticationInternalState) var authState: AuthClientState
-        $authState.withLock { state in
-            mutation(&state)
-        }
-    }
-    
-    /// Convenience method for updating auth state
-    static func updateAuthState(_ newState: AuthenticationState) {
-        updateAuthState("updateAuthState") { state in
-            state.authState = newState
-        }
-    }
-}
+// MARK: - ClientContext Implementation (TCA-compliant)
 
 extension AuthenticationClient: DependencyKey {
     static let liveValue: AuthenticationClient = AuthenticationClient()
@@ -471,7 +450,10 @@ extension AuthenticationClient: DependencyKey {
         },
         
         verifyPhoneCode: { verificationID, verificationCode in
-            Self.updateAuthState(.authenticating)
+            @Shared(.authenticationInternalState) var authState
+            $authState.withLock { state in
+                state.authState = .authenticating
+            }
             
             do {
                 // Verify phone code via auth service
@@ -481,18 +463,30 @@ extension AuthenticationClient: DependencyKey {
                 )
                 
                 // Update authentication state
-                Self.updateAuthenticationState(from: authResult)
-                Self.updateAuthState(.authenticated)
+                $authState.withLock { state in
+                    state.authenticationToken = authResult.idToken
+                    state.internalAuthUID = authResult.user.uid
+                    state.internalIdToken = authResult.idToken
+                    state.internalRefreshToken = authResult.refreshToken
+                    state.internalTokenExpiry = authResult.expiresAt
+                    state.internalAuthUser = authResult.user
+                    state.authState = .authenticated
+                }
                 
             } catch {
-                Self.updateAuthState(.error)
+                $authState.withLock { state in
+                    state.authState = .error
+                }
                 throw error
             }
         },
         
         // Authentication creation
         createAuthenticationSession: { verificationID, verificationCode in
-            Self.updateAuthState(.authenticating)
+            @Shared(.authenticationInternalState) var authState
+            $authState.withLock { state in
+                state.authState = .authenticating
+            }
             
             do {
                 // Create authentication session via auth service
@@ -502,11 +496,20 @@ extension AuthenticationClient: DependencyKey {
                 )
                 
                 // Update authentication state
-                Self.updateAuthenticationState(from: authResult)
-                Self.updateAuthState(.authenticated)
+                $authState.withLock { state in
+                    state.authenticationToken = authResult.idToken
+                    state.internalAuthUID = authResult.user.uid
+                    state.internalIdToken = authResult.idToken
+                    state.internalRefreshToken = authResult.refreshToken
+                    state.internalTokenExpiry = authResult.expiresAt
+                    state.internalAuthUser = authResult.user
+                    state.authState = .authenticated
+                }
                 
             } catch {
-                Self.updateAuthState(.error)
+                $authState.withLock { state in
+                    state.authState = .error
+                }
                 throw error
             }
         },
@@ -524,11 +527,26 @@ extension AuthenticationClient: DependencyKey {
                 let authResult = try await MockAuthService().refreshToken()
                 
                 // Update authentication state
-                Self.updateAuthenticationState(from: authResult)
+                $authState.withLock { state in
+                    state.authenticationToken = authResult.idToken
+                    state.internalAuthUID = authResult.user.uid
+                    state.internalIdToken = authResult.idToken
+                    state.internalRefreshToken = authResult.refreshToken
+                    state.internalTokenExpiry = authResult.expiresAt
+                    state.internalAuthUser = authResult.user
+                }
                 
             } catch {
                 // If refresh fails, clear auth state
-                Self.clearAuthenticationState()
+                $authState.withLock { state in
+                    state.authenticationToken = nil
+                    state.authState = .unauthenticated
+                    state.internalAuthUID = nil
+                    state.internalIdToken = nil
+                    state.internalRefreshToken = nil
+                    state.internalTokenExpiry = nil
+                    state.internalAuthUser = nil
+                }
                 throw AuthenticationClientError.tokenRefreshFailed
             }
         },
@@ -541,7 +559,14 @@ extension AuthenticationClient: DependencyKey {
             if forceRefresh || (currentState.internalTokenExpiry != nil && Date() >= currentState.internalTokenExpiry!) {
                 // Refresh token
                 let authResult = try await MockAuthService().refreshToken()
-                Self.updateAuthenticationState(from: authResult)
+                $authState.withLock { state in
+                    state.authenticationToken = authResult.idToken
+                    state.internalAuthUID = authResult.user.uid
+                    state.internalIdToken = authResult.idToken
+                    state.internalRefreshToken = authResult.refreshToken
+                    state.internalTokenExpiry = authResult.expiresAt
+                    state.internalAuthUser = authResult.user
+                }
                 return authResult.idToken
             }
             
@@ -577,6 +602,8 @@ extension AuthenticationClient: DependencyKey {
         
         // Sign out
         signOut: {
+            @Shared(.authenticationInternalState) var authState
+            
             do {
                 // Sign out from auth service
                 try await MockAuthService().signOut()
@@ -585,10 +612,20 @@ extension AuthenticationClient: DependencyKey {
             }
             
             // Clear authentication state
-            Self.clearAuthenticationState()
+            $authState.withLock { state in
+                state.authenticationToken = nil
+                state.authState = .unauthenticated
+                state.internalAuthUID = nil
+                state.internalIdToken = nil
+                state.internalRefreshToken = nil
+                state.internalTokenExpiry = nil
+                state.internalAuthUser = nil
+            }
         },
         
         deleteAccount: {
+            @Shared(.authenticationInternalState) var authState
+            
             do {
                 // Delete account via auth service
                 try await MockAuthService().deleteAccount()
@@ -597,11 +634,28 @@ extension AuthenticationClient: DependencyKey {
             }
             
             // Clear authentication state
-            Self.clearAuthenticationState()
+            $authState.withLock { state in
+                state.authenticationToken = nil
+                state.authState = .unauthenticated
+                state.internalAuthUID = nil
+                state.internalIdToken = nil
+                state.internalRefreshToken = nil
+                state.internalTokenExpiry = nil
+                state.internalAuthUser = nil
+            }
         },
         
         clearAuthenticationState: {
-            Self.clearAuthenticationState()
+            @Shared(.authenticationInternalState) var authState
+            $authState.withLock { state in
+                state.authenticationToken = nil
+                state.authState = .unauthenticated
+                state.internalAuthUID = nil
+                state.internalIdToken = nil
+                state.internalRefreshToken = nil
+                state.internalTokenExpiry = nil
+                state.internalAuthUser = nil
+            }
         },
         
         // Phone number management
@@ -628,7 +682,19 @@ extension AuthenticationClient: DependencyKey {
             }
             
             // Extract new phone number from verification ID (mock implementation)
-            let newPhoneNumber = Self.extractPhoneNumberFromVerificationID(verificationID)
+            func extractPhoneNumberFromVerificationID(_ verificationID: String) -> String {
+                // Mock implementation: extract phone number from verification ID
+                let components = verificationID.components(separatedBy: "_")
+                if components.count >= 6 && components[0] == "mock" && components[1] == "phone" {
+                    // Format: "mock_phone_change_verification_id_{phoneNumber}_{uuid}"
+                    let phoneNumber = components[5]
+                    return phoneNumber
+                }
+                // Fallback for any malformed verification IDs
+                return "+1234567890"
+            }
+            
+            let newPhoneNumber = extractPhoneNumberFromVerificationID(verificationID)
             
             // Update auth user with new phone number
             if let currentAuthUser = authState.internalAuthUser {
@@ -639,68 +705,16 @@ extension AuthenticationClient: DependencyKey {
                     creationDate: currentAuthUser.creationDate,
                     lastSignInDate: Date()
                 )
-                Self.updateAuthUser(updatedAuthUser)
+                $authState.withLock { state in
+                    state.internalAuthUID = updatedAuthUser.uid
+                    state.internalAuthUser = updatedAuthUser
+                }
             }
         }
     )
 }
 
-// MARK: - AuthenticationClient Helper Methods
-
-// NOTE: updateAuthState method moved to StateOwner implementation above
-
-extension AuthenticationClient {
-    /// Updates authentication state from auth result using single structure
-    static func updateAuthenticationState(from authResult: AuthResult) {
-        @Shared(.authenticationInternalState) var authState
-        $authState.withLock { state in
-            state.authenticationToken = authResult.idToken
-            state.internalAuthUID = authResult.user.uid
-            state.internalIdToken = authResult.idToken
-            state.internalRefreshToken = authResult.refreshToken
-            state.internalTokenExpiry = authResult.expiresAt
-            state.internalAuthUser = authResult.user
-        }
-    }
-    
-    /// Updates auth user information using enhanced context-aware mutation
-    static func updateAuthUser(_ authUser: InternalAuthUser) {
-        @Shared(.authenticationInternalState) var authState
-        
-        $authState.withLock { state in
-            state.internalAuthUID = authUser.uid
-            state.internalAuthUser = authUser
-        }
-    }
-    
-    /// Clears all authentication state using enhanced context-aware mutation
-    static func clearAuthenticationState() {
-        @Shared(.authenticationInternalState) var authState
-        
-        $authState.withLock { state in
-            state.authenticationToken = nil
-            state.authState = .unauthenticated
-            state.internalAuthUID = nil
-            state.internalIdToken = nil
-            state.internalRefreshToken = nil
-            state.internalTokenExpiry = nil
-            state.internalAuthUser = nil
-        }
-    }
-    
-    /// Extracts phone number from mock verification ID 
-    private static func extractPhoneNumberFromVerificationID(_ verificationID: String) -> String {
-        // Mock implementation: extract phone number from verification ID
-        let components = verificationID.components(separatedBy: "_")
-        if components.count >= 6 && components[0] == "mock" && components[1] == "phone" {
-            // Format: "mock_phone_change_verification_id_{phoneNumber}_{uuid}"
-            let phoneNumber = components[5]
-            return phoneNumber
-        }
-        // Fallback for any malformed verification IDs
-        return "+1234567890"
-    }
-}
+// MARK: - TCA Dependency Registration
 
 extension DependencyValues {
     var authenticationClient: AuthenticationClient {

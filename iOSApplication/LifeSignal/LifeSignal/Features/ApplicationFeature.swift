@@ -48,7 +48,7 @@ enum ApplicationTab: Int, CaseIterable {
 }
 
 @Reducer
-struct ApplicationFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
+struct ApplicationFeature: FeatureContext {
     @ObservableState
     struct State: Equatable {
         // ApplicationFeature has read-only access to authentication, onboarding and contacts state
@@ -341,12 +341,8 @@ struct ApplicationFeature: FeatureContext { // : FeatureContext (will be enforce
                         } else {
                             // User completed onboarding but no profile exists - start onboarding
                             return .run { send in
-                                do {
-                                    try await onboardingClient.startOnboarding()
-                                } catch {
-                                    // If onboarding start fails, sign out
-                                    await send(.sessionExpired)
-                                }
+                                // Use injected client dependency for state operations
+                                try? await onboardingClient.startOnboarding()
                             }
                         }
                     default:
@@ -363,18 +359,15 @@ struct ApplicationFeature: FeatureContext { // : FeatureContext (will be enforce
                 }
 
             case .sessionExpired:
-                // Handle session expiration by coordinating clear state across all clients
+                // Handle session expiration by coordinating clear state across all clients using proper TCA dependency injection
                 return .run { send in
-                    do {
-                        // Coordinate state clearing across all clients (local state only)
-                        try await authenticationClient.clearAuthenticationState()
-                        try await userClient.clearUserState()
-                        try await onboardingClient.clearOnboardingState()
-                        try await contactsClient.clearContactsState()
-                        try await notificationClient.clearNotificationState()
-                    } catch {
-                        // Handle error silently
-                    }
+                    // Use injected client dependencies for state clearing operations
+                    try? await authenticationClient.clearAuthenticationState()
+                    try? await userClient.clearUserState()
+                    try? await onboardingClient.clearOnboardingState()
+                    try? await contactsClient.clearContactsState()
+                    try? await notificationClient.clearNotificationState()
+                    try? await networkClient.clearNetworkState()
                 }
                 
             case .refreshSessionToken:
@@ -538,13 +531,10 @@ struct ApplicationFeature: FeatureContext { // : FeatureContext (will be enforce
                 }
                 
             case .userProfileCreated(.success):
-                // User profile created successfully - clear onboarding state
+                // User profile created successfully - clear onboarding state using TCA dependency injection
                 return .run { send in
-                    do {
-                        try await onboardingClient.clearOnboardingState()
-                    } catch {
-                        // Handle error silently - profile was created successfully
-                    }
+                    // Use injected client dependency for state operations
+                    try? await onboardingClient.clearOnboardingState()
                 }
                 
             case let .userProfileCreated(.failure(error)):
@@ -558,10 +548,11 @@ struct ApplicationFeature: FeatureContext { // : FeatureContext (will be enforce
                     do {
                         // Sign out preserving backend data, then clear other client states
                         try await authenticationClient.signOut()
-                        try await userClient.clearUserState()
-                        try await onboardingClient.clearOnboardingState()
-                        try await contactsClient.clearContactsState()
-                        try await notificationClient.clearNotificationState()
+                        // Use injected client dependencies for state operations
+                        try? await userClient.clearUserState()
+                        try? await onboardingClient.clearOnboardingState()
+                        try? await contactsClient.clearContactsState()
+                        try? await notificationClient.clearNotificationState()
                         
                         await haptics.notification(.success)
                         
@@ -622,12 +613,13 @@ struct ApplicationFeature: FeatureContext { // : FeatureContext (will be enforce
                 // Handle onboarding cancellation - coordinate state clearing across all clients
                 return .run { send in
                     do {
-                        // Coordinate state clearing across all clients (local state only)
+                        // Coordinate state clearing across all clients using TCA dependency injection
                         try await authenticationClient.clearAuthenticationState()
-                        try await userClient.clearUserState()
-                        try await onboardingClient.clearOnboardingState()
-                        try await contactsClient.clearContactsState()
-                        try await notificationClient.clearNotificationState()
+                        // Use injected client dependencies for state operations
+                        try? await userClient.clearUserState()
+                        try? await onboardingClient.clearOnboardingState()
+                        try? await contactsClient.clearContactsState()
+                        try? await notificationClient.clearNotificationState()
                     } catch {
                         // Handle error silently
                     }

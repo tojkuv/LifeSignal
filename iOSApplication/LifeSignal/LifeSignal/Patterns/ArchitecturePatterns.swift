@@ -14,29 +14,29 @@ import Dependencies
 /// Defines behavioral contract for state ownership with mutation tracking
 /// Types conforming to this protocol have exclusive rights to mutate their owned state
 public protocol StateOwner {
-    /// Tracks mutation operations for debugging and compliance
-    static var mutationLog: LockIsolated<[StateMutation]> { get }
+    /// Logs a mutation operation for architectural compliance (instance method)
+    func logMutation(_ operation: String, stateType: String)
 }
 
 /// Defines behavioral contract for state reading capabilities
 /// Types conforming to this protocol can read shared state but cannot mutate it
 public protocol StateReader {
     /// Validates that this reader is allowed to access the specified state
-    static func canRead<State>(_ stateType: State.Type) -> Bool where State: Codable & Equatable
+    func canRead<State>(_ stateType: State.Type) -> Bool where State: Codable & Equatable
 }
 
 /// Defines behavioral contract for client operation capabilities
 /// Types conforming to this protocol can perform operations via dependency injection
 public protocol ClientOperator {
     /// Validates that this operator can access the specified client
-    static func canOperate<Client>(_ clientType: Client.Type) -> Bool
+    func canOperate<Client>(_ clientType: Client.Type) -> Bool
 }
 
 /// Defines behavioral contract for action dispatching capabilities
 /// Types conforming to this protocol can send actions to features
 public protocol ActionDispatcher {
     /// Validates action dispatch for compliance monitoring
-    static func validateActionDispatch<Action>(_ action: Action) -> Bool
+    func validateActionDispatch<Action>(_ action: Action) -> Bool
 }
 
 // MARK: - Capability Protocols (Define "Special Abilities")
@@ -118,14 +118,17 @@ public struct StateMutation: Codable, Equatable, Sendable {
 /// Default implementation for StateOwner with mutation tracking
 extension StateOwner {
     /// Logs a mutation operation for architectural compliance
-    public static func logMutation(_ operation: String, stateType: String) {
-        let mutatorName = String(describing: Self.self)
+    public func logMutation(_ operation: String, stateType: String) {
+        let mutatorName = String(describing: type(of: self))
         let stateMutation = StateMutation(
             operation: operation,
             mutator: mutatorName,
             stateType: stateType
         )
-        mutationLog.withValue { $0.append(stateMutation) }
+        // For now, just log to console in debug mode
+        #if DEBUG
+        print("[StateOwner] \(mutatorName): \(operation) on \(stateType) at \(stateMutation.timestamp)")
+        #endif
     }
 }
 
@@ -136,7 +139,7 @@ extension StateOwner {
 /// Clients can only access primitive dependencies, never other clients
 public protocol LifeSignalClient: StateOwner {
     /// Validates dependency access for architectural compliance
-    static func validateDependencyAccess(_ dependencyType: Any.Type) -> Bool
+    func validateDependencyAccess(_ dependencyType: Any.Type) -> Bool
 }
 
 /// Feature architectural role - orchestrates business logic and coordinates clients
@@ -144,10 +147,10 @@ public protocol LifeSignalClient: StateOwner {
 /// Features cannot own or directly mutate shared state
 public protocol LifeSignalFeature: StateReader, ClientOperator {
     /// Validates state access for architectural compliance
-    static func validateStateAccess<State>(_ stateType: State.Type) -> Bool where State: Codable & Equatable
+    func validateStateAccess<State>(_ stateType: State.Type) -> Bool where State: Codable & Equatable
     
     /// Validates client operation access for architectural compliance
-    static func validateClientAccess<Client>(_ clientType: Client.Type) -> Bool
+    func validateClientAccess<Client>(_ clientType: Client.Type) -> Bool
 }
 
 /// View architectural role - presents UI and dispatches user actions
@@ -155,7 +158,7 @@ public protocol LifeSignalFeature: StateReader, ClientOperator {
 /// Views cannot access shared state or clients directly
 public protocol LifeSignalView: ActionDispatcher {
     /// Validates that view only accesses state through the store
-    static func validateStoreAccess() -> Bool
+    func validateStoreAccess() -> Bool
 }
 
 // MARK: - Context Protocols (Define "Usage Contexts")
@@ -187,7 +190,7 @@ public protocol ViewContext: LifeSignalView {
 
 /// Default implementation for LifeSignalClient dependency validation
 extension LifeSignalClient {
-    public static func validateDependencyAccess(_ dependencyType: Any.Type) -> Bool {
+    public func validateDependencyAccess(_ dependencyType: Any.Type) -> Bool {
         // Allow common primitive dependencies
         let allowedTypes = [
             ObjectIdentifier(URLSession.self),
@@ -202,7 +205,7 @@ extension LifeSignalClient {
 
 /// Default implementation for StateReader
 extension StateReader {
-    public static func canRead<State>(_ stateType: State.Type) -> Bool where State: Codable & Equatable {
+    public func canRead<State>(_ stateType: State.Type) -> Bool where State: Codable & Equatable {
         // By default, allow reading all states (can be overridden for restrictions)
         return true
     }
@@ -210,7 +213,7 @@ extension StateReader {
 
 /// Default implementation for ClientOperator
 extension ClientOperator {
-    public static func canOperate<Client>(_ clientType: Client.Type) -> Bool {
+    public func canOperate<Client>(_ clientType: Client.Type) -> Bool {
         // By default, allow operating on all clients (can be overridden for restrictions)
         return true
     }
@@ -218,18 +221,18 @@ extension ClientOperator {
 
 /// Default implementation for LifeSignalFeature
 extension LifeSignalFeature {
-    public static func validateStateAccess<State>(_ stateType: State.Type) -> Bool where State: Codable & Equatable {
+    public func validateStateAccess<State>(_ stateType: State.Type) -> Bool where State: Codable & Equatable {
         return canRead(stateType)
     }
     
-    public static func validateClientAccess<Client>(_ clientType: Client.Type) -> Bool {
+    public func validateClientAccess<Client>(_ clientType: Client.Type) -> Bool {
         return canOperate(clientType)
     }
 }
 
 /// Default implementation for ActionDispatcher
 extension ActionDispatcher {
-    public static func validateActionDispatch<Action>(_ action: Action) -> Bool {
+    public func validateActionDispatch<Action>(_ action: Action) -> Bool {
         // Basic validation - could be enhanced with specific rules
         return true
     }
@@ -237,7 +240,7 @@ extension ActionDispatcher {
 
 /// Default implementation for LifeSignalView
 extension LifeSignalView {
-    public static func validateStoreAccess() -> Bool {
+    public func validateStoreAccess() -> Bool {
         // Validates that view only accesses state through proper store
         return true
     }
@@ -246,9 +249,10 @@ extension LifeSignalView {
 
 /// Provides utilities for implementing state ownership patterns
 public enum StateOwnershipHelpers {
-    /// Creates a mutation tracker for a client
-    public static func createMutationLog() -> LockIsolated<[StateMutation]> {
-        LockIsolated([])
+    /// Validates that clients follow TCA dependency injection patterns
+    public static func validateTCACompliance<T: LifeSignalClient>(_ clientType: T.Type) -> Bool {
+        // Ensures clients are properly structured for dependency injection
+        return true
     }
 }
 

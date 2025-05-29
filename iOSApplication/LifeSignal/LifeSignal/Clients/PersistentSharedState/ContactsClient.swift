@@ -505,52 +505,7 @@ struct ContactsClient: ClientContext {
     var clearContactsState: @Sendable () async throws -> Void = { }
 }
 
-// MARK: - StateOwner Implementation
-
-extension ContactsClient {
-    nonisolated(unsafe) static var mutationLog: LockIsolated<[StateMutation]> = StateOwnershipHelpers.createMutationLog()
-    
-    /// Performs tracked mutation on contacts state
-    static func updateContactsState(_ operation: String, _ mutation: @escaping (inout ContactsClientState) -> Void) {
-        logMutation(operation, stateType: "ContactsClientState")
-        
-        @Shared(.contactsInternalState) var contactsState: ContactsClientState
-        $contactsState.withLock { state in
-            mutation(&state)
-        }
-    }
-    
-    /// Convenience method for updating contacts list
-    static func updateContacts(_ contacts: [Contact]) {
-        updateContactsState("updateContacts") { state in
-            state.contacts = contacts
-            state.lastSyncTimestamp = Date()
-        }
-    }
-    
-    /// Convenience method for adding a single contact
-    static func addContact(_ contact: Contact) {
-        updateContactsState("addContact") { state in
-            state.contacts.append(contact)
-            state.lastSyncTimestamp = Date()
-        }
-    }
-    
-    /// Convenience method for removing a contact
-    static func removeContact(withId contactId: UUID) {
-        updateContactsState("removeContact") { state in
-            state.contacts.removeAll { $0.id == contactId }
-            state.lastSyncTimestamp = Date()
-        }
-    }
-    
-    /// Convenience method for updating loading state
-    static func setLoadingState(_ isLoading: Bool) {
-        updateContactsState("setLoadingState") { state in
-            state.isLoading = isLoading
-        }
-    }
-}
+// MARK: - TCA Dependency Registration
 
 extension ContactsClient: DependencyKey {
     static let liveValue = ContactsClient()

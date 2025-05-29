@@ -1530,52 +1530,7 @@ struct NotificationClient: ClientContext {
     
 }
 
-// MARK: - StateOwner Implementation
-
-extension NotificationClient {
-    nonisolated(unsafe) static var mutationLog: LockIsolated<[StateMutation]> = StateOwnershipHelpers.createMutationLog()
-    
-    /// Performs tracked mutation on notification state
-    static func updateNotificationState(_ operation: String, _ mutation: @escaping (inout NotificationClientState) -> Void) {
-        logMutation(operation, stateType: "NotificationClientState")
-        
-        @Shared(.notificationInternalState) var notificationState: NotificationClientState
-        $notificationState.withLock { state in
-            mutation(&state)
-        }
-    }
-    
-    /// Convenience method for adding a notification
-    static func addNotification(_ notification: NotificationItem) {
-        updateNotificationState("addNotification") { state in
-            state.notifications.append(notification)
-            state.lastSyncTimestamp = Date()
-        }
-    }
-    
-    /// Convenience method for marking notification as read
-    static func markNotificationAsRead(withId notificationId: UUID) {
-        updateNotificationState("markAsRead") { state in
-            if let index = state.notifications.firstIndex(where: { $0.id == notificationId }) {
-                state.notifications[index].isRead = true
-            }
-        }
-    }
-    
-    /// Convenience method for updating permission status
-    static func updatePermissionStatus(_ status: UNAuthorizationStatus) {
-        updateNotificationState("updatePermissionStatus") { state in
-            state.permissionStatus = status
-        }
-    }
-    
-    /// Convenience method for setting loading state
-    static func setLoadingState(_ isLoading: Bool) {
-        updateNotificationState("setLoadingState") { state in
-            state.isLoading = isLoading
-        }
-    }
-}
+// MARK: - TCA Dependency Registration
 
 extension NotificationClient: DependencyKey {
     static let liveValue = NotificationClient()

@@ -838,73 +838,7 @@ struct UserClient: ClientContext {
     var regenerateImagesIfNeeded: @Sendable () async -> Void = { }
 }
 
-// MARK: - StateOwner Implementation
-
-extension UserClient {
-    nonisolated(unsafe) static var mutationLog: LockIsolated<[StateMutation]> = StateOwnershipHelpers.createMutationLog()
-    
-    /// Performs tracked mutation on user state
-    static func updateUserState(_ operation: String, _ mutation: @escaping (inout UserClientState) -> Void) {
-        logMutation(operation, stateType: "UserClientState")
-        
-        @Shared(.userInternalState) var userState: UserClientState
-        $userState.withLock { state in
-            mutation(&state)
-        }
-    }
-    
-    /// Convenience method for updating current user
-    static func updateCurrentUser(_ user: User?) {
-        updateUserState("updateCurrentUser") { state in
-            state.currentUser = user
-            state.lastSyncTimestamp = Date()
-        }
-    }
-    
-    /// Convenience method for updating user profile
-    static func updateUserProfile(name: String? = nil, phoneNumber: String? = nil, avatarData: Data? = nil) {
-        updateUserState("updateUserProfile") { state in
-            if let name = name {
-                state.currentUser?.name = name
-            }
-            if let phoneNumber = phoneNumber {
-                state.currentUser?.phoneNumber = phoneNumber
-            }
-            if let avatarData = avatarData {
-                let metadata = ImageMetadata(avatarURL: state.currentUser?.avatarURL)
-                state.avatarImage = AvatarImageWithMetadata(image: avatarData, metadata: metadata)
-            }
-            state.lastSyncTimestamp = Date()
-        }
-    }
-    
-    /// Convenience method for updating check-in status
-    static func updateCheckInStatus(_ timestamp: Date) {
-        updateUserState("updateCheckInStatus") { state in
-            state.currentUser?.lastCheckedIn = timestamp
-            state.lastSyncTimestamp = Date()
-        }
-    }
-    
-    /// Convenience method for updating loading state
-    static func setLoadingState(_ isLoading: Bool) {
-        updateUserState("setLoadingState") { state in
-            state.isLoading = isLoading
-        }
-    }
-    
-    /// Convenience method for clearing user state
-    static func clearUserState() {
-        updateUserState("clearUserState") { state in
-            state.currentUser = nil
-            state.isLoading = false
-            state.lastSyncTimestamp = nil
-            state.qrCodeImage = nil
-            state.shareableQRCodeImage = nil
-            state.avatarImage = nil
-        }
-    }
-}
+// MARK: - TCA Dependency Registration
 
 extension UserClient: DependencyKey {
     static let liveValue: UserClient = UserClient()
