@@ -1103,8 +1103,7 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate, @u
 
 // MARK: - Notification Shared State
 
-// 1. Mutable internal state (private to Client)
-struct NotificationState: Equatable, Codable {
+struct NotificationClientState: Equatable, Codable {
     var notifications: [NotificationItem]
     var unreadNotificationCount: Int
     var pendingNotificationActions: [PendingNotificationAction]
@@ -1126,69 +1125,11 @@ struct NotificationState: Equatable, Codable {
     }
 }
 
-// 2. Read-only wrapper (prevents direct mutation)
-struct ReadOnlyNotificationState: Equatable, Codable {
-    private let _state: NotificationState
-    
-    // 🔑 Only Client can access this init (same file = fileprivate access)
-    fileprivate init(_ state: NotificationState) {
-        self._state = state
-    }
-    
-    // MARK: - Codable Implementation (Preserves Ownership Pattern)
-    
-    private enum CodingKeys: String, CodingKey {
-        case state = "_state"
-    }
-    
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let state = try container.decode(NotificationState.self, forKey: .state)
-        self.init(state)  // Uses fileprivate init - ownership preserved ✅
-    }
-    
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(_state, forKey: .state)
-    }
-    
-    // Read-only accessors
-    var notifications: [NotificationItem] { _state.notifications }
-    var unreadNotificationCount: Int { _state.unreadNotificationCount }
-    var pendingNotificationActions: [PendingNotificationAction] { _state.pendingNotificationActions }
-    var isListening: Bool { _state.isListening }
-    var lastSyncTimestamp: Date? { _state.lastSyncTimestamp }
-}
+// MARK: - Clean Shared Key Implementation (FileStorage)
 
-// MARK: - RawRepresentable Conformance for AppStorage (Preserves Ownership)
-
-extension ReadOnlyNotificationState: RawRepresentable {
-    typealias RawValue = String
-    
-    var rawValue: String {
-        do {
-            let data = try JSONEncoder().encode(self)
-            return String(data: data, encoding: .utf8) ?? ""
-        } catch {
-            print("Failed to encode ReadOnlyNotificationState: \(error)")
-            return ""
-        }
-    }
-    
-    init?(rawValue: String) {
-        guard let data = rawValue.data(using: .utf8) else { return nil }
-        do {
-            self = try JSONDecoder().decode(ReadOnlyNotificationState.self, from: data)
-        } catch {
-            print("Failed to decode ReadOnlyNotificationState: \(error)")
-            return nil
-        }
-    }
-}
-
-extension SharedReaderKey where Self == AppStorageKey<ReadOnlyNotificationState>.Default {
-    static var notificationState: Self {
-        Self[.appStorage("notificationState"), default: ReadOnlyNotificationState(NotificationState())]
+extension SharedReaderKey where Self == FileStorageKey<NotificationClientState>.Default {
+    static var notificationInternalState: Self {
+        Self[.fileStorage(.documentsDirectory.appending(component: "notificationInternalState.json")), default: NotificationClientState()]
     }
 }
 
@@ -1458,24 +1399,18 @@ extension NotificationClient {
     }
     
     static func addPendingNotificationAction(_ operation: PendingNotificationAction.NotificationOperation, payload: Data, priority: PendingNotificationAction.ActionPriority) async {
-        @Shared(.notificationState) var sharedNotificationState
         let action = PendingNotificationAction(
             operation: operation,
             payload: payload,
             priority: priority
         )
         
-        // Update shared state using read-only wrapper pattern
-        let currentState = sharedNotificationState
-        let mutableState = NotificationState(
-            notifications: currentState.notifications,
-            unreadNotificationCount: currentState.unreadNotificationCount,
-            pendingNotificationActions: currentState.pendingNotificationActions + [action],
-            isListening: currentState.isListening,
-            lastSyncTimestamp: Date()
-        )
-        $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
-        
+        // Update shared state atomically
+        @Shared(.notificationInternalState) var notificationState
+        $notificationState.withLock { state in
+            state.pendingNotificationActions.append(action)
+            state.lastSyncTimestamp = Date()
+        }
     }
     
     static func executeWithNetworkFallback<T>(
@@ -1483,9 +1418,9 @@ extension NotificationClient {
         pendingOperation: PendingNotificationAction.NotificationOperation? = nil,
         priority: PendingNotificationAction.ActionPriority = .standard
     ) async throws -> T {
-        @Shared(.isNetworkConnected) var isConnected
+        @Shared(.networkInternalState) var networkState
         
-        if isConnected {
+        if networkState.isConnected {
             do {
                 let result = try await networkOperation()
                 // Store successful result locally
@@ -1510,8 +1445,14 @@ extension NotificationClient {
     }
 }
 
+@LifeSignalClient
 @DependencyClient
-struct NotificationClient {
+struct NotificationClient: ClientContext {
+    
+    // MARK: - StateOwner Implementation (will be enforced by macro in Phase 2)
+    // typealias OwnedState = NotificationClientState
+    // static var stateKey: any SharedReaderKey<NotificationClientState> { .notificationInternalState }
+    
     // gRPC service integration (uses adapter for mock)
     var notificationService: NotificationServiceProtocol = MockNotificationServiceGRPCAdapter()
     
@@ -1619,67 +1560,47 @@ extension NotificationClient: DependencyKey {
             // Handle both initial history and real-time updates through single stream
             Task { @MainActor in
                 for try await event in stream {
-                    @Shared(.notificationState) var sharedNotificationState
+                    @Shared(.notificationInternalState) var sharedNotificationState
                     
                     switch event.type {
                     case .initialHistory:
-                        // Bulk load initial state using read-only wrapper pattern
-                        let mutableState = NotificationState(
-                            notifications: event.notifications,
-                            unreadNotificationCount: event.notifications.filter { !$0.isRead }.count,
-                            pendingNotificationActions: sharedNotificationState.pendingNotificationActions,
-                            isListening: true,
-                            lastSyncTimestamp: Date()
-                        )
-                        $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
+                        // Bulk load initial state
+                        $sharedNotificationState.withLock { state in
+                            state.notifications = event.notifications
+                            state.unreadNotificationCount = event.notifications.filter { !$0.isRead }.count
+                            state.isListening = true
+                            state.lastSyncTimestamp = Date()
+                        }
                         
                         print("[STREAM] Loaded \(event.notifications.count) historical notifications")
                         
                     case .realTimeUpdate:
-                        // Single notification updates using read-only wrapper pattern
-                        let currentState = sharedNotificationState
-                        var updatedNotifications = currentState.notifications
-                        var updatedUnreadCount = currentState.unreadNotificationCount
-                        
-                        for notification in event.notifications {
-                            updatedNotifications.insert(notification, at: 0)
-                            if !notification.isRead {
-                                updatedUnreadCount += 1
+                        // Single notification updates
+                        $sharedNotificationState.withLock { state in
+                            for notification in event.notifications {
+                                state.notifications.insert(notification, at: 0)
+                                if !notification.isRead {
+                                    state.unreadNotificationCount += 1
+                                }
                             }
+                            state.lastSyncTimestamp = Date()
                         }
-                        
-                        let mutableState = NotificationState(
-                            notifications: updatedNotifications,
-                            unreadNotificationCount: updatedUnreadCount,
-                            pendingNotificationActions: currentState.pendingNotificationActions,
-                            isListening: currentState.isListening,
-                            lastSyncTimestamp: Date()
-                        )
-                        $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
                         
                         print("[STREAM] Received \(event.notifications.count) real-time notification(s)")
                         
                     case .bulkUpdate:
-                        // Server-initiated bulk changes using read-only wrapper pattern
-                        let currentState = sharedNotificationState
-                        var updatedNotifications = currentState.notifications
-                        
-                        for notification in event.notifications {
-                            if let index = updatedNotifications.firstIndex(where: { $0.id == notification.id }) {
-                                updatedNotifications[index] = notification
-                            } else {
-                                updatedNotifications.insert(notification, at: 0)
+                        // Server-initiated bulk changes
+                        $sharedNotificationState.withLock { state in
+                            for notification in event.notifications {
+                                if let index = state.notifications.firstIndex(where: { $0.id == notification.id }) {
+                                    state.notifications[index] = notification
+                                } else {
+                                    state.notifications.insert(notification, at: 0)
+                                }
                             }
+                            state.unreadNotificationCount = state.notifications.filter { !$0.isRead }.count
+                            state.lastSyncTimestamp = Date()
                         }
-                        
-                        let mutableState = NotificationState(
-                            notifications: updatedNotifications,
-                            unreadNotificationCount: updatedNotifications.filter { !$0.isRead }.count,
-                            pendingNotificationActions: currentState.pendingNotificationActions,
-                            isListening: currentState.isListening,
-                            lastSyncTimestamp: Date()
-                        )
-                        $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
                         
                         print("[STREAM] Applied \(event.notifications.count) bulk update(s)")
                     }
@@ -1692,16 +1613,15 @@ extension NotificationClient: DependencyKey {
         },
         
         cleanup: {
-            // Clear shared state using read-only wrapper pattern
-            @Shared(.notificationState) var sharedNotificationState
-            let mutableState = NotificationState(
-                notifications: [],
-                unreadNotificationCount: 0,
-                pendingNotificationActions: [],
-                isListening: false,
-                lastSyncTimestamp: Date()
-            )
-            $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
+            // Clear shared state
+            @Shared(.notificationInternalState) var notificationState
+            $notificationState.withLock { state in
+                state.notifications = []
+                state.unreadNotificationCount = 0
+                state.pendingNotificationActions = []
+                state.isListening = false
+                state.lastSyncTimestamp = Date()
+            }
             
             
             // Cancel all pending local notifications
@@ -1833,7 +1753,7 @@ extension NotificationClient: DependencyKey {
         
         // Contact notification operations
         notifyContactAdded: { contactId, authToken in
-            @Shared(.userState) var userState
+            @Shared(.userInternalState) var userState
             guard let userId = userState.currentUser?.id else { return }
             
             let service = MockNotificationServiceGRPCAdapter()
@@ -1853,7 +1773,7 @@ extension NotificationClient: DependencyKey {
         },
         
         notifyContactRemoved: { contactId, authToken in
-            @Shared(.userState) var userState
+            @Shared(.userInternalState) var userState
             guard let userId = userState.currentUser?.id else { return }
             
             let service = MockNotificationServiceGRPCAdapter()
@@ -1873,7 +1793,7 @@ extension NotificationClient: DependencyKey {
         },
         
         notifyContactRoleChanged: { contactId, authToken in
-            @Shared(.userState) var userState
+            @Shared(.userInternalState) var userState
             guard let userId = userState.currentUser?.id else { return }
             
             let service = MockNotificationServiceGRPCAdapter()
@@ -1894,7 +1814,7 @@ extension NotificationClient: DependencyKey {
         
         // Ping management operations
         clearAllReceivedPings: { authToken in
-            @Shared(.userState) var userState
+            @Shared(.userInternalState) var userState
             guard let userId = userState.currentUser?.id else { return }
             
             // Single gRPC call to clear all received pings
@@ -1921,7 +1841,7 @@ extension NotificationClient: DependencyKey {
         },
         
         clearSentPing: { contactId, authToken in
-            @Shared(.userState) var userState
+            @Shared(.userInternalState) var userState
             guard let userId = userState.currentUser?.id else { return }
             
             let service = MockNotificationServiceGRPCAdapter()
@@ -1950,7 +1870,7 @@ extension NotificationClient: DependencyKey {
         
         // Ping notification methods (explicit feature-driven)
         sendPingNotification: { notificationType, title, message, contactId, authToken in
-            @Shared(.userState) var userState
+            @Shared(.userInternalState) var userState
             guard let userId = userState.currentUser?.id else { return }
             
             // Send gRPC notification for ping operations and track in user's history
@@ -2036,38 +1956,25 @@ extension NotificationClient: DependencyKey {
             let response = try await service.markAsRead(markRequest)
             
             // Update shared state
-            @Shared(.notificationState) var sharedNotificationState
-            let currentState = sharedNotificationState
-            var updatedNotifications = currentState.notifications
-            
-            if let index = updatedNotifications.firstIndex(where: { $0.id == notificationId }) {
-                var updatedNotification = updatedNotifications[index]
-                updatedNotification.isRead = isRead
-                updatedNotifications[index] = updatedNotification
+            @Shared(.notificationInternalState) var notificationState
+            $notificationState.withLock { state in
+                if let index = state.notifications.firstIndex(where: { $0.id == notificationId }) {
+                    state.notifications[index].isRead = isRead
+                }
+                state.unreadNotificationCount = state.notifications.filter { !$0.isRead }.count
+                state.lastSyncTimestamp = Date()
             }
-            
-            let newUnreadCount = updatedNotifications.filter { !$0.isRead }.count
-            
-            let mutableState = NotificationState(
-                notifications: updatedNotifications,
-                unreadNotificationCount: newUnreadCount,
-                pendingNotificationActions: currentState.pendingNotificationActions,
-                isListening: currentState.isListening,
-                lastSyncTimestamp: Date()
-            )
-            $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
         },
         
         clearNotificationState: {
-            @Shared(.notificationState) var sharedNotificationState
-            let clearedState = NotificationState(
-                notifications: [],
-                unreadNotificationCount: 0,
-                pendingNotificationActions: [],
-                isListening: false,
-                lastSyncTimestamp: nil
-            )
-            $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(clearedState) }
+            @Shared(.notificationInternalState) var notificationState
+            $notificationState.withLock { state in
+                state.notifications = []
+                state.unreadNotificationCount = 0
+                state.pendingNotificationActions = []
+                state.isListening = false
+                state.lastSyncTimestamp = nil
+            }
         }
     )
 }

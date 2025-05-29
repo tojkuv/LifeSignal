@@ -27,11 +27,12 @@ enum NotificationFilterType: String, CaseIterable {
     }
 }
 
+@LifeSignalFeature
 @Reducer
-struct NotificationsHistorySheetFeature {
+struct NotificationsHistorySheetFeature: FeatureContext {
     @ObservableState
     struct State: Equatable {
-        @Shared(.notificationState) var notificationState: ReadOnlyNotificationState
+        @Shared(.notificationInternalState) var notificationState: NotificationClientState
         var selectedFilter: NotificationFilterType = .alerts // Default to Alerts
 
         var filteredNotifications: [NotificationItem] {
@@ -71,8 +72,10 @@ struct NotificationsHistorySheetFeature {
 
 // MARK: - Notifications History Sheet View
 
-struct NotificationsHistorySheetView: View {
+@LifeSignalView
+struct NotificationsHistorySheetView: View, ViewContext {
     @Bindable var store: StoreOf<NotificationsHistorySheetFeature>
+    @Dependency(\.timeFormattingClient) var timeFormattingClient
 
     private var filteredNotifications: [NotificationItem] {
         store.sortedNotifications
@@ -141,7 +144,10 @@ struct NotificationsHistorySheetView: View {
         } else {
             List {
                 ForEach(filteredNotifications, id: \.id) { notification in
-                    NotificationHistoryRow(notification: notification)
+                    NotificationHistoryRow(
+                        notification: notification,
+                        formattedTime: timeFormattingClient.formatLastSeenText(notification.timestamp)
+                    )
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                 }
@@ -155,10 +161,11 @@ struct NotificationsHistorySheetView: View {
 
 struct NotificationHistoryRow: View {
     let notification: NotificationItem
-    @Dependency(\.timeFormattingClient) var timeFormattingClient
+    let formattedTime: String
     
-    init(notification: NotificationItem) {
+    init(notification: NotificationItem, formattedTime: String) {
         self.notification = notification
+        self.formattedTime = formattedTime
     }
 
     /// Get the color for the notification type
@@ -210,7 +217,7 @@ struct NotificationHistoryRow: View {
                     
                     HStack {
                         Spacer()
-                        Text(timeFormattingClient.formatLastSeenText(notification.timestamp))
+                        Text(formattedTime)
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }

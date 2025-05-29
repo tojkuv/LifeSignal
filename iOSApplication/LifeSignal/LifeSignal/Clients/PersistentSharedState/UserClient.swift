@@ -465,8 +465,8 @@ extension User {
 // MARK: - User QR Code Generation Extension
 
 extension User {
-    /// Generates QR code images and stores them in shared state with metadata
-    func generateAndCacheQRCodeImages() {
+    /// Generates QR code images and returns them for storage in shared state
+    func generateQRCodeImages() -> (qrImage: QRImageWithMetadata?, shareableImage: QRImageWithMetadata?) {
         let qrData = qrCodeId.uuidString
         let metadata = ImageMetadata(qrCodeId: qrCodeId)
         
@@ -488,36 +488,23 @@ extension User {
             shareableImage = UserClient.generateMockShareableQRCodeImage(qrImage: qrImage, userName: name)
         }
         
-        // Store in unified state with metadata
-        @Shared(.userState) var userState
+        // Return images with metadata for external storage
+        let qrImageWithMetadata = qrImage.pngData().map { QRImageWithMetadata(image: $0, metadata: metadata) }
+        let shareableImageWithMetadata = shareableImage.pngData().map { QRImageWithMetadata(image: $0, metadata: metadata) }
         
-        $userState.withLock { currentState in
-            let internalState = currentState._state
-            let qrImageWithMetadata = qrImage.pngData().map { QRImageWithMetadata(image: $0, metadata: metadata) }
-            let shareableImageWithMetadata = shareableImage.pngData().map { QRImageWithMetadata(image: $0, metadata: metadata) }
-            
-            let updatedState = UserInternalState(
-                currentUser: internalState.currentUser,
-                isLoading: internalState.isLoading,
-                lastSyncTimestamp: internalState.lastSyncTimestamp,
-                qrCodeImage: qrImageWithMetadata,
-                shareableQRCodeImage: shareableImageWithMetadata,
-                avatarImage: internalState.avatarImage
-            )
-            currentState = ReadOnlyUserState(updatedState)
-        }
+        return (qrImageWithMetadata, shareableImageWithMetadata)
     }
 }
 
 // MARK: - User Shared State
 
-// 1. Mutable internal state (private to Client)
-struct UserInternalState: Equatable, Codable {
+struct UserClientState: Equatable {
     var currentUser: User?
     var isLoading: Bool
     var lastSyncTimestamp: Date?
     
     // Image cache data (consolidated from separate shared states)
+    // Note: Images are excluded from Codable to prevent encoding issues
     var qrCodeImage: QRImageWithMetadata?
     var shareableQRCodeImage: QRImageWithMetadata?
     var avatarImage: AvatarImageWithMetadata?
@@ -539,72 +526,44 @@ struct UserInternalState: Equatable, Codable {
     }
 }
 
-// 2. Read-only wrapper (prevents direct mutation)
-struct ReadOnlyUserState: Equatable, Codable {
-    fileprivate let _state: UserInternalState
-    
-    // 🔑 Only Client can access this init (same file = fileprivate access)
-    fileprivate init(_ state: UserInternalState) {
-        self._state = state
-    }
-    
-    // MARK: - Codable Implementation (Preserves Ownership Pattern)
-    
+// MARK: - Custom Codable Implementation for UserClientState
+
+extension UserClientState: Codable {
     private enum CodingKeys: String, CodingKey {
-        case state = "_state"
+        case currentUser
+        case isLoading
+        case lastSyncTimestamp
+        // Image data is intentionally excluded from encoding to prevent memory issues
     }
     
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let state = try container.decode(UserInternalState.self, forKey: .state)
-        self.init(state)  // Uses fileprivate init - ownership preserved ✅
+        currentUser = try container.decodeIfPresent(User.self, forKey: .currentUser)
+        isLoading = try container.decodeIfPresent(Bool.self, forKey: .isLoading) ?? false
+        lastSyncTimestamp = try container.decodeIfPresent(Date.self, forKey: .lastSyncTimestamp)
+        
+        // Image data is not persisted, starts as nil and gets regenerated
+        qrCodeImage = nil
+        shareableQRCodeImage = nil
+        avatarImage = nil
     }
     
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(_state, forKey: .state)
-    }
-    
-    // Read-only accessors
-    var currentUser: User? { _state.currentUser }
-    var isLoading: Bool { _state.isLoading }
-    var lastSyncTimestamp: Date? { _state.lastSyncTimestamp }
-    
-    // Image cache accessors (consolidated from separate shared states)
-    var qrCodeImage: QRImageWithMetadata? { _state.qrCodeImage }
-    var shareableQRCodeImage: QRImageWithMetadata? { _state.shareableQRCodeImage }
-    var avatarImage: AvatarImageWithMetadata? { _state.avatarImage }
-}
-
-// MARK: - RawRepresentable Conformance for AppStorage (Preserves Ownership)
-
-extension ReadOnlyUserState: RawRepresentable {
-    typealias RawValue = String
-    
-    var rawValue: String {
-        do {
-            let data = try JSONEncoder().encode(self)
-            return String(data: data, encoding: .utf8) ?? ""
-        } catch {
-            print("Failed to encode ReadOnlyUserState: \(error)")
-            return ""
-        }
-    }
-    
-    init?(rawValue: String) {
-        guard let data = rawValue.data(using: .utf8) else { return nil }
-        do {
-            self = try JSONDecoder().decode(ReadOnlyUserState.self, from: data)
-        } catch {
-            print("Failed to decode ReadOnlyUserState: \(error)")
-            return nil
-        }
+        try container.encodeIfPresent(currentUser, forKey: .currentUser)
+        try container.encode(isLoading, forKey: .isLoading)
+        try container.encodeIfPresent(lastSyncTimestamp, forKey: .lastSyncTimestamp)
+        
+        // Image data is intentionally not encoded to prevent memory issues and crashes
+        // Images will be regenerated when needed
     }
 }
 
-extension SharedReaderKey where Self == AppStorageKey<ReadOnlyUserState>.Default {
-    static var userState: Self {
-        Self[.appStorage("userState"), default: ReadOnlyUserState(UserInternalState())]
+// MARK: - Clean Shared Key Implementation (FileStorage)
+
+extension SharedReaderKey where Self == FileStorageKey<UserClientState>.Default {
+    static var userInternalState: Self {
+        Self[.fileStorage(.documentsDirectory.appending(component: "userInternalState.json")), default: UserClientState()]
     }
 }
 
@@ -852,8 +811,14 @@ extension UserClient {
     }
 }
 
+@LifeSignalClient
 @DependencyClient
-struct UserClient {
+struct UserClient: ClientContext {
+    
+    // MARK: - StateOwner Implementation (will be enforced by macro in Phase 2)
+    // typealias OwnedState = UserClientState
+    // static var stateKey: any SharedReaderKey<UserClientState> { .userInternalState }
+    
     // gRPC service integration (uses adapter for mock)
     var userService: UserServiceProtocol = MockUserServiceGRPCAdapter()
     
@@ -875,6 +840,7 @@ struct UserClient {
     
     // State management operations
     var clearUserState: @Sendable () async throws -> Void = { }
+    var regenerateImagesIfNeeded: @Sendable () async -> Void = { }
 }
 
 extension UserClient: DependencyKey {
@@ -889,36 +855,28 @@ extension UserClient: DependencyKey {
             let user = try await service.getUser(uid: uid, authToken: authToken)
             
             if let user = user {
-                // Update shared state using read-only wrapper pattern
-                @Shared(.userState) var sharedUserState
-                let mutableState = UserInternalState(
-                    currentUser: user,
-                    isLoading: false,
-                    lastSyncTimestamp: Date()
-                )
-                $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+                // Generate QR code images first
+                let qrImages = user.generateQRCodeImages()
                 
-                // Generate QR code images
-                user.generateAndCacheQRCodeImages()
+                // Update shared state atomically
+                @Shared(.userInternalState) var sharedUserState
+                $sharedUserState.withLock { state in
+                    state.currentUser = user
+                    state.isLoading = false
+                    state.lastSyncTimestamp = Date()
+                    state.qrCodeImage = qrImages.qrImage
+                    state.shareableQRCodeImage = qrImages.shareableImage
+                }
                 
                 // Load avatar if available
                 if let avatarData = service.getAvatarData(userId: uid) {
                     Task {
                         let metadata = ImageMetadata(avatarURL: user.avatarURL)
                         // Update avatar in unified state
-                        @Shared(.userState) var userState
-                        $userState.withLock { currentState in
-                            let internalState = currentState._state
+                        @Shared(.userInternalState) var sharedUserState
+                        $sharedUserState.withLock { state in
                             let avatarImageWithMetadata = AvatarImageWithMetadata(image: avatarData, metadata: metadata)
-                            let updatedState = UserInternalState(
-                                currentUser: internalState.currentUser,
-                                isLoading: internalState.isLoading,
-                                lastSyncTimestamp: internalState.lastSyncTimestamp,
-                                qrCodeImage: internalState.qrCodeImage,
-                                shareableQRCodeImage: internalState.shareableQRCodeImage,
-                                avatarImage: avatarImageWithMetadata
-                            )
-                            currentState = ReadOnlyUserState(updatedState)
+                            state.avatarImage = avatarImageWithMetadata
                         }
                     }
                 }
@@ -932,16 +890,17 @@ extension UserClient: DependencyKey {
             let newUser = try await service.createUser(uid: firebaseUID, name: name, phoneNumber: phoneNumber, phoneRegion: phoneRegion, authToken: authToken)
             
             // Generate QR code images for new user
-            newUser.generateAndCacheQRCodeImages()
+            let qrImages = newUser.generateQRCodeImages()
             
-            // Update shared state using read-only wrapper pattern
-            @Shared(.userState) var sharedUserState
-            let mutableState = UserInternalState(
-                currentUser: newUser,
-                isLoading: false,
-                lastSyncTimestamp: Date()
-            )
-            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+            // Update shared state
+            @Shared(.userInternalState) var sharedUserState
+            $sharedUserState.withLock { state in
+                state.currentUser = newUser
+                state.isLoading = false
+                state.lastSyncTimestamp = Date()
+                state.qrCodeImage = qrImages.qrImage
+                state.shareableQRCodeImage = qrImages.shareableImage
+            }
             
         },
         
@@ -949,14 +908,13 @@ extension UserClient: DependencyKey {
             let service = MockUserService()
             let updatedUser = try await service.updateUser(user, authToken: authToken)
             
-            // Update shared state using read-only wrapper pattern
-            @Shared(.userState) var sharedUserState
-            let mutableState = UserInternalState(
-                currentUser: updatedUser,
-                isLoading: false,
-                lastSyncTimestamp: Date()
-            )
-            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+            // Update shared state
+            @Shared(.userInternalState) var sharedUserState
+            $sharedUserState.withLock { state in
+                state.currentUser = updatedUser
+                state.isLoading = false
+                state.lastSyncTimestamp = Date()
+            }
             
         },
         
@@ -964,14 +922,13 @@ extension UserClient: DependencyKey {
             let service = MockUserService()
             try await service.deleteUser(userId: userID.uuidString, authToken: authToken)
             
-            // Clear shared state using read-only wrapper pattern
-            @Shared(.userState) var sharedUserState
-            let mutableState = UserInternalState(
-                currentUser: nil,
-                isLoading: false,
-                lastSyncTimestamp: Date()
-            )
-            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+            // Clear shared state
+            @Shared(.userInternalState) var sharedUserState
+            $sharedUserState.withLock { state in
+                state.currentUser = nil
+                state.isLoading = false
+                state.lastSyncTimestamp = Date()
+            }
             
         },
         
@@ -980,20 +937,12 @@ extension UserClient: DependencyKey {
             try await service.updateAvatarData(userId: userID.uuidString, imageData: imageData, authToken: authToken)
             
             // Update shared state with avatar image
-            @Shared(.userState) var sharedUserState
-            $sharedUserState.withLock { currentState in
-                let internalState = currentState._state
+            @Shared(.userInternalState) var sharedUserState
+            $sharedUserState.withLock { state in
                 let metadata = ImageMetadata(avatarURL: "mock://avatar/\(userID.uuidString)")
                 let avatarImageWithMetadata = AvatarImageWithMetadata(image: imageData, metadata: metadata)
-                let updatedState = UserInternalState(
-                    currentUser: internalState.currentUser,
-                    isLoading: internalState.isLoading,
-                    lastSyncTimestamp: Date(),
-                    qrCodeImage: internalState.qrCodeImage,
-                    shareableQRCodeImage: internalState.shareableQRCodeImage,
-                    avatarImage: avatarImageWithMetadata
-                )
-                currentState = ReadOnlyUserState(updatedState)
+                state.avatarImage = avatarImageWithMetadata
+                state.lastSyncTimestamp = Date()
             }
             
         },
@@ -1018,26 +967,18 @@ extension UserClient: DependencyKey {
             try await service.deleteAvatarData(userId: userID.uuidString, authToken: authToken)
             
             // Update shared state with cleared avatar
-            @Shared(.userState) var sharedUserState
-            $sharedUserState.withLock { currentState in
-                let internalState = currentState._state
-                let updatedState = UserInternalState(
-                    currentUser: internalState.currentUser,
-                    isLoading: internalState.isLoading,
-                    lastSyncTimestamp: Date(),
-                    qrCodeImage: internalState.qrCodeImage,
-                    shareableQRCodeImage: internalState.shareableQRCodeImage,
-                    avatarImage: nil
-                )
-                currentState = ReadOnlyUserState(updatedState)
+            @Shared(.userInternalState) var sharedUserState
+            $sharedUserState.withLock { state in
+                state.avatarImage = nil
+                state.lastSyncTimestamp = Date()
             }
             
         },
         
         
         resetQRCode: { authToken in
-            @Shared(.userState) var userState
-            guard var user = userState.currentUser else {
+            @Shared(.userInternalState) var sharedUserState
+            guard var user = sharedUserState.currentUser else {
                 throw UserClientError.userNotFound
             }
             
@@ -1068,55 +1009,66 @@ extension UserClient: DependencyKey {
             let updatedUser = try await service.updateUser(user, authToken: authToken)
             
             // Generate fresh QR code images after reset
-            updatedUser.generateAndCacheQRCodeImages()
+            let qrImages = updatedUser.generateQRCodeImages()
             
-            // Update shared state using read-only wrapper pattern
-            @Shared(.userState) var sharedUserState
-            let mutableState = UserInternalState(
-                currentUser: updatedUser,
-                isLoading: false,
-                lastSyncTimestamp: Date()
-            )
-            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+            // Update shared state
+            $sharedUserState.withLock { state in
+                state.currentUser = updatedUser
+                state.isLoading = false
+                state.lastSyncTimestamp = Date()
+                state.qrCodeImage = qrImages.qrImage
+                state.shareableQRCodeImage = qrImages.shareableImage
+            }
             
         },
         
         updateQRCodeImages: {
-            @Shared(.userState) var userState
-            guard let user = userState.currentUser else { return }
-            user.generateAndCacheQRCodeImages()
+            @Shared(.userInternalState) var sharedUserState
+            guard let user = sharedUserState.currentUser else { return }
+            let qrImages = user.generateQRCodeImages()
+            $sharedUserState.withLock { state in
+                state.qrCodeImage = qrImages.qrImage
+                state.shareableQRCodeImage = qrImages.shareableImage
+            }
         },
         
         clearQRCodeImages: {
             // Clear QR code images in unified state
-            @Shared(.userState) var sharedUserState
-            $sharedUserState.withLock { currentState in
-                let internalState = currentState._state
-                let clearedState = UserInternalState(
-                    currentUser: internalState.currentUser,
-                    isLoading: internalState.isLoading,
-                    lastSyncTimestamp: internalState.lastSyncTimestamp,
-                    qrCodeImage: nil,
-                    shareableQRCodeImage: nil,
-                    avatarImage: internalState.avatarImage
-                )
-                currentState = ReadOnlyUserState(clearedState)
+            @Shared(.userInternalState) var sharedUserState
+            $sharedUserState.withLock { state in
+                state.qrCodeImage = nil
+                state.shareableQRCodeImage = nil
             }
         },
         
         clearUserState: {
             // Clear all user state - used during sign out
-            @Shared(.userState) var sharedUserState
-            let clearedState = UserInternalState(
-                currentUser: nil,
-                isLoading: false,
-                lastSyncTimestamp: nil,
-                qrCodeImage: nil,
-                shareableQRCodeImage: nil,
-                avatarImage: nil
-            )
-            $sharedUserState.withLock { currentState in
-                currentState = ReadOnlyUserState(clearedState)
+            @Shared(.userInternalState) var sharedUserState
+            $sharedUserState.withLock { state in
+                state.currentUser = nil
+                state.isLoading = false
+                state.lastSyncTimestamp = nil
+                state.qrCodeImage = nil
+                state.shareableQRCodeImage = nil
+                state.avatarImage = nil
+            }
+        },
+        
+        regenerateImagesIfNeeded: {
+            @Shared(.userInternalState) var sharedUserState
+            guard let user = sharedUserState.currentUser else { return }
+            
+            // Check if images need regeneration (they're nil after state reload)
+            if sharedUserState.qrCodeImage == nil || sharedUserState.shareableQRCodeImage == nil {
+                let qrImages = user.generateQRCodeImages()
+                $sharedUserState.withLock { state in
+                    if state.qrCodeImage == nil {
+                        state.qrCodeImage = qrImages.qrImage
+                    }
+                    if state.shareableQRCodeImage == nil {
+                        state.shareableQRCodeImage = qrImages.shareableImage
+                    }
+                }
             }
         }
     )

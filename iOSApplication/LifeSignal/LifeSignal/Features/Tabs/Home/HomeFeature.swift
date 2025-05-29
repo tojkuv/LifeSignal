@@ -16,15 +16,17 @@ enum HomeAlert: Equatable {
 }
 
 /// Home Feature - QR code generation and settings management using TCA
+/// Enhanced: Uses MultiStateReader for accessing multiple client states
+@LifeSignalFeature
 @Reducer
-struct HomeFeature {
+struct HomeFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     /// Home state conforming to TCA patterns
     @ObservableState
     struct State: Equatable {
         // Authentication state
-        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
+        @Shared(.authenticationInternalState) var authState: AuthClientState
         // User Data
-        @Shared(.userState) var userState: ReadOnlyUserState
+        @Shared(.userInternalState) var userState: UserClientState
         
         // Convenience accessor for current user
         var currentUser: User? { userState.currentUser }
@@ -133,6 +135,7 @@ struct HomeFeature {
     }
 
     /// Dependencies for the Home feature
+    /// Enhanced: Uses ReducerContext for architectural validation
     @Dependency(\.userClient) var userClient
     @Dependency(\.notificationClient) var notificationClient
     @Dependency(\.hapticClient) var haptics
@@ -250,6 +253,8 @@ struct HomeFeature {
                 // UserClient automatically updates shared state when loading user data
                 if let user = try await userClient.getUser(token, userUid) {
                     await send(.userLoaded(user))
+                    // Regenerate images if they were lost during state persistence
+                    await userClient.regenerateImagesIfNeeded()
                 }
             } catch {
                 await haptics.notification(.warning)
@@ -273,7 +278,7 @@ struct HomeFeature {
             }
             
             // First check if we already have a cached QR code in shared state
-            @Shared(.userState) var userState
+            @Shared(.userInternalState) var userState
             if let cached = userState.qrCodeImage,
                cached.metadata.qrCodeId == user.qrCodeId,
                let image = UIImage(data: cached.image) {
@@ -326,7 +331,7 @@ struct HomeFeature {
                 return
             }
             
-            @Shared(.userState) var userState
+            @Shared(.userInternalState) var userState
             if let cached = userState.shareableQRCodeImage,
                cached.metadata.qrCodeId == user.qrCodeId,
                let image = UIImage(data: cached.image) {
@@ -376,7 +381,7 @@ struct HomeFeature {
     private func shareQRCodeEffect(state: inout State) -> Effect<Action> {
         return .run { [currentUser = state.currentUser] send in
             // Check shared state for cached shareable QR code
-            @Shared(.userState) var userState
+            @Shared(.userInternalState) var userState
             if let cached = userState.shareableQRCodeImage,
                let user = currentUser,
                cached.metadata.qrCodeId == user.qrCodeId,

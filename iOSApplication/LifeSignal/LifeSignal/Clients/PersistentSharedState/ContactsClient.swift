@@ -5,92 +5,29 @@ import Dependencies
 import DependenciesMacros
 @_exported import Sharing
 
-// MARK: - Shared State (Read-Only Wrapper Pattern)
+// MARK: - Contacts Shared State
 
-// 1. Mutable internal state (private to Client)
-struct ContactsState: Equatable, Codable {
-    var contacts: [Contact] = []
-    var lastSyncTimestamp: Date? = nil
-    var isLoading: Bool = false
-}
-
-// 2. Read-only wrapper (prevents direct mutation)
-struct ReadOnlyContactsState: Equatable, Codable {
-    private let _state: ContactsState
-    fileprivate init(_ state: ContactsState) { self._state = state }  // 🔑 Client can access (same file)
+struct ContactsClientState: Equatable, Codable {
+    var contacts: [Contact]
+    var lastSyncTimestamp: Date?
+    var isLoading: Bool
     
-    // MARK: - Codable Implementation (Preserves Ownership Pattern)
-    
-    // Private coding keys to prevent external access
-    private enum CodingKeys: String, CodingKey {
-        case state = "_state"
-    }
-    
-    // Decoder uses the fileprivate init - maintains ownership
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let state = try container.decode(ContactsState.self, forKey: .state)
-        self.init(state)  // Uses fileprivate init - ownership preserved ✅
-    }
-    
-    // Encoder exposes only the internal state
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(_state, forKey: .state)
-    }
-    
-    // Read-only access
-    var contacts: [Contact] { _state.contacts }
-    var lastSyncTimestamp: Date? { _state.lastSyncTimestamp }
-    var isLoading: Bool { _state.isLoading }
-    var count: Int { _state.contacts.count }
-    
-    // Computed properties
-    var responders: [Contact] { _state.contacts.filter(\.isResponder) }
-    var dependents: [Contact] { _state.contacts.filter(\.isDependent) }
-    
-    func contact(by id: UUID) -> Contact? {
-        _state.contacts.first { $0.id == id }
-    }
-    
-    func contactIndex(for id: UUID) -> Int? {
-        _state.contacts.firstIndex { $0.id == id }
+    init(
+        contacts: [Contact] = [],
+        lastSyncTimestamp: Date? = nil,
+        isLoading: Bool = false
+    ) {
+        self.contacts = contacts
+        self.lastSyncTimestamp = lastSyncTimestamp
+        self.isLoading = isLoading
     }
 }
 
-// MARK: - RawRepresentable Conformance for AppStorage (Preserves Ownership)
+// MARK: - Clean Shared Key Implementation (FileStorage)
 
-extension ReadOnlyContactsState: RawRepresentable {
-    typealias RawValue = String
-    
-    // Convert to JSON string for storage
-    var rawValue: String {
-        do {
-            let data = try JSONEncoder().encode(self)
-            return String(data: data, encoding: .utf8) ?? ""
-        } catch {
-            print("Failed to encode ReadOnlyContactsState: \(error)")
-            return ""
-        }
-    }
-    
-    // Decode from JSON string - uses our ownership-preserving Codable init
-    init?(rawValue: String) {
-        guard let data = rawValue.data(using: .utf8) else { return nil }
-        do {
-            self = try JSONDecoder().decode(ReadOnlyContactsState.self, from: data)
-            // ☝️ This calls our custom init(from decoder:) which uses fileprivate init ✅
-        } catch {
-            print("Failed to decode ReadOnlyContactsState: \(error)")
-            return nil
-        }
-    }
-}
-
-// 3. Shared key stores read-only wrapper with persistence
-extension SharedReaderKey where Self == AppStorageKey<ReadOnlyContactsState>.Default {
-    static var contacts: Self {
-        Self[.appStorage("contacts"), default: ReadOnlyContactsState(ContactsState())]
+extension SharedReaderKey where Self == FileStorageKey<ContactsClientState>.Default {
+    static var contactsInternalState: Self {
+        Self[.fileStorage(.documentsDirectory.appending(component: "contactsInternalState.json")), default: ContactsClientState()]
     }
 }
 
@@ -536,8 +473,14 @@ extension ContactsClient {
 
 // MARK: - ContactsClient (TCA Shared State Pattern)
 
+@LifeSignalClient
 @DependencyClient
-struct ContactsClient {
+struct ContactsClient: ClientContext {
+    
+    // MARK: - StateOwner Implementation (will be enforced by macro in Phase 2)
+    // typealias OwnedState = ContactsClientState
+    // static var stateKey: any SharedReaderKey<ContactsClientState> { .contactsInternalState }
+    
     // MARK: - Service Integration (uses adapter for mock)
     var contactService: ContactServiceProtocol = MockContactServiceGRPCAdapter()
     
@@ -551,7 +494,7 @@ struct ContactsClient {
         throw ContactsClientError.saveFailed("Contact")
     }
     var removeContact: @Sendable (UUID, String) async throws -> Void = { _, _ in }
-    var updateContact: @Sendable (Contact, String) async throws -> Void = { _, _ in }
+    var updateContact: @Sendable (Contact, String) async throws -> Contact = { contact, _ in contact }
     var refreshContacts: @Sendable (String, UUID) async throws -> Void = { _, _ in }
     
     // MARK: - Real-time Contact Updates (gRPC Streaming) - Features must pass auth tokens
@@ -574,15 +517,15 @@ extension ContactsClient: DependencyKey {
     
     static let mockValue = ContactsClient(
         getContacts: {
-            @Shared(.contacts) var contacts
-            return contacts.contacts
+            @Shared(.contactsInternalState) var contactsState
+            return contactsState.contacts
         },
         
         getContact: { contactId in
             try await Task.sleep(for: .milliseconds(300))
             
-            @Shared(.contacts) var contacts
-            return contacts.contact(by: contactId)
+            @Shared(.contactsInternalState) var contactsState
+            return contactsState.contacts.first { $0.id == contactId }
         },
         
         getContactByQRCode: { qrCodeId in
@@ -640,14 +583,13 @@ extension ContactsClient: DependencyKey {
                 authToken: authToken
             )
             
-            // Update shared state via fileprivate init (ONLY Clients can do this)
-            @Shared(.contacts) var sharedContactsState
-            let mutableState = ContactsState(
-                contacts: sharedContactsState.contacts + [newContact],
-                lastSyncTimestamp: Date(),
-                isLoading: false
-            )
-            $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
+            // Update shared state
+            @Shared(.contactsInternalState) var contactsState
+            $contactsState.withLock { state in
+                state.contacts.append(newContact)
+                state.lastSyncTimestamp = Date()
+                state.isLoading = false
+            }
             
             return newContact
         },
@@ -657,35 +599,31 @@ extension ContactsClient: DependencyKey {
             
             try await service.deleteContact(id: contactId, authToken: authToken)
             
-            // Update shared state via fileprivate init
-            @Shared(.contacts) var sharedContactsState
-            let updatedContacts = sharedContactsState.contacts.filter { $0.id != contactId }
-            let mutableState = ContactsState(
-                contacts: updatedContacts,
-                lastSyncTimestamp: Date(),
-                isLoading: false
-            )
-            $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
+            // Update shared state
+            @Shared(.contactsInternalState) var contactsState
+            $contactsState.withLock { state in
+                state.contacts.removeAll { $0.id == contactId }
+                state.lastSyncTimestamp = Date()
+                state.isLoading = false
+            }
         },
         
         updateContact: { updatedContact, authToken in
             let service = MockContactService()
             
-            _ = try await service.updateContact(updatedContact, authToken: authToken)
+            let finalContact = try await service.updateContact(updatedContact, authToken: authToken)
             
-            // Update shared state via fileprivate init
-            @Shared(.contacts) var sharedContactsState
-            var contacts = sharedContactsState.contacts
-            if let index = contacts.firstIndex(where: { $0.id == updatedContact.id }) {
-                contacts[index] = updatedContact
+            // Update shared state
+            @Shared(.contactsInternalState) var contactsState
+            $contactsState.withLock { state in
+                if let index = state.contacts.firstIndex(where: { $0.id == finalContact.id }) {
+                    state.contacts[index] = finalContact
+                }
+                state.lastSyncTimestamp = Date()
+                state.isLoading = false
             }
             
-            let mutableState = ContactsState(
-                contacts: contacts,
-                lastSyncTimestamp: Date(),
-                isLoading: false
-            )
-            $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
+            return finalContact
         },
         
         refreshContacts: { authToken, userId in
@@ -694,27 +632,25 @@ extension ContactsClient: DependencyKey {
             let contacts = try await service.getContacts(userId: userId, authToken: authToken)
             
             // Check if we already have persisted contacts to avoid overwriting cleared pings
-            @Shared(.contacts) var sharedContactsState
-            let existingContacts = sharedContactsState.contacts
-            
-            let finalContacts: [Contact]
-            if existingContacts.isEmpty {
-                // First time or no persisted data - include mock data for visual testing
-                finalContacts = contacts + Contact.mockData
-            } else {
-                // We have persisted data - preserve it and only add genuinely new contacts
-                let existingIds = Set(existingContacts.map(\.id))
-                let newServerContacts = contacts.filter { !existingIds.contains($0.id) }
-                finalContacts = existingContacts + newServerContacts
+            @Shared(.contactsInternalState) var contactsState
+            $contactsState.withLock { state in
+                let existingContacts = state.contacts
+                
+                let finalContacts: [Contact]
+                if existingContacts.isEmpty {
+                    // First time or no persisted data - include mock data for visual testing
+                    finalContacts = contacts + Contact.mockData
+                } else {
+                    // We have persisted data - preserve it and only add genuinely new contacts
+                    let existingIds = Set(existingContacts.map(\.id))
+                    let newServerContacts = contacts.filter { !existingIds.contains($0.id) }
+                    finalContacts = existingContacts + newServerContacts
+                }
+                
+                state.contacts = finalContacts
+                state.lastSyncTimestamp = Date()
+                state.isLoading = false
             }
-            
-            // Update shared state via fileprivate init
-            let mutableState = ContactsState(
-                contacts: finalContacts,
-                lastSyncTimestamp: Date(),
-                isLoading: false
-            )
-            $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
         },
         
         startContactUpdatesStream: { authToken, userId in
@@ -732,8 +668,8 @@ extension ContactsClient: DependencyKey {
                     for i in 0..<3 {
                         try? await Task.sleep(for: .seconds(5))
                         
-                        @Shared(.contacts) var sharedContactsState
-                        if let contact = sharedContactsState.contacts.first {
+                        @Shared(.contactsInternalState) var contactsState
+                        if let contact = contactsState.contacts.first {
                             // Simulate a contact update from gRPC stream
                             let updatedContact = Contact(
                                 id: contact.id,
@@ -758,18 +694,14 @@ extension ContactsClient: DependencyKey {
                                 lastUpdated: Date()
                             )
                             
-                            // Update shared state with streamed contact via fileprivate init
-                            var contacts = sharedContactsState.contacts
-                            if let index = contacts.firstIndex(where: { $0.id == contact.id }) {
-                                contacts[index] = updatedContact
+                            // Update shared state with streamed contact
+                            $contactsState.withLock { state in
+                                if let index = state.contacts.firstIndex(where: { $0.id == contact.id }) {
+                                    state.contacts[index] = updatedContact
+                                }
+                                state.lastSyncTimestamp = Date()
+                                state.isLoading = false
                             }
-                            
-                            let mutableState = ContactsState(
-                                contacts: contacts,
-                                lastSyncTimestamp: Date(),
-                                isLoading: false
-                            )
-                            $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
                             
                             continuation.yield(updatedContact)
                         }
@@ -780,13 +712,12 @@ extension ContactsClient: DependencyKey {
         },
         
         clearContactsState: {
-            @Shared(.contacts) var sharedContactsState
-            let clearedState = ContactsState(
-                contacts: [],
-                lastSyncTimestamp: nil,
-                isLoading: false
-            )
-            $sharedContactsState.withLock { $0 = ReadOnlyContactsState(clearedState) }
+            @Shared(.contactsInternalState) var contactsState
+            $contactsState.withLock { state in
+                state.contacts = []
+                state.lastSyncTimestamp = nil
+                state.isLoading = false
+            }
         }
     )
 }

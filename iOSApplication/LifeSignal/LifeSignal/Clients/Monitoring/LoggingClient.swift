@@ -4,6 +4,7 @@ import ComposableArchitecture
 
 // MARK: - Logging Client (MVP Mock Implementation)
 
+@LifeSignalClient
 @DependencyClient
 struct LoggingClient {
     var debug: @Sendable (String, [String: Any]) -> Void = { _, _ in }

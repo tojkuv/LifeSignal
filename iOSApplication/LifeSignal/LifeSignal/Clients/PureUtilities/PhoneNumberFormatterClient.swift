@@ -2,6 +2,7 @@ import Foundation
 import ComposableArchitecture
 import DependenciesMacros
 
+@LifeSignalClient
 @DependencyClient
 struct PhoneNumberFormatterClient {
     var formatPhoneNumber: @Sendable (String) -> String = { _ in "" }

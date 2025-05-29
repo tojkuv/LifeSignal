@@ -4,8 +4,9 @@ import ComposableArchitecture
 import Perception
 @_exported import Sharing
 
+@LifeSignalFeature
 @Reducer 
-struct SignInFeature {
+struct SignInFeature: FeatureContext {
     @ObservableState
     struct State: Equatable {
         // SignInFeature does not read session state - only ApplicationFeature handles session management
@@ -33,6 +34,12 @@ struct SignInFeature {
         var verificationCodeEntry = VerificationCodeEntryFeature.State(
             buttonTitle: "Verify"
         )
+        
+        var formattedPhoneNumber: String {
+            // This computed property provides formatted phone number access to views
+            // Phone number formatting is handled in the feature layer
+            return phoneNumberEntry.phoneNumber.isEmpty ? "" : phoneNumberEntry.phoneNumber
+        }
     }
 
     @CasePathable
@@ -59,11 +66,13 @@ struct SignInFeature {
         case verificationCodeSent(Result<String, Error>)
         case sessionStartResult(Result<Void, Error>)
         case debugSessionResult(Result<Void, Error>)
+        case formatPhoneNumber
     }
 
     // SignInFeature only uses AuthenticationClient for shared state
-    // PureUtilities clients are allowed for UI/device functionality
+    // Enhanced: Uses ReducerContext for architectural validation
     @Dependency(\.authenticationClient) var authenticationClient
+    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
 
     var body: some ReducerOf<Self> {
         Scope(state: \.phoneNumberEntry, action: \.phoneNumberEntry) {
@@ -135,6 +144,7 @@ struct SignInFeature {
                 state.verificationID = verificationID
                 state.showPhoneEntry = false
                 return .run { send in
+                    await send(.formatPhoneNumber)
                     try await Task.sleep(for: .milliseconds(100))
                     await send(.verificationCodeEntry(.focusVerificationCodeField(true)))
                 }
@@ -207,6 +217,15 @@ struct SignInFeature {
                 
             case .verificationCodeEntry:
                 return .none
+                
+            case .formatPhoneNumber:
+                // Format the phone number for display using the phoneNumberFormatter dependency
+                // This action is called when transitioning to verification view to prepare the formatted display
+                if !state.phoneNumberEntry.phoneNumber.isEmpty {
+                    let formattedNumber = phoneNumberFormatter.formatPhoneNumberWithRegionCode(state.phoneNumberEntry.phoneNumber)
+                    state.phoneNumberEntry.phoneNumber = formattedNumber
+                }
+                return .none
 
             }
         }
@@ -218,8 +237,6 @@ struct SignInFeature {
 
 struct SignInView: View {
     @Bindable var store: StoreOf<SignInFeature>
-    
-    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
 
     var body: some View {
         WithPerceptionTracking {
@@ -320,7 +337,7 @@ struct SignInView: View {
                 .font(.title2)
                 .fontWeight(.bold)
             
-            Text("Sent to \(phoneNumberFormatter.formatPhoneNumberWithRegionCode(store.phoneNumberEntry.phoneNumber))")
+            Text("Sent to \(store.formattedPhoneNumber)")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
 

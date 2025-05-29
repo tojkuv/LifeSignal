@@ -16,17 +16,24 @@ enum ContactRole: Equatable {
     case dependent
 }
 
+@LifeSignalFeature
 @Reducer
-struct ContactDetailsSheetFeature {
+struct ContactDetailsSheetFeature: FeatureContext {
     @ObservableState
     struct State: Equatable {
-        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
+        @Shared(.authenticationInternalState) var authState: AuthClientState
         var contact: Contact
         var isLoading = false
         @Presents var alert: AlertState<ContactDetailsAlert>?
         
         var isNotResponsive: Bool {
             contact.hasNotResponsiveAlert
+        }
+        
+        var formattedPhoneNumber: String {
+            // This computed property provides formatted phone number access to views
+            // Phone number formatting is handled in the feature layer
+            return contact.phoneNumber.isEmpty ? "No phone number" : contact.phoneNumber
         }
         
         init(contact: Contact) {
@@ -47,11 +54,13 @@ struct ContactDetailsSheetFeature {
         case contactDeleteResponse(Result<Void, Error>)
         case pingResponse(Result<Void, Error>)
         case dismiss
+        case formatPhoneNumber
     }
 
     @Dependency(\.contactsClient) var contactsClient
     @Dependency(\.notificationClient) var notificationClient
     @Dependency(\.hapticClient) var haptics
+    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -260,8 +269,7 @@ struct ContactDetailsSheetFeature {
                         guard let token = authToken else {
                             throw ContactsClientError.authenticationRequired
                         }
-                        try await contactsClient.updateContact(contact, token)
-                        return contact
+                        return try await contactsClient.updateContact(contact, token)
                     }))
                 }
                 
@@ -277,7 +285,7 @@ struct ContactDetailsSheetFeature {
                         var updatedContact = contact
                         updatedContact.hasOutgoingPing = true
                         updatedContact.outgoingPingTimestamp = Date()
-                        try await contactsClient.updateContact(updatedContact, token)
+                        let finalContact = try await contactsClient.updateContact(updatedContact, token)
                         
                         // Send ping notification
                         try await notificationClient.sendPingNotification(
@@ -287,7 +295,7 @@ struct ContactDetailsSheetFeature {
                             contact.id,
                             token
                         )
-                        await send(.pingResponse(.success(())))
+                        await send(.contactUpdateResponse(.success(finalContact)))
                     } catch {
                         await send(.pingResponse(.failure(error)))
                     }
@@ -305,7 +313,7 @@ struct ContactDetailsSheetFeature {
                         var updatedContact = contact
                         updatedContact.hasOutgoingPing = false
                         updatedContact.outgoingPingTimestamp = nil
-                        try await contactsClient.updateContact(updatedContact, token)
+                        let finalContact = try await contactsClient.updateContact(updatedContact, token)
                         
                         // Send notification about clearing ping
                         try await notificationClient.sendPingNotification(
@@ -315,7 +323,7 @@ struct ContactDetailsSheetFeature {
                             contact.id,
                             token
                         )
-                        await send(.pingResponse(.success(())))
+                        await send(.contactUpdateResponse(.success(finalContact)))
                     } catch {
                         await send(.pingResponse(.failure(error)))
                     }
@@ -367,11 +375,6 @@ struct ContactDetailsSheetFeature {
                 }
                 
             case .pingResponse(.success):
-                // Update the contact state in this feature to reflect the ping changes
-                @Shared(.contacts) var contacts
-                if let updatedContact = contacts.contact(by: state.contact.id) {
-                    state.contact = updatedContact
-                }
                 return .run { [haptics, notificationClient] _ in
                     await haptics.notification(.success)
                     try? await notificationClient.sendSystemNotification(
@@ -391,6 +394,15 @@ struct ContactDetailsSheetFeature {
                 
             case .dismiss:
                 return .none
+                
+            case .formatPhoneNumber:
+                // Format the phone number for display using the phoneNumberFormatter dependency
+                // This action is called when the contact details are displayed
+                if !state.contact.phoneNumber.isEmpty {
+                    let formattedNumber = phoneNumberFormatter.formatPhoneNumberForDisplay(state.contact.phoneNumber)
+                    state.contact.phoneNumber = formattedNumber
+                }
+                return .none
             }
         }
         .ifLet(\.$alert, action: \.alert)
@@ -400,8 +412,6 @@ struct ContactDetailsSheetFeature {
 struct ContactDetailsSheetView: View {
     @Bindable var store: StoreOf<ContactDetailsSheetFeature>
     @Environment(\.colorScheme) private var colorScheme
-    
-    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
     
     private var hasAlertCards: Bool {
         store.contact.hasManualAlertActive || 
@@ -438,6 +448,9 @@ struct ContactDetailsSheetView: View {
                 .navigationBarTitleDisplayMode(.inline)
             }
             .alert($store.scope(state: \.alert, action: \.alert))
+            .onAppear {
+                store.send(.formatPhoneNumber)
+            }
         }
     }
     
@@ -461,7 +474,7 @@ struct ContactDetailsSheetView: View {
                 .bold()
                 .foregroundColor(.primary)
                 
-            Text(phoneNumberFormatter.formatPhoneNumberForDisplay(store.contact.phoneNumber))
+            Text(store.formattedPhoneNumber)
                 .font(.subheadline)
                 .foregroundColor(.secondary)
         }

@@ -2,8 +2,9 @@ import SwiftUI
 import ComposableArchitecture
 import UIKit
 
+@LifeSignalFeature
 @Reducer
-struct PhoneNumberEntryFeature {
+struct PhoneNumberEntryFeature: FeatureContext {
     @ObservableState
     struct State: Equatable {
         var selectedRegion: String

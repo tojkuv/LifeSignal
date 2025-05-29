@@ -2,8 +2,9 @@ import SwiftUI
 import ComposableArchitecture
 import UIKit
 
+@LifeSignalFeature
 @Reducer
-struct VerificationCodeEntryFeature {
+struct VerificationCodeEntryFeature: FeatureContext {
     @ObservableState
     struct State: Equatable {
         var verificationCode: String = ""

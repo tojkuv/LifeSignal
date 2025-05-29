@@ -14,6 +14,8 @@
 		988BA9772DCC5E3A00024FD8 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 988BA9762DCC5E3A00024FD8 /* FirebaseAuth */; };
 		988BA9792DCC5E3A00024FD8 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 988BA9782DCC5E3A00024FD8 /* FirebaseCore */; };
 		988BA97B2DCC5E3A00024FD8 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 988BA97A2DCC5E3A00024FD8 /* FirebaseFirestore */; };
+		98A3D1B42DE87C3D00B44081 /* LifeSignalMacros in Frameworks */ = {isa = PBXBuildFile; productRef = 98A3D1B32DE87C3D00B44081 /* LifeSignalMacros */; };
+		98A3D1B62DE87C3D00B44081 /* LifeSignalMacrosClient in Frameworks */ = {isa = PBXBuildFile; productRef = 98A3D1B52DE87C3D00B44081 /* LifeSignalMacrosClient */; };
 		98A78FA72DCD665500964DEC /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 98A78FA62DCD665500964DEC /* FirebaseMessaging */; };
 		98A78FAB2DCD709600964DEC /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 98A78FAA2DCD709600964DEC /* FirebaseFunctions */; };
 /* End PBXBuildFile section */
@@ -80,8 +82,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				9843B4302DCEFFC30020A050 /* ComposableArchitecture in Frameworks */,
+				98A3D1B62DE87C3D00B44081 /* LifeSignalMacrosClient in Frameworks */,
 				988BA9752DCC5E3A00024FD8 /* FirebaseAppCheck in Frameworks */,
 				988BA97B2DCC5E3A00024FD8 /* FirebaseFirestore in Frameworks */,
+				98A3D1B42DE87C3D00B44081 /* LifeSignalMacros in Frameworks */,
 				98A78FA72DCD665500964DEC /* FirebaseMessaging in Frameworks */,
 				98A78FAB2DCD709600964DEC /* FirebaseFunctions in Frameworks */,
 				988BA9792DCC5E3A00024FD8 /* FirebaseCore in Frameworks */,
@@ -165,6 +169,8 @@
 				98A78FA62DCD665500964DEC /* FirebaseMessaging */,
 				98A78FAA2DCD709600964DEC /* FirebaseFunctions */,
 				9843B4312DCEFFC30020A050 /* ComposableArchitecture */,
+				98A3D1B32DE87C3D00B44081 /* LifeSignalMacros */,
+				98A3D1B52DE87C3D00B44081 /* LifeSignalMacrosClient */,
 			);
 			productName = LifeSignal;
 			productReference = 988BA1A52DCB131200024FD8 /* LifeSignal.app */;
@@ -252,6 +258,7 @@
 				988BA9732DCC5E3A00024FD8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				9843B4322DCEFFC30020A050 /* XCRemoteSwiftPackageReference "swift-composable-architecture" */,
 				98FE7A062DD1525000EE6036 /* XCRemoteSwiftPackageReference "swift-dependencies" */,
+				98A3D1B22DE87C3D00B44081 /* XCLocalSwiftPackageReference "../LifeSignalMacros" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 988BA1142DCB11F500024FD8 /* Products */;
@@ -629,6 +636,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		98A3D1B22DE87C3D00B44081 /* XCLocalSwiftPackageReference "../LifeSignalMacros" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../LifeSignalMacros;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		9843B4322DCEFFC30020A050 /* XCRemoteSwiftPackageReference "swift-composable-architecture" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -681,6 +695,14 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 988BA9732DCC5E3A00024FD8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseFirestore;
+		};
+		98A3D1B32DE87C3D00B44081 /* LifeSignalMacros */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LifeSignalMacros;
+		};
+		98A3D1B52DE87C3D00B44081 /* LifeSignalMacrosClient */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LifeSignalMacrosClient;
 		};
 		98A78FA62DCD665500964DEC /* FirebaseMessaging */ = {
 			isa = XCSwiftPackageProductDependency;

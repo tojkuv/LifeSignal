@@ -4,8 +4,9 @@ import ComposableArchitecture
 import Perception
 // import UserNotifications
 
+@LifeSignalFeature
 @Reducer
-struct OnboardingFeature {
+struct OnboardingFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     @ObservableState
     struct State: Equatable {
         // Features have read-only access to shared state through SessionClient only

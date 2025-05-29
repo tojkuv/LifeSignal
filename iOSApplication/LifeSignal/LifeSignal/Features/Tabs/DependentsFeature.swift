@@ -18,13 +18,14 @@ enum DependentsSortMode: String, CaseIterable, Equatable {
     case dateAdded = "Date Added"
 }
 
+@LifeSignalFeature
 @Reducer
-struct DependentsFeature {
+struct DependentsFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     @ObservableState
     struct State: Equatable {
-        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
-        @Shared(.contacts) var contactsState: ReadOnlyContactsState
-        @Shared(.userState) var userState: ReadOnlyUserState
+        @Shared(.authenticationInternalState) var authState: AuthClientState
+        @Shared(.contactsInternalState) var contactsState: ContactsClientState
+        @Shared(.userInternalState) var userState: UserClientState
         
         var currentUser: User? { userState.currentUser }
         
@@ -561,7 +562,7 @@ struct DependentsFeature {
                 
                 // Check if the contact still exists in the shared state
                 if let contactDetails = state.contactDetails,
-                   state.contactsState.contact(by: contactDetails.contact.id) == nil {
+                   !state.contactsState.contacts.contains(where: { $0.id == contactDetails.contact.id }) {
                     // Contact was deleted, close the sheet
                     state.contactDetails = nil
                 }
@@ -687,7 +688,7 @@ struct DependentsFeature {
                 state.updateDependentCards()
                 // Also update the contact details if open and the contact still exists
                 if let contactDetails = state.contactDetails,
-                   let updatedContact = state.contactsState.contact(by: contactDetails.contact.id) {
+                   let updatedContact = state.contactsState.contacts.first(where: { $0.id == contactDetails.contact.id }) {
                     state.contactDetails?.contact = updatedContact
                 }
                 return .none

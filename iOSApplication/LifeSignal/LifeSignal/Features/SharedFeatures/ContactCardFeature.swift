@@ -19,8 +19,9 @@ enum ContactCardStyle: Equatable {
     }
 }
 
+@LifeSignalFeature
 @Reducer
-struct ContactCardFeature {
+struct ContactCardFeature: FeatureContext {
     @ObservableState
     struct State: Equatable, Identifiable {
         let contact: Contact

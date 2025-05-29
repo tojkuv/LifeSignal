@@ -6,13 +6,7 @@ import UserNotifications
 import Perception
 @_exported import Sharing
 
-// MARK: - Network Shared State Key
-
-extension SharedReaderKey where Self == InMemoryKey<Bool>.Default {
-    static var isNetworkConnected: Self {
-        Self[.inMemory("isNetworkConnected"), default: true]
-    }
-}
+// Network state is now managed by NetworkClient
 
 // MARK: - Onboarding Data Transfer
 
@@ -53,18 +47,17 @@ enum ApplicationTab: Int, CaseIterable {
     }
 }
 
+@LifeSignalFeature
 @Reducer
-struct ApplicationFeature {
+struct ApplicationFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     @ObservableState
     struct State: Equatable {
         // ApplicationFeature has read-only access to authentication, onboarding and contacts state
-        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
-        @Shared(.onboardingInternalState) var onboardingState: ReadOnlyOnboardingState
-        @Shared(.contacts) var contactsState: ReadOnlyContactsState
-        @Shared(.userState) var userState: ReadOnlyUserState
-        
-        // Network connectivity (TODO: move to NetworkClient)
-        @Shared(.isNetworkConnected) var isNetworkConnected: Bool = true
+        @Shared(.authenticationInternalState) var authState: AuthClientState
+        @Shared(.onboardingInternalState) var onboardingState: OnboardingClientState
+        @Shared(.contactsInternalState) var contactsState: ContactsClientState
+        @Shared(.userInternalState) var userState: UserClientState
+        @Shared(.networkInternalState) var networkState: NetworkClientState
 
         var isActive: Bool = true
         var error: String? = nil
@@ -103,7 +96,7 @@ struct ApplicationFeature {
              (authState.authenticationToken != nil || onboardingState.needsOnboarding || onboardingState.hasUserProfile))
         }
         var hasValidSession: Bool { authState.authState.isAuthenticated && authState.authenticationToken != nil && userState.currentUser != nil }
-        var isOnline: Bool { isNetworkConnected }
+        var isOnline: Bool { networkState.isConnected }
         
         // Computed properties for tab badges
         var alertingContactsCount: Int {
@@ -184,11 +177,13 @@ struct ApplicationFeature {
     }
 
     // ApplicationFeature orchestrates session management and tab coordination
+    // Enhanced: Uses ReducerContext for architectural validation
     @Dependency(\.authenticationClient) var authenticationClient
     @Dependency(\.onboardingClient) var onboardingClient
     @Dependency(\.userClient) var userClient
     @Dependency(\.contactsClient) var contactsClient
     @Dependency(\.notificationClient) var notificationClient
+    @Dependency(\.networkClient) var networkClient
     @Dependency(\.hapticClient) var haptics
 
     init() {}
@@ -251,7 +246,14 @@ struct ApplicationFeature {
                 return .none
 
             case .appWillTerminate:
-                return .none
+                return .run { _ in
+                    do {
+                        try await networkClient.stopNetworkMonitoring()
+                    } catch {
+                        // Log error but don't block app termination
+                        print("Failed to stop network monitoring: \(error)")
+                    }
+                }
 
             case .clearError:
                 state.error = nil
@@ -398,14 +400,17 @@ struct ApplicationFeature {
                 
             case .startNetworkMonitoring:
                 return .run { send in
-                    // TODO: Implement network monitoring
-                    // This would typically use NetworkClient for monitoring connectivity
-                    await send(.networkStatusChanged(true))
+                    do {
+                        try await networkClient.startNetworkMonitoring()
+                    } catch {
+                        // Log network monitoring error but don't crash the app
+                        print("Failed to start network monitoring: \(error)")
+                    }
                 }
                 
             case .networkStatusChanged(let isConnected):
-                let wasConnected = state.isNetworkConnected
-                state.$isNetworkConnected.withLock { $0 = isConnected }
+                let wasConnected = state.networkState.isConnected
+                // Network state is now managed by NetworkClient, this action may be deprecated
                 
                 return .run { [wasConnected] send in
                     // Show system notification for connection state changes

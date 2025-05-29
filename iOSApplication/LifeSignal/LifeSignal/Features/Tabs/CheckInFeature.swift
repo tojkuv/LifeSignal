@@ -11,12 +11,13 @@ private enum CheckInCancelID {
     case activationAnimation
 }
 
+@LifeSignalFeature
 @Reducer
-struct CheckInFeature {
+struct CheckInFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     @ObservableState
     struct State: Equatable {
-        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
-        @Shared(.userState) var userState: ReadOnlyUserState
+        @Shared(.authenticationInternalState) var authState: AuthClientState
+        @Shared(.userInternalState) var userState: UserClientState
         
         var currentUser: User? { userState.currentUser }
         

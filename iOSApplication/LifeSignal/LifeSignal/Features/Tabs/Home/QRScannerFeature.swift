@@ -7,12 +7,13 @@ import Photos
 import ComposableArchitecture
 import Perception
 
+@LifeSignalFeature
 @Reducer
-struct QRScannerFeature {
+struct QRScannerFeature: FeatureContext {
     @ObservableState
     struct State: Equatable {
-        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
-        @Shared(.userState) var userState: ReadOnlyUserState
+        @Shared(.authenticationInternalState) var authState: AuthClientState
+        @Shared(.userInternalState) var userState: UserClientState
         
         var currentUser: User? { userState.currentUser }
         
@@ -67,6 +68,12 @@ struct QRScannerFeature {
         var canSubmitManualCode: Bool {
             !manualQRCode.isEmpty && isValidQRCodeFormat(manualQRCode)
         }
+        
+        var formattedContactPhoneNumber: String {
+            // This computed property provides formatted phone number access to views
+            // It will use the phoneNumberFormatter dependency available in the feature
+            return contact.phoneNumber.isEmpty ? "No phone number" : contact.phoneNumber
+        }
 
         func isValidQRCodeFormat(_ text: String) -> Bool {
             // Check if it's a valid UUID format
@@ -112,6 +119,7 @@ struct QRScannerFeature {
         case permissionResponse(AVAuthorizationStatus)
         case codeProcessingResponse(Result<Contact, Error>)
         case contactAddResponse(Result<Contact, Error>)
+        case formatContactPhoneNumber
         
         // Missing actions
         case showNoQRCodeAlert(Bool)
@@ -265,6 +273,15 @@ struct QRScannerFeature {
             
         case let .processImageForQRCode(image):
             return processImageForQRCodeEffect(state: &state, image: image)
+            
+        case .formatContactPhoneNumber:
+            // Format the phone number for display using the phoneNumberFormatter dependency
+            // This action is called when contact data is received to prepare it for display
+            if !state.contact.phoneNumber.isEmpty {
+                let formattedNumber = phoneNumberFormatter.formatPhoneNumberForDisplay(state.contact.phoneNumber)
+                state.contact.phoneNumber = formattedNumber
+            }
+            return .none
         }
     }
     
@@ -456,7 +473,7 @@ struct QRScannerFeature {
         state.isLoading = false
         state.contact = contact
         state.showAddContactSheet = true
-        return .none
+        return .send(.formatContactPhoneNumber)
     }
     
     private func codeProcessingFailureEffect(state: inout State, error: Error) -> Effect<Action> {
@@ -643,13 +660,12 @@ struct CameraPreviewView: UIViewRepresentable {
 
 
 /// A SwiftUI view for scanning QR codes
-struct QRScannerView: View {
+@LifeSignalView
+struct QRScannerView: View, ViewContext {
     // MARK: - Properties
 
     /// The TCA store for the QR scanner
     @Bindable var store: StoreOf<QRScannerFeature>
-    
-    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
 
     // MARK: - Body
 
@@ -748,7 +764,7 @@ struct QRScannerView: View {
                                 .multilineTextAlignment(.center)
 
                             // Phone field - now non-editable with formatting
-                            Text(store.contact.phoneNumber.isEmpty ? "No phone number" : phoneNumberFormatter.formatPhoneNumberForDisplay(store.contact.phoneNumber))
+                            Text(store.formattedContactPhoneNumber)
                                 .font(.subheadline)
                                 .multilineTextAlignment(.center)
                                 .foregroundColor(.secondary)

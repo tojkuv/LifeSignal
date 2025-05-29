@@ -6,15 +6,47 @@ import Perception
 import UIKit
 
 
+@LifeSignalFeature
 @Reducer
-struct ProfileFeature {
+struct ProfileFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     @ObservableState
     struct State: Equatable {
-        @Shared(.userState) var userState: ReadOnlyUserState
-        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
+        @Shared(.userInternalState) var userState: UserClientState
+        @Shared(.authenticationInternalState) var authState: AuthClientState
         
         var currentUser: User? { userState.currentUser }
         var avatarImageData: AvatarImageWithMetadata? { userState.avatarImage }
+        
+        // Computed properties for formatted phone numbers
+        var displayPhoneNumber: String {
+            guard let user = currentUser, !user.phoneNumber.isEmpty else {
+                return "(954) 234-5678"
+            }
+            // Basic formatting - ideally this would be handled by the reducer with proper dependency injection
+            let digitsOnly = user.phoneNumber.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+            if digitsOnly.count == 10 {
+                let areaCode = String(digitsOnly.prefix(3))
+                let middle = String(digitsOnly.dropFirst(3).prefix(3))
+                let last = String(digitsOnly.suffix(4))
+                return "(\(areaCode)) \(middle)-\(last)"
+            }
+            return user.phoneNumber
+        }
+        
+        var detailPhoneNumber: String {
+            guard let user = currentUser, !user.phoneNumber.isEmpty else {
+                return "+1 (954) 234-5678" 
+            }
+            // Basic formatting - ideally this would be handled by the reducer with proper dependency injection
+            let digitsOnly = user.phoneNumber.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+            if digitsOnly.count == 10 {
+                let areaCode = String(digitsOnly.prefix(3))
+                let middle = String(digitsOnly.dropFirst(3).prefix(3))
+                let last = String(digitsOnly.suffix(4))
+                return "+1 (\(areaCode)) \(middle)-\(last)"
+            }
+            return user.phoneNumber
+        }
         
         
         // Sheet states to match mock UI
@@ -597,9 +629,6 @@ struct ProfileView: View {
     @FocusState private var nameFieldFocused: Bool
     @State private var textEditorHeight: CGFloat = 72
     
-    @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
-
-
     @ViewBuilder
     private func profileHeader() -> some View {
         VStack(spacing: 16) {
@@ -616,7 +645,7 @@ struct ProfileView: View {
                 .padding(.top)
                 Text(user.name)
                     .font(.headline)
-                Text(user.phoneNumber.isEmpty ? "(954) 234-5678" : phoneNumberFormatter.formatPhoneNumberForDisplay(user.phoneNumber))
+                Text(store.displayPhoneNumber)
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
@@ -1034,7 +1063,7 @@ extension ProfileView {
                 .font(.headline)
                 .padding(.horizontal, 4)
 
-            Text(store.currentUser?.phoneNumber.isEmpty == false ? phoneNumberFormatter.formatPhoneNumberWithRegionCode(store.currentUser!.phoneNumber) : "+1 (954) 234-5678")
+            Text(store.detailPhoneNumber)
                 .font(.body)
                 .padding(.vertical, 12)
                 .padding(.horizontal)

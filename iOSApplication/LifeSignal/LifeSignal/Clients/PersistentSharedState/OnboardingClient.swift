@@ -6,8 +6,7 @@ import DependenciesMacros
 
 // MARK: - Onboarding Shared State
 
-// 1. Mutable internal state (private to Client)
-struct OnboardingInternalState: Equatable, Codable {
+struct OnboardingClientState: Equatable, Codable {
     var needsOnboarding: Bool
     var hasUserProfile: Bool
     var currentStep: OnboardingStep
@@ -26,92 +25,11 @@ struct OnboardingInternalState: Equatable, Codable {
     }
 }
 
-// 2. Read-only wrapper (prevents direct mutation)
-struct ReadOnlyOnboardingState: Equatable, Codable {
-    private let _state: OnboardingInternalState
-    
-    // 🔑 Only Client can access this init (same file = fileprivate access)
-    fileprivate init(_ state: OnboardingInternalState) {
-        self._state = state
-    }
-    
-    // MARK: - Codable Implementation (Preserves Ownership Pattern)
-    
-    private enum CodingKeys: String, CodingKey {
-        case state = "_state"
-    }
-    
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let state = try container.decode(OnboardingInternalState.self, forKey: .state)
-        self.init(state)  // Uses fileprivate init - ownership preserved ✅
-    }
-    
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(_state, forKey: .state)
-    }
-    
-    // Read-only accessors
-    var needsOnboarding: Bool { _state.needsOnboarding }
-    var hasUserProfile: Bool { _state.hasUserProfile }
-    var currentStep: OnboardingStep { _state.currentStep }
-    var isCompleted: Bool { _state.isCompleted }
-}
+// MARK: - Clean Shared Key Implementation (FileStorage)
 
-// MARK: - RawRepresentable Conformance for AppStorage (Preserves Ownership)
-
-extension ReadOnlyOnboardingState: RawRepresentable {
-    typealias RawValue = String
-    
-    var rawValue: String {
-        // Use a static encoder to avoid creating new instances repeatedly
-        struct EncoderHolder {
-            static let encoder: JSONEncoder = {
-                let encoder = JSONEncoder()
-                encoder.dateEncodingStrategy = .iso8601
-                return encoder
-            }()
-        }
-        
-        do {
-            let data = try EncoderHolder.encoder.encode(self)
-            guard let jsonString = String(data: data, encoding: .utf8) else {
-                return ""
-            }
-            return jsonString
-        } catch {
-            return ""
-        }
-    }
-    
-    init?(rawValue: String) {
-        guard !rawValue.isEmpty else { return nil }
-        
-        guard let data = rawValue.data(using: .utf8) else { 
-            return nil 
-        }
-        
-        // Use a static decoder to avoid creating new instances repeatedly
-        struct DecoderHolder {
-            static let decoder: JSONDecoder = {
-                let decoder = JSONDecoder()
-                decoder.dateDecodingStrategy = .iso8601
-                return decoder
-            }()
-        }
-        
-        do {
-            self = try DecoderHolder.decoder.decode(ReadOnlyOnboardingState.self, from: data)
-        } catch {
-            return nil
-        }
-    }
-}
-
-extension SharedReaderKey where Self == AppStorageKey<ReadOnlyOnboardingState>.Default {
+extension SharedReaderKey where Self == FileStorageKey<OnboardingClientState>.Default {
     static var onboardingInternalState: Self {
-        Self[.appStorage("onboardingInternalState"), default: ReadOnlyOnboardingState(OnboardingInternalState())]
+        Self[.fileStorage(.documentsDirectory.appending(component: "onboardingInternalState.json")), default: OnboardingClientState()]
     }
 }
 
@@ -180,8 +98,9 @@ enum OnboardingClientError: Error, LocalizedError {
 /// - User profile creation and completion tracking
 /// - Onboarding state persistence and restoration
 /// - Integration with UserClient for profile data management
+@LifeSignalClient
 @DependencyClient
-struct OnboardingClient {
+struct OnboardingClient: ClientContext {
     
     // MARK: - Onboarding Flow Management
     
@@ -231,12 +150,13 @@ extension OnboardingClient: DependencyKey {
         
         // Onboarding flow management
         startOnboarding: {
-            Self.updateOnboardingState(
-                needsOnboarding: true,
-                hasUserProfile: false,
-                currentStep: .profileSetup,
-                isCompleted: false
-            )
+            @Shared(.onboardingInternalState) var onboardingState
+            $onboardingState.withLock { state in
+                state.needsOnboarding = true
+                state.hasUserProfile = false
+                state.currentStep = .profileSetup
+                state.isCompleted = false
+            }
         },
         
         completeUserProfile: { firstName, lastName, emergencyNote, checkInInterval, reminderMinutes, biometricAuthEnabled in
@@ -244,12 +164,13 @@ extension OnboardingClient: DependencyKey {
             // ApplicationFeature should validate authentication and handle UserClient calls
             
             // Mark that the user now has a profile - this is OnboardingClient's responsibility
-            Self.updateOnboardingState(
-                needsOnboarding: true, // Still in onboarding until explicitly completed
-                hasUserProfile: true,
-                currentStep: .completed,
-                isCompleted: false
-            )
+            @Shared(.onboardingInternalState) var onboardingState
+            $onboardingState.withLock { state in
+                state.needsOnboarding = true // Still in onboarding until explicitly completed
+                state.hasUserProfile = true
+                state.currentStep = .completed
+                state.isCompleted = false
+            }
         },
         
         completeOnboarding: {
@@ -260,21 +181,22 @@ extension OnboardingClient: DependencyKey {
                 throw OnboardingClientError.profileCreationFailed
             }
             
-            Self.updateOnboardingState(
-                needsOnboarding: false,
-                hasUserProfile: true,
-                currentStep: .completed,
-                isCompleted: true
-            )
+            $onboardingState.withLock { state in
+                state.needsOnboarding = false
+                state.hasUserProfile = true
+                state.currentStep = .completed
+                state.isCompleted = true
+            }
         },
         
         resetOnboarding: {
-            Self.updateOnboardingState(
-                needsOnboarding: true,
-                hasUserProfile: false,
-                currentStep: .profileSetup,
-                isCompleted: false
-            )
+            @Shared(.onboardingInternalState) var onboardingState
+            $onboardingState.withLock { state in
+                state.needsOnboarding = true
+                state.hasUserProfile = false
+                state.currentStep = .profileSetup
+                state.isCompleted = false
+            }
         },
         
         // Onboarding state
@@ -324,7 +246,13 @@ extension OnboardingClient: DependencyKey {
         },
         
         clearOnboardingState: {
-            Self.clearOnboardingState()
+            @Shared(.onboardingInternalState) var onboardingState
+            $onboardingState.withLock { state in
+                state.needsOnboarding = false
+                state.hasUserProfile = false
+                state.currentStep = .profileSetup
+                state.isCompleted = false
+            }
         }
     )
 }
@@ -332,62 +260,7 @@ extension OnboardingClient: DependencyKey {
 // MARK: - OnboardingClient Helper Methods
 
 extension OnboardingClient {
-    
-    /// Updates onboarding state using unified state pattern
-    static func updateOnboardingState(
-        needsOnboarding: Bool,
-        hasUserProfile: Bool,
-        currentStep: OnboardingStep,
-        isCompleted: Bool
-    ) {
-        // Ensure this runs on main thread to prevent memory access violations
-        if Thread.isMainThread {
-            updateOnboardingStateSync(
-                needsOnboarding: needsOnboarding,
-                hasUserProfile: hasUserProfile,
-                currentStep: currentStep,
-                isCompleted: isCompleted
-            )
-        } else {
-            DispatchQueue.main.sync {
-                updateOnboardingStateSync(
-                    needsOnboarding: needsOnboarding,
-                    hasUserProfile: hasUserProfile,
-                    currentStep: currentStep,
-                    isCompleted: isCompleted
-                )
-            }
-        }
-    }
-    
-    /// Synchronously updates onboarding state - must be called on main thread
-    private static func updateOnboardingStateSync(
-        needsOnboarding: Bool,
-        hasUserProfile: Bool,
-        currentStep: OnboardingStep,
-        isCompleted: Bool
-    ) {
-        @Shared(.onboardingInternalState) var sharedOnboardingState
-        
-        // Update shared state using read-only wrapper pattern
-        let mutableState = OnboardingInternalState(
-            needsOnboarding: needsOnboarding,
-            hasUserProfile: hasUserProfile,
-            currentStep: currentStep,
-            isCompleted: isCompleted
-        )
-        $sharedOnboardingState.withLock { $0 = ReadOnlyOnboardingState(mutableState) }
-    }
-    
-    /// Clears all onboarding state
-    static func clearOnboardingState() {
-        Self.updateOnboardingState(
-            needsOnboarding: false,
-            hasUserProfile: false,
-            currentStep: .profileSetup,
-            isCompleted: false
-        )
-    }
+    // Helper methods removed - using direct $state.withLock pattern for thread safety
 }
 
 extension DependencyValues {
