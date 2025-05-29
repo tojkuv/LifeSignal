@@ -39,6 +39,7 @@ struct OnboardingFeature {
         var showBiometricAuthError = false
         var biometricAuthErrorMessage: String? = nil
         var showPermissionAlert = false
+        var isBiometricAuthLoading: Bool = false
 
         var progress: Double {
             Double(currentStep) / 4.0  // 5 steps total (0-4)
@@ -126,9 +127,10 @@ struct OnboardingFeature {
         case openSettings
     }
 
-    // Features use clients for business logic, SessionClient orchestrates other clients
-    @Dependency(\.sessionClient) var sessionClient
-    @Dependency(\.biometricClient) var biometricClient
+    // OnboardingFeature only uses OnboardingClient for shared state
+    // PureUtilities clients are allowed for UI/device functionality
+    @Dependency(\.onboardingClient) var onboardingClient
+    @Dependency(\.biometricClient) var biometricClient  // PureUtility for device capability checks
 
     var body: some ReducerOf<Self> {
         BindingReducer()
@@ -159,7 +161,6 @@ struct OnboardingFeature {
                     state.checkInInterval = state.getComputedIntervalInSeconds()
                 }
                 if state.currentStep < 4 {
-                    let previousStep = state.currentStep
                     state.currentStep += 1
                     // Focus appropriate field when moving to emergency note step
                     if state.currentStep == 1 {
@@ -188,14 +189,8 @@ struct OnboardingFeature {
                 return .none
 
             case .cancelOnboarding:
-                // Cancel onboarding and return to sign-in
-                return .run { send in
-                    do {
-                        try await sessionClient.endSession()
-                    } catch {
-                        // Handle error silently
-                    }
-                }
+                // Cancel onboarding - ApplicationFeature will handle sign out
+                return .none
 
             case .completeOnboarding:
                 state.isLoading = true
@@ -203,60 +198,39 @@ struct OnboardingFeature {
                 // Ensure checkInInterval is set from picker values
                 state.checkInInterval = state.getComputedIntervalInSeconds()
                 
-                return .run { send in
-                    await send(.createUserProfile)
-                }
-
-            case .createUserProfile:
-                return .run { [
-                    firstName = state.firstName, 
-                    lastName = state.lastName, 
-                    emergencyNote = state.emergencyNote,
-                    checkInInterval = state.checkInInterval,
-                    reminderMinutes = state.reminderMinutesBefore,
-                    biometricAuth = state.biometricAuthEnabled
-                ] send in
+                // First complete the user profile in OnboardingClient, then mark onboarding complete
+                return .run { [firstName = state.firstName, lastName = state.lastName, emergencyNote = state.emergencyNote, checkInInterval = state.checkInInterval, reminderMinutes = state.reminderMinutesBefore, biometricEnabled = state.biometricAuthEnabled] send in
                     do {
-                        try await sessionClient.completeUserProfile(
-                            firstName, 
+                        // Mark that user has completed profile setup
+                        try await onboardingClient.completeUserProfile(
+                            firstName,
                             lastName, 
                             emergencyNote,
                             checkInInterval,
                             reminderMinutes,
-                            biometricAuth
+                            biometricEnabled
                         )
-                        await send(.userProfileCreatedSuccess)
+                        
+                        // Then mark onboarding as complete
+                        try await onboardingClient.completeOnboarding()
+                        await send(.onboardingCompleted)
                     } catch {
-                        await send(.userProfileCreatedFailure(error.localizedDescription))
+                        // Handle error silently, onboarding completion should still proceed
+                        await send(.onboardingCompleted)
                     }
                 }
+
+            case .createUserProfile:
+                // This action is no longer used - ApplicationFeature handles user creation
+                return .none
 
             case .userProfileCreatedSuccess:
-                state.isLoading = false
-                
-                return .run { send in
-                    do {
-                        try await sessionClient.completeOnboarding()
-                        await send(.onboardingCompleted)
-                    } catch {
-                        // Handle error silently, onboarding completion should still proceed
-                        await send(.onboardingCompleted)
-                    }
-                }
+                // This action is no longer used - ApplicationFeature handles user creation
+                return .none
 
-            case let .userProfileCreatedFailure(errorMessage):
-                state.isLoading = false
-                // For now, we'll proceed with onboarding completion even if profile creation fails
-                // In a production app, you might want to show an error and retry
-                return .run { send in
-                    do {
-                        try await sessionClient.completeOnboarding()
-                        await send(.onboardingCompleted)
-                    } catch {
-                        // Handle error silently, onboarding completion should still proceed
-                        await send(.onboardingCompleted)
-                    }
-                }
+            case .userProfileCreatedFailure:
+                // This action is no longer used - ApplicationFeature handles user creation
+                return .none
 
             // case .handleInstructionsDismissal:
             //     state.showInstructions = false
@@ -319,16 +293,18 @@ struct OnboardingFeature {
                 state.reminderMinutesBefore = minutes
                 return .none
                 
-            // Biometric auth
+            // Biometric auth - OnboardingFeature tests permission and collects preference
             case let .setBiometricAuth(enabled):
                 if enabled {
                     if state.biometricType != .none {
-                        // Biometrics are available, require authentication confirmation
-                        return .send(.requestBiometricAuth)
+                        // Device supports biometrics, test authentication first
+                        return .run { send in
+                            await send(.requestBiometricAuth)
+                        }
                     } else if state.isBiometricCapable {
                         // Device has biometric hardware but it's disabled/not enrolled
                         state.showPermissionAlert = true
-                        state.biometricAuthErrorMessage = "Biometric authentication is not enabled. Please set it up in Settings."
+                        state.biometricAuthErrorMessage = "Biometric authentication is not enabled. Please set it up in Settings first."
                         return .none
                     } else {
                         // Device doesn't support biometrics
@@ -343,43 +319,54 @@ struct OnboardingFeature {
                 }
                 
             case .requestBiometricAuth:
+                // Test biometric authentication to verify it's enabled and working
+                state.isBiometricAuthLoading = true
                 return .run { send in
-                    await send(.biometricAuthResult(Result {
-                        try await biometricClient.authenticate("Confirm biometric authentication to enable secure actions")
-                    }))
+                    do {
+                        let success = try await biometricClient.authenticateWithPermissionRequest(
+                            "Enable biometric authentication for secure actions in LifeSignal"
+                        )
+                        await send(.biometricAuthResult(.success(success)))
+                    } catch {
+                        await send(.biometricAuthResult(.failure(error)))
+                    }
                 }
                 
-            case let .biometricAuthResult(.success(authenticated)):
+            case .biometricAuthResult(.success(let authenticated)):
+                state.isBiometricAuthLoading = false
                 if authenticated {
+                    // Authentication succeeded, enable biometric auth
                     state.biometricAuthEnabled = true
+                } else {
+                    // Authentication failed, don't enable
+                    state.biometricAuthEnabled = false
+                    state.showBiometricAuthError = true
+                    state.biometricAuthErrorMessage = "Biometric authentication failed. Please try again."
                 }
                 return .none
                 
-            case let .biometricAuthResult(.failure(error)):
+            case .biometricAuthResult(.failure(let error)):
+                // Authentication failed, don't enable and show appropriate error
+                state.isBiometricAuthLoading = false
                 state.biometricAuthEnabled = false
                 if let biometricError = error as? BiometricClientError {
                     switch biometricError {
-                    case .permissionDenied, .notAvailable, .notEnrolled:
+                    case .userCancel:
+                        // User cancelled, don't show error
+                        return .none
+                    case .notEnrolled:
                         state.showPermissionAlert = true
-                        state.biometricAuthErrorMessage = "Biometric authentication is not available or disabled. Please enable it in Settings."
+                        state.biometricAuthErrorMessage = "Biometric authentication is not enrolled. Please set it up in Settings first."
                     case .biometryLocked:
                         state.showBiometricAuthError = true
-                        state.biometricAuthErrorMessage = "Biometric authentication is temporarily locked due to too many failed attempts. Please wait and try again, or use your device passcode."
-                    case .userCancel:
-                        // User cancelled - just show normal error
-                        state.biometricAuthErrorMessage = "Authentication was cancelled"
-                        state.showBiometricAuthError = true
-                    case .authenticationFailed:
-                        // Authentication failed - offer to try again or go to settings
-                        state.showPermissionAlert = true
-                        state.biometricAuthErrorMessage = "Authentication failed. Try again or enable biometric authentication in Settings."
+                        state.biometricAuthErrorMessage = biometricError.errorDescription
                     default:
-                        state.biometricAuthErrorMessage = error.localizedDescription
                         state.showBiometricAuthError = true
+                        state.biometricAuthErrorMessage = biometricError.errorDescription
                     }
                 } else {
-                    state.biometricAuthErrorMessage = error.localizedDescription
                     state.showBiometricAuthError = true
+                    state.biometricAuthErrorMessage = "Biometric authentication failed: \(error.localizedDescription)"
                 }
                 return .none
                 
@@ -390,11 +377,7 @@ struct OnboardingFeature {
                 
             case .requestPermissionAndRetry:
                 state.showPermissionAlert = false
-                return .run { send in
-                    await send(.biometricAuthResult(Result {
-                        try await biometricClient.authenticate("Enable biometric authentication for secure actions")
-                    }))
-                }
+                return .none
                 
             case .openSettings:
                 state.showPermissionAlert = false
@@ -416,23 +399,15 @@ struct OnboardingFeature {
                 
 
             case .onboardingCompleted:
-                // Clear onboarding fields after completion
-                state.currentStep = 0
-                state.firstName = ""
-                state.lastName = ""
-                state.emergencyNote = ""
-                state.checkInInterval = 86400  // Reset to default
-                state.reminderMinutesBefore = 30
-                state.biometricAuthEnabled = false
-                state.biometricType = .none
-                state.isBiometricCapable = false
-                state.showBiometricAuthError = false
-                state.biometricAuthErrorMessage = nil
-                state.showPermissionAlert = false
-                state.intervalPickerUnit = "days"
-                state.intervalPickerValue = 1
+                // Mark onboarding as complete and persist the state
                 state.isLoading = false
-                return .none
+                return .run { send in
+                    do {
+                        try await onboardingClient.completeOnboarding()
+                    } catch {
+                        // Handle error silently - onboarding completion failed
+                    }
+                }
             }
         }
     }
@@ -773,7 +748,9 @@ struct OnboardingView: View {
                             Text("Biometric Authentication")
                                 .font(.body)
                                 .foregroundColor(.primary)
-                            Text(store.biometricType != .none 
+                            Text(store.isBiometricAuthLoading
+                                 ? "Authenticating..."
+                                 : store.biometricType != .none 
                                  ? "Enable \(store.biometricType.displayName) for secure actions"
                                  : store.isBiometricCapable 
                                  ? "Enable biometric authentication for secure actions" 
@@ -793,7 +770,7 @@ struct OnboardingView: View {
                             }
                         ))
                         .labelsHidden()
-                        .disabled(!store.isBiometricCapable)
+                        .disabled(!store.isBiometricCapable || store.isBiometricAuthLoading)
                     }
                     .padding()
                     .background(Color(UIColor.secondarySystemGroupedBackground))

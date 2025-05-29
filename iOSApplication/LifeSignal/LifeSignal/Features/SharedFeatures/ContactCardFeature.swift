@@ -5,31 +5,31 @@ import Perception
 
 // MARK: - Contact Card Feature
 
+enum ContactCardStyle: Equatable {
+    case responder(statusText: String)
+    case dependent(statusText: String, statusColor: Color)
+    
+    var hasFlashingAnimation: Bool {
+        switch self {
+        case .responder:
+            return false
+        case .dependent:
+            return true
+        }
+    }
+}
+
 @Reducer
 struct ContactCardFeature {
     @ObservableState
     struct State: Equatable, Identifiable {
         let contact: Contact
-        let style: CardStyle
+        let style: ContactCardStyle
         var id: String { contact.id.uuidString }
         
-        init(contact: Contact, style: CardStyle) {
+        init(contact: Contact, style: ContactCardStyle) {
             self.contact = contact
             self.style = style
-        }
-        
-        enum CardStyle: Equatable {
-            case responder(statusText: String)
-            case dependent(statusText: String, statusColor: Color)
-            
-            var hasFlashingAnimation: Bool {
-                switch self {
-                case .responder:
-                    return false
-                case .dependent:
-                    return true
-                }
-            }
         }
         
         // MARK: - Computed Properties

@@ -178,9 +178,316 @@ struct Notification_Proto: Sendable {
     }
 }
 
-// MARK: - Mock gRPC Service
+// MARK: - Mock Notification Backend Service
 
-final class MockNotificationService: NotificationServiceProtocol {
+/// Simple mock backend for notification data persistence
+final class MockNotificationBackendService: Sendable {
+    
+    // Simple data storage keys
+    private static let notificationsKey = "MockNotificationBackend_Notifications"
+    
+    // MARK: - Data Persistence
+    
+    private func getStoredNotifications() -> [NotificationItem] {
+        guard let data = UserDefaults.standard.data(forKey: Self.notificationsKey),
+              let decoded = try? JSONDecoder().decode([NotificationItem].self, from: data) else {
+            return []
+        }
+        return decoded
+    }
+    
+    private func storeNotifications(_ notifications: [NotificationItem]) {
+        guard let data = try? JSONEncoder().encode(notifications) else { return }
+        UserDefaults.standard.set(data, forKey: Self.notificationsKey)
+    }
+    
+    // MARK: - Simple Operations
+    
+    func getNotifications() -> [NotificationItem] {
+        let stored = getStoredNotifications()
+        if stored.isEmpty {
+            // Return mock notifications if none stored
+            return createMockNotifications()
+        }
+        return stored
+    }
+    
+    func addNotification(_ notification: NotificationItem) {
+        var notifications = getStoredNotifications()
+        notifications.insert(notification, at: 0) // Add to beginning for chronological order
+        storeNotifications(notifications)
+    }
+    
+    func updateNotification(_ notification: NotificationItem) {
+        var notifications = getStoredNotifications()
+        if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
+            notifications[index] = notification
+            storeNotifications(notifications)
+        }
+    }
+    
+    func deleteNotification(id: UUID) {
+        var notifications = getStoredNotifications()
+        notifications.removeAll { $0.id == id }
+        storeNotifications(notifications)
+    }
+    
+    func markAsRead(id: UUID) {
+        var notifications = getStoredNotifications()
+        if let index = notifications.firstIndex(where: { $0.id == id }) {
+            var updatedNotification = notifications[index]
+            updatedNotification.isRead = true
+            notifications[index] = updatedNotification
+            storeNotifications(notifications)
+        }
+    }
+    
+    func markAllAsRead() {
+        var notifications = getStoredNotifications()
+        notifications = notifications.map { notification in
+            var updated = notification
+            updated.isRead = true
+            return updated
+        }
+        storeNotifications(notifications)
+    }
+    
+    func clearNotificationsByType(_ type: NotificationType) {
+        var notifications = getStoredNotifications()
+        notifications.removeAll { $0.type == type }
+        storeNotifications(notifications)
+    }
+    
+    private func createMockNotifications() -> [NotificationItem] {
+        let mockNotifications = [
+            NotificationItem(
+                id: UUID(uuidString: "88888888-8888-8888-8888-888888888001")!,
+                title: "Check-in Request Received",
+                message: "Sarah Johnson sent you a check-in request - tap to respond",
+                timestamp: Date().addingTimeInterval(-1800), // 30 minutes ago
+                isRead: false,
+                type: .receiveResponderPing,
+                contactId: UUID(uuidString: "99999999-9999-9999-9999-999999999001")!
+            ),
+            NotificationItem(
+                id: UUID(uuidString: "88888888-8888-8888-8888-888888888002")!,
+                title: "Contact Added",
+                message: "John Doe has been added to your emergency response network",
+                timestamp: Date().addingTimeInterval(-3600), // 1 hour ago
+                isRead: true,
+                type: .receiveContactAdded,
+                contactId: UUID(uuidString: "99999999-9999-9999-9999-999999999001")!
+            ),
+            NotificationItem(
+                id: UUID(uuidString: "88888888-8888-8888-8888-888888888003")!,
+                title: "Settings Saved",
+                message: "Your notification preferences have been updated successfully",
+                timestamp: Date().addingTimeInterval(-7200), // 2 hours ago
+                isRead: true,
+                type: .receiveSystemNotificationSuccess
+            )
+        ]
+        
+        storeNotifications(mockNotifications)
+        return mockNotifications
+    }
+    
+    // Helper method to clear all backend data for testing
+    static func clearAllBackendData() {
+        UserDefaults.standard.removeObject(forKey: notificationsKey)
+    }
+}
+
+// MARK: - Simple Notification Service Protocol
+
+protocol SimpleNotificationServiceProtocol: Sendable {
+    func getNotifications(userId: UUID, authToken: String) async throws -> [NotificationItem]
+    func addNotification(title: String, message: String, type: NotificationType, userId: UUID, authToken: String, contactId: UUID?) async throws -> NotificationItem
+    func updateNotification(_ notification: NotificationItem, authToken: String) async throws -> NotificationItem
+    func markAsRead(id: UUID, authToken: String) async throws
+    func markAllAsRead(authToken: String) async throws
+    func clearNotificationsByType(_ type: NotificationType, authToken: String) async throws
+    static func clearAllMockData()
+}
+
+// MARK: - Mock Notification Service (Simple interface)
+
+final class MockNotificationService: SimpleNotificationServiceProtocol, Sendable {
+    
+    private let backend = MockNotificationBackendService()
+    
+    func getNotifications(userId: UUID, authToken: String) async throws -> [NotificationItem] {
+        try await Task.sleep(for: .milliseconds(500))
+        return backend.getNotifications()
+    }
+    
+    func addNotification(title: String, message: String, type: NotificationType, userId: UUID, authToken: String, contactId: UUID? = nil) async throws -> NotificationItem {
+        try await Task.sleep(for: .milliseconds(300))
+        
+        let newNotification = NotificationItem(
+            title: title,
+            message: message,
+            type: type,
+            contactId: contactId,
+            userId: userId
+        )
+        
+        backend.addNotification(newNotification)
+        return newNotification
+    }
+    
+    func updateNotification(_ notification: NotificationItem, authToken: String) async throws -> NotificationItem {
+        try await Task.sleep(for: .milliseconds(200))
+        backend.updateNotification(notification)
+        return notification
+    }
+    
+    func markAsRead(id: UUID, authToken: String) async throws {
+        try await Task.sleep(for: .milliseconds(200))
+        backend.markAsRead(id: id)
+    }
+    
+    func markAllAsRead(authToken: String) async throws {
+        try await Task.sleep(for: .milliseconds(400))
+        backend.markAllAsRead()
+    }
+    
+    func clearNotificationsByType(_ type: NotificationType, authToken: String) async throws {
+        try await Task.sleep(for: .milliseconds(300))
+        backend.clearNotificationsByType(type)
+    }
+    
+    // Helper method to clear all mock data for testing
+    static func clearAllMockData() {
+        MockNotificationBackendService.clearAllBackendData()
+    }
+}
+
+// MARK: - Mock gRPC Adapter (converts simple service to gRPC protocol)
+
+final class MockNotificationServiceGRPCAdapter: NotificationServiceProtocol, Sendable {
+    
+    private let simpleService = MockNotificationService()
+    
+    func getNotifications(_ request: GetNotificationsRequest) async throws -> GetNotificationsResponse {
+        let notifications = try await simpleService.getNotifications(userId: request.userId, authToken: request.authToken)
+        let notificationProtos = notifications.map { $0.toProto() }
+        return GetNotificationsResponse(notifications: notificationProtos)
+    }
+    
+    func addNotification(_ request: AddNotificationRequest) async throws -> Notification_Proto {
+        let notification = try await simpleService.addNotification(
+            title: request.title,
+            message: request.message,
+            type: request.type,
+            userId: request.userId,
+            authToken: request.authToken,
+            contactId: request.contactId
+        )
+        return notification.toProto()
+    }
+    
+    func markAsRead(_ request: MarkNotificationRequest) async throws -> MarkNotificationReadResponse {
+        try await simpleService.markAsRead(id: request.notificationId, authToken: request.authToken)
+        
+        // Mock finding and updating the notification
+        let updatedNotification = NotificationItem(
+            id: request.notificationId,
+            title: "Mock Notification",
+            message: "This notification has been marked as read",
+            isRead: true
+        )
+        
+        return MarkNotificationReadResponse(notification: updatedNotification)
+    }
+    
+    func markAllAsRead(_ request: MarkAllNotificationsReadRequest) async throws -> Empty_Proto {
+        try await simpleService.markAllAsRead(authToken: request.authToken)
+        return Empty_Proto()
+    }
+    
+    func clearNotificationsByType(_ request: ClearNotificationsByTypeRequest) async throws -> Empty_Proto {
+        try await simpleService.clearNotificationsByType(request.type, authToken: request.authToken)
+        return Empty_Proto()
+    }
+    
+    func sendNotification(_ request: SendNotificationRequest) async throws -> Empty_Proto {
+        try await Task.sleep(for: .milliseconds(250))
+        return Empty_Proto()
+    }
+    
+    func scheduleNotification(_ request: ScheduleNotificationRequest) async throws -> Empty_Proto {
+        try await Task.sleep(for: .milliseconds(300))
+        return Empty_Proto()
+    }
+    
+    func notifyEmergencyAlertToggled(_ request: NotifyEmergencyAlertRequest) async throws -> Empty_Proto {
+        try await Task.sleep(for: .milliseconds(800))
+        
+        // Simulate sending notification to responders about emergency alert status change
+        print("[MOCK] Emergency alert toggled for user \(request.userId): \(request.isEmergencyAlertEnabled ? "ENABLED" : "DISABLED")")
+        print("[MOCK] Notifying all responders about emergency alert status change...")
+        
+        return Empty_Proto()
+    }
+    
+    func startNotificationStream(_ request: StartNotificationStreamRequest) async throws -> AsyncThrowingStream<NotificationStreamEvent, Error> {
+        return AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    // 1. If history requested, send initial state first
+                    if request.loadHistory {
+                        try await Task.sleep(for: .milliseconds(500))
+                        
+                        // Generate initial history (reuse existing logic)
+                        let historyRequest = GetNotificationsRequest(
+                            userId: request.userId,
+                            authToken: request.authToken,
+                            fromDate: Calendar.current.date(byAdding: .day, value: -request.historyDays, to: Date()),
+                            toDate: Date()
+                        )
+                        
+                        let historyResponse = try await getNotifications(historyRequest)
+                        let historyNotifications = historyResponse.notifications.map { $0.toDomain() }
+                        
+                        // Send initial history as first stream event
+                        let initialEvent = NotificationStreamEvent(
+                            type: .initialHistory,
+                            notifications: historyNotifications.sorted { $0.timestamp > $1.timestamp },
+                            timestamp: Date()
+                        )
+                        continuation.yield(initialEvent)
+                    }
+                    
+                    // 2. Start real-time updates
+                    while !Task.isCancelled {
+                        try await Task.sleep(for: .seconds(10))
+                        
+                        // Simulate real-time notification
+                        let notification = NotificationItem(
+                            title: "Real-time Notification",
+                            message: "This is a simulated real-time notification from stream",
+                            type: [NotificationType.sendManualAlertActive, .receiveResponderPing, .cancelDependentPing, .receiveSystemNotificationSuccess, .receiveSystemNotificationError].randomElement() ?? .receiveSystemNotificationSuccess
+                        )
+                        
+                        let updateEvent = NotificationStreamEvent(
+                            type: .realTimeUpdate,
+                            notifications: [notification],
+                            timestamp: Date()
+                        )
+                        continuation.yield(updateEvent)
+                    }
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Legacy Mock gRPC Service (for compatibility)
+
+final class LegacyMockNotificationService: NotificationServiceProtocol {
     func getNotifications(_ request: GetNotificationsRequest) async throws -> GetNotificationsResponse {
         try await Task.sleep(for: .milliseconds(400))
 
@@ -712,6 +1019,23 @@ extension NotificationType {
     }
 }
 
+extension NotificationItem {
+    func toProto() -> Notification_Proto {
+        Notification_Proto(
+            id: id.uuidString,
+            userID: userId?.uuidString ?? "",
+            type: type.toProto(),
+            title: title,
+            message: message,
+            isRead: isRead,
+            createdAt: Int64(timestamp.timeIntervalSince1970),
+            contactId: contactId?.uuidString,
+            userId: userId?.uuidString,
+            metadata: metadata
+        )
+    }
+}
+
 final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     private var notificationHandler: ((NotificationItem) async -> Void)?
     private var tapHandler: ((NotificationItem) async -> Void)?
@@ -868,24 +1192,6 @@ extension SharedReaderKey where Self == AppStorageKey<ReadOnlyNotificationState>
     }
 }
 
-// Legacy individual accessors for Features
-extension SharedReaderKey where Self == InMemoryKey<[NotificationItem]>.Default {
-    static var notifications: Self {
-        Self[.inMemory("notifications"), default: []]
-    }
-}
-
-extension SharedReaderKey where Self == InMemoryKey<Int>.Default {
-    static var unreadNotificationCount: Self {
-        Self[.inMemory("unreadNotificationCount"), default: 0]
-    }
-}
-
-extension SharedReaderKey where Self == InMemoryKey<[PendingNotificationAction]>.Default {
-    static var pendingNotificationActions: Self {
-        Self[.inMemory("pendingNotificationActions"), default: []]
-    }
-}
 
 // MARK: - Notification Persistence Models
 
@@ -1139,21 +1445,6 @@ enum NotificationClientError: Error, LocalizedError {
 // MARK: - NotificationClient Internal Helpers
 
 extension NotificationClient {
-    /// Gets the authenticated user info for NotificationClient operations
-    private static func getAuthenticatedUserInfo() async throws -> (token: String, user: User) {
-        @Shared(.authenticationToken) var authToken
-        @Shared(.currentUser) var currentUser
-        
-        guard let token = authToken else {
-            throw NotificationClientError.saveFailed("No authentication token available")
-        }
-        
-        guard let user = currentUser else {
-            throw NotificationClientError.saveFailed("No current user available")
-        }
-        
-        return (token: token, user: user)
-    }
     
     static func storeNotificationsData(_ notifications: [NotificationItem], key: String = "notifications") async {
         // Mock local storage - would use Core Data/file system in production
@@ -1185,9 +1476,6 @@ extension NotificationClient {
         )
         $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
         
-        // Update legacy shared state for Features
-        @Shared(.pendingNotificationActions) var pending
-        $pending.withLock { $0.append(action) }
     }
     
     static func executeWithNetworkFallback<T>(
@@ -1224,16 +1512,16 @@ extension NotificationClient {
 
 @DependencyClient
 struct NotificationClient {
-    // gRPC service integration
-    var notificationService: NotificationServiceProtocol = MockNotificationService()
+    // gRPC service integration (uses adapter for mock)
+    var notificationService: NotificationServiceProtocol = MockNotificationServiceGRPCAdapter()
     
     // MARK: - Centralized State Management
     
     /// Initializes the notification client, requests permissions
     var initialize: @Sendable () async throws -> Void = { }
     
-    /// Starts listening for real-time notifications and loads initial history (combined operation)
-    var startListening: @Sendable () async throws -> Void = { }
+    /// Starts listening for real-time notifications and loads initial history (combined operation) - Features must pass auth tokens
+    var startListening: @Sendable (String, UUID) async throws -> Void = { _, _ in }
     
     /// Stops listening for real-time notifications
     var stopListening: @Sendable () async throws -> Void = { }
@@ -1241,8 +1529,8 @@ struct NotificationClient {
     /// Cleanup method called when session ends
     var cleanup: @Sendable () async throws -> Void = { }
     
-    // Core notification operations
-    var scheduleNotification: @Sendable (NotificationItem, TimeInterval) async throws -> String = { _, _ in "" }
+    // Core notification operations - Features must pass auth tokens
+    var scheduleNotification: @Sendable (NotificationItem, TimeInterval, String) async throws -> String = { _, _, _ in "" }
     
     // Notification scheduling (for local notifications)
     var cancelScheduledNotification: @Sendable (String) async throws -> Void = { _ in }
@@ -1262,21 +1550,21 @@ struct NotificationClient {
     
     
     
-    // Emergency Alert operations
-    var notifyEmergencyAlertToggled: @Sendable (UUID, Bool) async throws -> Void = { _, _ in throw NotificationClientError.saveFailed("Operation failed") }
+    // Emergency Alert operations - Features must pass auth tokens
+    var notifyEmergencyAlertToggled: @Sendable (UUID, Bool, String) async throws -> Void = { _, _, _ in throw NotificationClientError.saveFailed("Operation failed") }
     
-    // Contact notification operations
-    var notifyContactAdded: @Sendable (UUID) async throws -> Void = { _ in }
-    var notifyContactRemoved: @Sendable (UUID) async throws -> Void = { _ in }
-    var notifyContactRoleChanged: @Sendable (UUID) async throws -> Void = { _ in }
+    // Contact notification operations - Features must pass auth tokens
+    var notifyContactAdded: @Sendable (UUID, String) async throws -> Void = { _, _ in }
+    var notifyContactRemoved: @Sendable (UUID, String) async throws -> Void = { _, _ in }
+    var notifyContactRoleChanged: @Sendable (UUID, String) async throws -> Void = { _, _ in }
     
-    // Ping management operations
-    var clearAllReceivedPings: @Sendable () async throws -> Void = { }
-    var clearSentPing: @Sendable (UUID) async throws -> Void = { _ in }
+    // Ping management operations - Features must pass auth tokens
+    var clearAllReceivedPings: @Sendable (String) async throws -> Void = { _ in }
+    var clearSentPing: @Sendable (UUID, String) async throws -> Void = { _, _ in }
     
     
-    // Ping notification methods (explicit feature-driven)
-    var sendPingNotification: @Sendable (NotificationType, String, String, UUID) async throws -> Void = { _, _, _, _ in throw NotificationClientError.saveFailed("Operation failed") }
+    // Ping notification methods (explicit feature-driven) - Features must pass auth tokens
+    var sendPingNotification: @Sendable (NotificationType, String, String, UUID, String) async throws -> Void = { _, _, _, _, _ in throw NotificationClientError.saveFailed("Operation failed") }
     
     // Local device scheduling (not tracked in history)
     var scheduleLocalCheckInReminder: @Sendable (Date, String) async throws -> Void = { _, _ in }
@@ -1285,6 +1573,14 @@ struct NotificationClient {
     // System notification method for local feedback (not tracked in persistent history)
     var sendSystemNotification: @Sendable (String, String) async throws -> Void = { _, _ in }
     
+    // MARK: - State Management
+    
+    /// Updates an existing notification (calls gRPC API and updates persistent state).
+    var updateNotification: @Sendable (UUID, Bool, String) async throws -> Void = { _, _, _ in throw NotificationClientError.saveFailed("Operation failed") }
+    
+    /// Clears notification state (used for coordinated state clearing).
+    var clearNotificationState: @Sendable () async throws -> Void = { }
+    
 }
 
 extension NotificationClient: DependencyKey {
@@ -1292,7 +1588,7 @@ extension NotificationClient: DependencyKey {
     static let testValue = NotificationClient()
     
     static let mockValue = NotificationClient(
-        notificationService: MockNotificationService(),
+        notificationService: MockNotificationServiceGRPCAdapter(),
         
         // MARK: - Centralized State Management Implementation
         
@@ -1307,16 +1603,15 @@ extension NotificationClient: DependencyKey {
             // Stream setup with initial history load is handled in startListening()
         },
         
-        startListening: {
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
+        startListening: { authToken, userId in
+            let service = MockNotificationServiceGRPCAdapter()
             
             // Combined operation: Setup stream + load initial history
             let streamRequest = StartNotificationStreamRequest(
-                userId: authInfo.user.id,
+                userId: userId,
                 loadHistory: true,
                 historyDays: 30,
-                authToken: authInfo.token
+                authToken: authToken
             )
             
             let stream = try await service.startNotificationStream(streamRequest)
@@ -1338,11 +1633,6 @@ extension NotificationClient: DependencyKey {
                         )
                         $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
                         
-                        // Update legacy shared state for Features
-                        @Shared(.notifications) var notifications
-                        @Shared(.unreadNotificationCount) var unreadCount
-                        $notifications.withLock { $0 = event.notifications }
-                        $unreadCount.withLock { $0 = event.notifications.filter { !$0.isRead }.count }
                         print("[STREAM] Loaded \(event.notifications.count) historical notifications")
                         
                     case .realTimeUpdate:
@@ -1367,15 +1657,6 @@ extension NotificationClient: DependencyKey {
                         )
                         $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
                         
-                        // Update legacy shared state for Features
-                        @Shared(.notifications) var notifications
-                        @Shared(.unreadNotificationCount) var unreadCount
-                        for notification in event.notifications {
-                            $notifications.withLock { $0.insert(notification, at: 0) }
-                            if !notification.isRead {
-                                $unreadCount.withLock { $0 += 1 }
-                            }
-                        }
                         print("[STREAM] Received \(event.notifications.count) real-time notification(s)")
                         
                     case .bulkUpdate:
@@ -1400,19 +1681,6 @@ extension NotificationClient: DependencyKey {
                         )
                         $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
                         
-                        // Update legacy shared state for Features
-                        @Shared(.notifications) var notifications
-                        @Shared(.unreadNotificationCount) var unreadCount
-                        for notification in event.notifications {
-                            $notifications.withLock { notifications in
-                                if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
-                                    notifications[index] = notification
-                                } else {
-                                    notifications.insert(notification, at: 0)
-                                }
-                            }
-                        }
-                        $unreadCount.withLock { $0 = updatedNotifications.filter { !$0.isRead }.count }
                         print("[STREAM] Applied \(event.notifications.count) bulk update(s)")
                     }
                 }
@@ -1435,25 +1703,19 @@ extension NotificationClient: DependencyKey {
             )
             $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
             
-            // Clear legacy shared state for Features
-            @Shared(.notifications) var notifications
-            @Shared(.unreadNotificationCount) var unreadCount
-            $notifications.withLock { $0.removeAll() }
-            $unreadCount.withLock { $0 = 0 }
             
             // Cancel all pending local notifications
             UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         },
         
-        scheduleNotification: { notification, delay in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
+        scheduleNotification: { notification, delay, authToken in
+            let service = MockNotificationServiceGRPCAdapter()
             
             var newNotification = notification
             newNotification.timestamp = Date().addingTimeInterval(delay)
             
-            let scheduleRequest = ScheduleNotificationRequest(notification: newNotification, delay: delay, authToken: authInfo.token)
+            let scheduleRequest = ScheduleNotificationRequest(notification: newNotification, delay: delay, authToken: authToken)
             _ = try await service.scheduleNotification(scheduleRequest)
             
             // Stream will handle updating shared state
@@ -1532,15 +1794,14 @@ extension NotificationClient: DependencyKey {
         },
         
         // Emergency Alert operations
-        notifyEmergencyAlertToggled: { userId, isEmergencyAlertEnabled in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
+        notifyEmergencyAlertToggled: { userId, isEmergencyAlertEnabled, authToken in
+            let service = MockNotificationServiceGRPCAdapter()
             
             // Notify responders about emergency alert status change
             let notifyRequest = NotifyEmergencyAlertRequest(
                 userId: userId,
                 isEmergencyAlertEnabled: isEmergencyAlertEnabled,
-                authToken: authInfo.token
+                authToken: authToken
             )
             _ = try await service.notifyEmergencyAlertToggled(notifyRequest)
             
@@ -1563,7 +1824,7 @@ extension NotificationClient: DependencyKey {
                 message: message,
                 contactId: nil,
                 metadata: [:],
-                authToken: authInfo.token
+                authToken: authToken
             )
             _ = try await service.addNotification(addNotificationRequest)
             
@@ -1571,54 +1832,60 @@ extension NotificationClient: DependencyKey {
         },
         
         // Contact notification operations
-        notifyContactAdded: { contactId in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
+        notifyContactAdded: { contactId, authToken in
+            @Shared(.userState) var userState
+            guard let userId = userState.currentUser?.id else { return }
+            
+            let service = MockNotificationServiceGRPCAdapter()
             
             let request = AddNotificationRequest(
-                userId: authInfo.user.id,
+                userId: userId,
                 type: .receiveContactAdded,
                 title: NotificationType.receiveContactAdded.title,
                 message: "A new emergency contact has been added to your network",
                 contactId: contactId,
                 metadata: ["action": "contact_added"],
-                authToken: authInfo.token
+                authToken: authToken
             )
             
             _ = try await service.addNotification(request)
             // Stream will handle updating shared state
         },
         
-        notifyContactRemoved: { contactId in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
+        notifyContactRemoved: { contactId, authToken in
+            @Shared(.userState) var userState
+            guard let userId = userState.currentUser?.id else { return }
+            
+            let service = MockNotificationServiceGRPCAdapter()
             
             let request = AddNotificationRequest(
-                userId: authInfo.user.id,
+                userId: userId,
                 type: .receiveContactRemoved,
                 title: "Contact Removed",
                 message: "A contact was removed from your network",
                 contactId: contactId,
                 metadata: ["action": "contact_removed"],
-                authToken: authInfo.token
+                authToken: authToken
             )
             
             _ = try await service.addNotification(request)
             // Stream will handle updating shared state
         },
         
-        notifyContactRoleChanged: { contactId in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
+        notifyContactRoleChanged: { contactId, authToken in
+            @Shared(.userState) var userState
+            guard let userId = userState.currentUser?.id else { return }
+            
+            let service = MockNotificationServiceGRPCAdapter()
             
             let request = AddNotificationRequest(
-                userId: authInfo.user.id,
+                userId: userId,
                 type: .receiveContactRoleChanged,
                 title: "Role Changed",
                 message: "A contact's role has been updated",
                 contactId: contactId,
                 metadata: ["action": "role_changed"],
-                authToken: authInfo.token
+                authToken: authToken
             )
             
             _ = try await service.addNotification(request)
@@ -1626,20 +1893,21 @@ extension NotificationClient: DependencyKey {
         },
         
         // Ping management operations
-        clearAllReceivedPings: {
-            let authInfo = try await Self.getAuthenticatedUserInfo()
+        clearAllReceivedPings: { authToken in
+            @Shared(.userState) var userState
+            guard let userId = userState.currentUser?.id else { return }
             
             // Single gRPC call to clear all received pings
             // Server handles: 1) Sending acknowledgments to responders, 2) Clearing pings, 3) Updating notification history
-            let service = MockNotificationService()
+            let service = MockNotificationServiceGRPCAdapter()
             let clearRequest = AddNotificationRequest(
-                userId: authInfo.user.id,
+                userId: userId,
                 type: .sendClearAllResponderPings,
                 title: "Clear All Received Pings",
                 message: "User requested to clear all received responder pings",
                 contactId: nil,
                 metadata: ["action": "clear_all_received_pings"],
-                authToken: authInfo.token
+                authToken: authToken
             )
             _ = try await service.addNotification(clearRequest)
             
@@ -1652,20 +1920,22 @@ extension NotificationClient: DependencyKey {
             // Stream will handle updating all shared state - no direct manipulation here
         },
         
-        clearSentPing: { contactId in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
-            let service = MockNotificationService()
+        clearSentPing: { contactId, authToken in
+            @Shared(.userState) var userState
+            guard let userId = userState.currentUser?.id else { return }
+            
+            let service = MockNotificationServiceGRPCAdapter()
             
             // Single gRPC call to clear sent ping to specific contact
             // Server handles: 1) Removing ping from contact's received pings, 2) Updating user's sent ping history
             let clearRequest = AddNotificationRequest(
-                userId: authInfo.user.id,
+                userId: userId,
                 type: .sendClearAllResponderPings, // Reuse existing type or create new one for single ping
                 title: "Ping Retracted",
                 message: "You retracted a ping sent to a contact",
                 contactId: contactId,
                 metadata: ["action": "clear_sent_ping", "target_contact": contactId.uuidString],
-                authToken: authInfo.token
+                authToken: authToken
             )
             _ = try await service.addNotification(clearRequest)
             
@@ -1679,19 +1949,20 @@ extension NotificationClient: DependencyKey {
         },
         
         // Ping notification methods (explicit feature-driven)
-        sendPingNotification: { notificationType, title, message, contactId in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
+        sendPingNotification: { notificationType, title, message, contactId, authToken in
+            @Shared(.userState) var userState
+            guard let userId = userState.currentUser?.id else { return }
             
             // Send gRPC notification for ping operations and track in user's history
-            let service = MockNotificationService()
+            let service = MockNotificationServiceGRPCAdapter()
             let request = AddNotificationRequest(
-                userId: authInfo.user.id,
+                userId: userId,
                 type: notificationType,
                 title: title,
                 message: message,
                 contactId: contactId,
                 metadata: ["ping": "true"],
-                authToken: authInfo.token
+                authToken: authToken
             )
             
             _ = try await service.addNotification(request)
@@ -1752,8 +2023,52 @@ extension NotificationClient: DependencyKey {
                 try? await Task.sleep(for: .seconds(3))
                 UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [request.identifier])
             }
-        }
+        },
         
+        updateNotification: { notificationId, isRead, authToken in
+            let service = MockNotificationServiceGRPCAdapter()
+            
+            // Mark notification as read via gRPC
+            let markRequest = MarkNotificationRequest(
+                notificationId: notificationId,
+                authToken: authToken
+            )
+            let response = try await service.markAsRead(markRequest)
+            
+            // Update shared state
+            @Shared(.notificationState) var sharedNotificationState
+            let currentState = sharedNotificationState
+            var updatedNotifications = currentState.notifications
+            
+            if let index = updatedNotifications.firstIndex(where: { $0.id == notificationId }) {
+                var updatedNotification = updatedNotifications[index]
+                updatedNotification.isRead = isRead
+                updatedNotifications[index] = updatedNotification
+            }
+            
+            let newUnreadCount = updatedNotifications.filter { !$0.isRead }.count
+            
+            let mutableState = NotificationState(
+                notifications: updatedNotifications,
+                unreadNotificationCount: newUnreadCount,
+                pendingNotificationActions: currentState.pendingNotificationActions,
+                isListening: currentState.isListening,
+                lastSyncTimestamp: Date()
+            )
+            $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(mutableState) }
+        },
+        
+        clearNotificationState: {
+            @Shared(.notificationState) var sharedNotificationState
+            let clearedState = NotificationState(
+                notifications: [],
+                unreadNotificationCount: 0,
+                pendingNotificationActions: [],
+                isListening: false,
+                lastSyncTimestamp: nil
+            )
+            $sharedNotificationState.withLock { $0 = ReadOnlyNotificationState(clearedState) }
+        }
     )
 }
 

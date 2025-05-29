@@ -112,7 +112,7 @@ enum NotificationPreference: String, Codable, CaseIterable, Sendable {
 
 // MARK: - gRPC Proto Types
 
-struct User_Proto: Sendable {
+struct User_Proto: Sendable, Codable {
     var id: String
     var name: String
     var phoneNumber: String
@@ -129,158 +129,293 @@ struct User_Proto: Sendable {
     var biometricAuthEnabled: Bool
 }
 
-// MARK: - Mock gRPC Service
+// MARK: - Mock User Backend Service
 
-final class MockUserService: UserServiceProtocol {
-    func getUser(_ request: GetUserRequest) async throws -> User_Proto {
-        try await Task.sleep(for: .milliseconds(500))
-        
-        // Mock path 1: Existing user (UID: existing_user_uid_12345)
-        if request.uid == "existing_user_uid_12345" {
-            let now = Date()
-            let recentCheckIn = now.addingTimeInterval(-3600) // 1 hour ago
-            
-            return User_Proto(
-                id: request.uid,
-                name: "John Doe", // Existing user has complete profile
-                phoneNumber: "+1234567890",
-                phoneRegion: "US",
-                emergencyNote: "Emergency contact: Jane Doe (spouse) - 555-987-6543",
-                checkInInterval: 86400, // 24 hours
-                lastCheckedIn: Int64(recentCheckIn.timeIntervalSince1970),
-                notificationPreference: .thirtyMinutes,
-                isEmergencyAlertEnabled: false,
-                emergencyAlertTimestamp: nil,
-                qrCodeId: UUID().uuidString,
-                avatarURL: "",
-                lastModified: Int64(Date().timeIntervalSince1970),
-                biometricAuthEnabled: true
-            )
+/// Simple mock backend for user data persistence
+final class MockUserBackendService: Sendable {
+    
+    // Simple data storage keys
+    private static let usersKey = "MockUserBackend_Users"
+    private static let avatarDataKey = "MockUserBackend_AvatarData"
+    
+    // MARK: - Data Persistence
+    
+    private func getStoredUsers() -> [String: User] {
+        guard let data = UserDefaults.standard.data(forKey: Self.usersKey),
+              let decoded = try? JSONDecoder().decode([String: User].self, from: data) else {
+            return [:]
         }
-        
-        // Mock path 2: New user (any other UID) - user not found
-        throw UserClientError.userNotFound
+        return decoded
     }
     
-    func checkIn(_ request: CheckInRequest) async throws -> User_Proto {
-        try await Task.sleep(for: .milliseconds(400))
-        return User_Proto(
-            id: request.userId.uuidString,
-            name: "Mock User",
-            phoneNumber: "+1234567890",
-            phoneRegion: "US",
+    private func storeUsers(_ users: [String: User]) {
+        guard let data = try? JSONEncoder().encode(users) else { return }
+        UserDefaults.standard.set(data, forKey: Self.usersKey)
+    }
+    
+    private func getAvatarData() -> [String: Data] {
+        guard let data = UserDefaults.standard.data(forKey: Self.avatarDataKey),
+              let decoded = try? JSONDecoder().decode([String: Data].self, from: data) else {
+            return [:]
+        }
+        return decoded
+    }
+    
+    private func storeAvatarData(_ avatarData: [String: Data]) {
+        guard let data = try? JSONEncoder().encode(avatarData) else { return }
+        UserDefaults.standard.set(data, forKey: Self.avatarDataKey)
+    }
+    
+    // MARK: - Simple Operations
+    
+    func getUser(uid: String) -> User? {
+        let storedUsers = getStoredUsers()
+        return storedUsers[uid]
+    }
+    
+    func createUser(_ user: User) {
+        var storedUsers = getStoredUsers()
+        storedUsers[user.id.uuidString] = user
+        storeUsers(storedUsers)
+    }
+    
+    func updateUser(_ user: User) {
+        var storedUsers = getStoredUsers()
+        var updatedUser = user
+        updatedUser.lastModified = Date()
+        storedUsers[user.id.uuidString] = updatedUser
+        storeUsers(storedUsers)
+    }
+    
+    func deleteUser(userId: String) {
+        var storedUsers = getStoredUsers()
+        storedUsers.removeValue(forKey: userId)
+        storeUsers(storedUsers)
+        
+        // Remove avatar data
+        var avatarData = getAvatarData()
+        avatarData.removeValue(forKey: userId)
+        storeAvatarData(avatarData)
+    }
+    
+    func updateAvatarData(userId: String, imageData: Data) {
+        var avatarData = getAvatarData()
+        avatarData[userId] = imageData
+        storeAvatarData(avatarData)
+    }
+    
+    func deleteAvatarData(userId: String) {
+        var avatarData = getAvatarData()
+        avatarData.removeValue(forKey: userId)
+        storeAvatarData(avatarData)
+    }
+    
+    func getAvatarData(userId: String) -> Data? {
+        let avatarData = getAvatarData()
+        return avatarData[userId]
+    }
+    
+    // Helper method to clear all backend data for testing
+    static func clearAllBackendData() {
+        UserDefaults.standard.removeObject(forKey: usersKey)
+        UserDefaults.standard.removeObject(forKey: avatarDataKey)
+    }
+}
+
+// MARK: - Simple User Service Protocol (for mock implementation)
+
+protocol SimpleUserServiceProtocol: Sendable {
+    func getUser(uid: String, authToken: String) async throws -> User?
+    func createUser(uid: String, name: String, phoneNumber: String, phoneRegion: String, authToken: String) async throws -> User
+    func updateUser(_ user: User, authToken: String) async throws -> User
+    func deleteUser(userId: String, authToken: String) async throws
+    func checkIn(userId: String, timestamp: Date, authToken: String) async throws -> User?
+    func updateAvatarData(userId: String, imageData: Data, authToken: String) async throws
+    func deleteAvatarData(userId: String, authToken: String) async throws
+    func getAvatarData(userId: String) -> Data?
+    static func clearAllMockData()
+}
+
+// MARK: - Mock User Service (Simple interface)
+
+final class MockUserService: SimpleUserServiceProtocol, Sendable {
+    
+    private let backend = MockUserBackendService()
+    
+    func getUser(uid: String, authToken: String) async throws -> User? {
+        try await Task.sleep(for: .milliseconds(500))
+        return backend.getUser(uid: uid)
+    }
+    
+    func createUser(uid: String, name: String, phoneNumber: String, phoneRegion: String, authToken: String) async throws -> User {
+        try await Task.sleep(for: .milliseconds(800))
+        
+        let newUser = User(
+            id: UUID(uuidString: uid) ?? UUID(),
+            name: name,
+            phoneNumber: phoneNumber,
+            phoneRegion: phoneRegion,
             emergencyNote: "",
-            checkInInterval: 115200, // 32 hours (default interval)
-            lastCheckedIn: request.timestamp,
+            checkInInterval: 86400, // 24 hours default
+            lastCheckedIn: Date(),
             notificationPreference: .thirtyMinutes,
-            isEmergencyAlertEnabled: false,
+            isEmergencyAlertEnabled: true,
             emergencyAlertTimestamp: nil,
-            qrCodeId: UUID().uuidString,
-            avatarURL: "",
-            lastModified: Int64(Date().timeIntervalSince1970),
+            qrCodeId: UUID(),
+            avatarURL: nil,
+            lastModified: Date(),
             biometricAuthEnabled: false
         )
+        
+        backend.createUser(newUser)
+        return newUser
     }
-
-    func createUser(_ request: CreateUserRequest) async throws -> User_Proto {
+    
+    func updateUser(_ user: User, authToken: String) async throws -> User {
+        try await Task.sleep(for: .milliseconds(600))
+        backend.updateUser(user)
+        return user
+    }
+    
+    func deleteUser(userId: String, authToken: String) async throws {
+        try await Task.sleep(for: .milliseconds(500))
+        backend.deleteUser(userId: userId)
+    }
+    
+    func checkIn(userId: String, timestamp: Date, authToken: String) async throws -> User? {
+        try await Task.sleep(for: .milliseconds(400))
+        
+        guard var user = backend.getUser(uid: userId) else {
+            throw UserClientError.userNotFound
+        }
+        
+        user.lastCheckedIn = timestamp
+        backend.updateUser(user)
+        return user
+    }
+    
+    func updateAvatarData(userId: String, imageData: Data, authToken: String) async throws {
+        try await Task.sleep(for: .milliseconds(1500))
+        backend.updateAvatarData(userId: userId, imageData: imageData)
+    }
+    
+    func deleteAvatarData(userId: String, authToken: String) async throws {
         try await Task.sleep(for: .milliseconds(800))
-        return User_Proto(
-            id: request.uid,
+        backend.deleteAvatarData(userId: userId)
+    }
+    
+    func getAvatarData(userId: String) -> Data? {
+        return backend.getAvatarData(userId: userId)
+    }
+    
+    // Helper method to clear all mock data for testing
+    static func clearAllMockData() {
+        MockUserBackendService.clearAllBackendData()
+    }
+}
+
+// MARK: - Mock gRPC Adapter (converts simple service to gRPC protocol)
+
+final class MockUserServiceGRPCAdapter: UserServiceProtocol, Sendable {
+    
+    private let simpleService = MockUserService()
+    
+    func getUser(_ request: GetUserRequest) async throws -> User_Proto {
+        guard let user = try await simpleService.getUser(uid: request.uid, authToken: request.authToken) else {
+            throw UserClientError.userNotFound
+        }
+        return user.toProto()
+    }
+    
+    func createUser(_ request: CreateUserRequest) async throws -> User_Proto {
+        let user = try await simpleService.createUser(
+            uid: request.uid,
             name: request.name,
             phoneNumber: request.phoneNumber,
             phoneRegion: request.phoneRegion,
-            emergencyNote: "",
-            checkInInterval: 115200, // 32 hours (default interval) (instead of 24 hours)
-            lastCheckedIn: Int64(Date().timeIntervalSince1970),
-            notificationPreference: request.notificationPreference,
-            isEmergencyAlertEnabled: request.isEmergencyAlertEnabled,
-            emergencyAlertTimestamp: nil,
-            qrCodeId: UUID().uuidString,
-            avatarURL: "",
-            lastModified: Int64(Date().timeIntervalSince1970),
-            biometricAuthEnabled: request.biometricAuthEnabled
+            authToken: request.authToken
         )
+        return user.toProto()
     }
-
+    
     func updateUser(_ request: UpdateUserRequest) async throws -> User_Proto {
-        try await Task.sleep(for: .milliseconds(600))
-        
-        return User_Proto(
-            id: request.id.uuidString,
+        let user = User(
+            id: request.id,
             name: request.name,
             phoneNumber: request.phoneNumber,
             phoneRegion: request.phoneRegion,
             emergencyNote: request.emergencyNote,
-            checkInInterval: Int64(request.checkInInterval),
-            lastCheckedIn: request.lastCheckedIn.map { Int64($0.timeIntervalSince1970) },
+            checkInInterval: request.checkInInterval,
+            lastCheckedIn: request.lastCheckedIn,
             notificationPreference: request.notificationPreference,
             isEmergencyAlertEnabled: request.isEmergencyAlertEnabled,
-            emergencyAlertTimestamp: request.isEmergencyAlertEnabled ? Int64(Date().timeIntervalSince1970) : nil,
-            qrCodeId: request.qrCodeId.uuidString,
-            avatarURL: request.avatarURL,
-            lastModified: Int64(Date().timeIntervalSince1970),
+            emergencyAlertTimestamp: nil,
+            qrCodeId: request.qrCodeId,
+            avatarURL: request.avatarURL.isEmpty ? nil : request.avatarURL,
+            lastModified: Date(),
             biometricAuthEnabled: request.biometricAuthEnabled
         )
+        
+        let updatedUser = try await simpleService.updateUser(user, authToken: request.authToken)
+        return updatedUser.toProto()
     }
-
+    
     func deleteUser(_ request: DeleteUserRequest) async throws -> Empty_Proto {
-        try await Task.sleep(for: .milliseconds(500))
+        try await simpleService.deleteUser(userId: request.userId.uuidString, authToken: request.authToken)
         return Empty_Proto()
     }
-
+    
+    func checkIn(_ request: CheckInRequest) async throws -> User_Proto {
+        guard let user = try await simpleService.checkIn(
+            userId: request.userId.uuidString,
+            timestamp: Date(timeIntervalSince1970: TimeInterval(request.timestamp)),
+            authToken: request.authToken
+        ) else {
+            throw UserClientError.userNotFound
+        }
+        return user.toProto()
+    }
+    
     func updateAvatar(_ request: UpdateAvatarRequest) async throws -> UpdateAvatarResponse {
-        try await Task.sleep(for: .milliseconds(1500))
-        
-        // Simulate Supabase storage URL
-        let supabaseAvatarURL = "https://your-project.supabase.co/storage/v1/object/public/avatars/\(request.userId.uuidString)/avatar.jpg"
-        
-        // Return updated user with new avatar URL
-        let updatedUser = User_Proto(
-            id: request.userId.uuidString,
-            name: "Mock User",
-            phoneNumber: "+1234567890",
-            phoneRegion: "US",
-            emergencyNote: "",
-            checkInInterval: 115200, // 32 hours (default interval)
-            lastCheckedIn: nil,
-            notificationPreference: .thirtyMinutes,
-            isEmergencyAlertEnabled: true,
-            emergencyAlertTimestamp: nil,
-            qrCodeId: UUID().uuidString,
-            avatarURL: supabaseAvatarURL,
-            lastModified: Int64(Date().timeIntervalSince1970),
-            biometricAuthEnabled: false
+        try await simpleService.updateAvatarData(
+            userId: request.userId.uuidString,
+            imageData: request.imageData,
+            authToken: request.authToken
         )
         
+        // Mock response - in real implementation this would return the actual URL from storage
+        let mockAvatarURL = "mock://avatar/\(request.userId.uuidString)"
+        let updatedUser = try await simpleService.getUser(uid: request.userId.uuidString, authToken: request.authToken)
+        
         return UpdateAvatarResponse(
-            avatarURL: supabaseAvatarURL,
-            user: updatedUser
+            avatarURL: mockAvatarURL,
+            user: updatedUser?.toProto() ?? User_Proto(
+                id: request.userId.uuidString,
+                name: "Unknown",
+                phoneNumber: "",
+                phoneRegion: "",
+                emergencyNote: "",
+                checkInInterval: 86400,
+                lastCheckedIn: nil,
+                notificationPreference: .thirtyMinutes,
+                isEmergencyAlertEnabled: false,
+                emergencyAlertTimestamp: nil,
+                qrCodeId: UUID().uuidString,
+                avatarURL: mockAvatarURL,
+                lastModified: Int64(Date().timeIntervalSince1970),
+                biometricAuthEnabled: false
+            )
         )
     }
     
     func deleteAvatar(_ request: DeleteAvatarRequest) async throws -> User_Proto {
-        try await Task.sleep(for: .milliseconds(800))
+        try await simpleService.deleteAvatarData(userId: request.userId.uuidString, authToken: request.authToken)
         
-        // Simulate deletion from Supabase storage and return updated user
-        return User_Proto(
-            id: request.userId.uuidString,
-            name: "Mock User",
-            phoneNumber: "+1234567890",
-            phoneRegion: "US",
-            emergencyNote: "",
-            checkInInterval: 115200, // 32 hours (default interval)
-            lastCheckedIn: nil,
-            notificationPreference: .thirtyMinutes,
-            isEmergencyAlertEnabled: true,
-            emergencyAlertTimestamp: nil,
-            qrCodeId: UUID().uuidString,
-            avatarURL: "", // Cleared avatar URL after Supabase deletion
-            lastModified: Int64(Date().timeIntervalSince1970),
-            biometricAuthEnabled: false
-        )
+        guard let user = try await simpleService.getUser(uid: request.userId.uuidString, authToken: request.authToken) else {
+            throw UserClientError.userNotFound
+        }
+        return user.toProto()
     }
-    
-    
 }
 
 // MARK: - Proto Mapping Extensions
@@ -301,6 +436,27 @@ extension User_Proto {
             qrCodeId: UUID(uuidString: qrCodeId) ?? UUID(),
             avatarURL: avatarURL.isEmpty ? nil : avatarURL,
             lastModified: Date(timeIntervalSince1970: TimeInterval(lastModified)),
+            biometricAuthEnabled: biometricAuthEnabled
+        )
+    }
+}
+
+extension User {
+    func toProto() -> User_Proto {
+        User_Proto(
+            id: id.uuidString,
+            name: name,
+            phoneNumber: phoneNumber,
+            phoneRegion: phoneRegion,
+            emergencyNote: emergencyNote,
+            checkInInterval: Int64(checkInInterval),
+            lastCheckedIn: lastCheckedIn.map { Int64($0.timeIntervalSince1970) },
+            notificationPreference: notificationPreference,
+            isEmergencyAlertEnabled: isEmergencyAlertEnabled,
+            emergencyAlertTimestamp: emergencyAlertTimestamp.map { Int64($0.timeIntervalSince1970) },
+            qrCodeId: qrCodeId.uuidString,
+            avatarURL: avatarURL ?? "",
+            lastModified: Int64(lastModified.timeIntervalSince1970),
             biometricAuthEnabled: biometricAuthEnabled
         )
     }
@@ -332,16 +488,23 @@ extension User {
             shareableImage = UserClient.generateMockShareableQRCodeImage(qrImage: qrImage, userName: name)
         }
         
-        // Store in shared state with metadata
-        @Shared(.userQRCodeImage) var qrCodeImage
-        @Shared(.userShareableQRCodeImage) var shareableQRCodeImage
+        // Store in unified state with metadata
+        @Shared(.userState) var userState
         
-        if let qrImageData = qrImage.pngData() {
-            $qrCodeImage.withLock { $0 = QRImageWithMetadata(image: qrImageData, metadata: metadata) }
-        }
-        
-        if let shareableImageData = shareableImage.pngData() {
-            $shareableQRCodeImage.withLock { $0 = QRImageWithMetadata(image: shareableImageData, metadata: metadata) }
+        $userState.withLock { currentState in
+            let internalState = currentState._state
+            let qrImageWithMetadata = qrImage.pngData().map { QRImageWithMetadata(image: $0, metadata: metadata) }
+            let shareableImageWithMetadata = shareableImage.pngData().map { QRImageWithMetadata(image: $0, metadata: metadata) }
+            
+            let updatedState = UserInternalState(
+                currentUser: internalState.currentUser,
+                isLoading: internalState.isLoading,
+                lastSyncTimestamp: internalState.lastSyncTimestamp,
+                qrCodeImage: qrImageWithMetadata,
+                shareableQRCodeImage: shareableImageWithMetadata,
+                avatarImage: internalState.avatarImage
+            )
+            currentState = ReadOnlyUserState(updatedState)
         }
     }
 }
@@ -349,24 +512,39 @@ extension User {
 // MARK: - User Shared State
 
 // 1. Mutable internal state (private to Client)
-struct UserState: Equatable, Codable {
+struct UserInternalState: Equatable, Codable {
     var currentUser: User?
     var isLoading: Bool
     var lastSyncTimestamp: Date?
     
-    init(currentUser: User? = nil, isLoading: Bool = false, lastSyncTimestamp: Date? = nil) {
+    // Image cache data (consolidated from separate shared states)
+    var qrCodeImage: QRImageWithMetadata?
+    var shareableQRCodeImage: QRImageWithMetadata?
+    var avatarImage: AvatarImageWithMetadata?
+    
+    init(
+        currentUser: User? = nil, 
+        isLoading: Bool = false, 
+        lastSyncTimestamp: Date? = nil,
+        qrCodeImage: QRImageWithMetadata? = nil,
+        shareableQRCodeImage: QRImageWithMetadata? = nil,
+        avatarImage: AvatarImageWithMetadata? = nil
+    ) {
         self.currentUser = currentUser
         self.isLoading = isLoading
         self.lastSyncTimestamp = lastSyncTimestamp
+        self.qrCodeImage = qrCodeImage
+        self.shareableQRCodeImage = shareableQRCodeImage
+        self.avatarImage = avatarImage
     }
 }
 
 // 2. Read-only wrapper (prevents direct mutation)
 struct ReadOnlyUserState: Equatable, Codable {
-    private let _state: UserState
+    fileprivate let _state: UserInternalState
     
     // 🔑 Only Client can access this init (same file = fileprivate access)
-    fileprivate init(_ state: UserState) {
+    fileprivate init(_ state: UserInternalState) {
         self._state = state
     }
     
@@ -378,7 +556,7 @@ struct ReadOnlyUserState: Equatable, Codable {
     
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let state = try container.decode(UserState.self, forKey: .state)
+        let state = try container.decode(UserInternalState.self, forKey: .state)
         self.init(state)  // Uses fileprivate init - ownership preserved ✅
     }
     
@@ -391,6 +569,11 @@ struct ReadOnlyUserState: Equatable, Codable {
     var currentUser: User? { _state.currentUser }
     var isLoading: Bool { _state.isLoading }
     var lastSyncTimestamp: Date? { _state.lastSyncTimestamp }
+    
+    // Image cache accessors (consolidated from separate shared states)
+    var qrCodeImage: QRImageWithMetadata? { _state.qrCodeImage }
+    var shareableQRCodeImage: QRImageWithMetadata? { _state.shareableQRCodeImage }
+    var avatarImage: AvatarImageWithMetadata? { _state.avatarImage }
 }
 
 // MARK: - RawRepresentable Conformance for AppStorage (Preserves Ownership)
@@ -421,16 +604,10 @@ extension ReadOnlyUserState: RawRepresentable {
 
 extension SharedReaderKey where Self == AppStorageKey<ReadOnlyUserState>.Default {
     static var userState: Self {
-        Self[.appStorage("userState"), default: ReadOnlyUserState(UserState())]
+        Self[.appStorage("userState"), default: ReadOnlyUserState(UserInternalState())]
     }
 }
 
-// Legacy currentUser accessor for Features that read individual user
-extension SharedReaderKey where Self == InMemoryKey<User?>.Default {
-    static var currentUser: Self {
-        Self[.inMemory("currentUser"), default: nil]
-    }
-}
 
 // MARK: - Image Metadata for Cache Validation
 
@@ -446,7 +623,7 @@ struct ImageMetadata: Codable, Equatable {
     }
 }
 
-struct QRImageWithMetadata: Codable {
+struct QRImageWithMetadata: Codable, Equatable {
     let image: Data
     let metadata: ImageMetadata
 }
@@ -456,21 +633,6 @@ struct AvatarImageWithMetadata: Codable, Equatable {
     let metadata: ImageMetadata
 }
 
-extension SharedReaderKey where Self == InMemoryKey<QRImageWithMetadata?>.Default {
-    static var userQRCodeImage: Self {
-        Self[.inMemory("userQRCodeImage"), default: nil]
-    }
-    
-    static var userShareableQRCodeImage: Self {
-        Self[.inMemory("userShareableQRCodeImage"), default: nil]
-    }
-}
-
-extension SharedReaderKey where Self == InMemoryKey<AvatarImageWithMetadata?>.Default {
-    static var userAvatarImage: Self {
-        Self[.inMemory("userAvatarImage"), default: nil]
-    }
-}
 
 
 // MARK: - User Domain Model
@@ -539,21 +701,6 @@ enum UserClientError: Error, LocalizedError {
 // MARK: - UserClient Internal Helpers
 
 extension UserClient {
-    /// Gets the authenticated user info for UserClient operations
-    private static func getAuthenticatedUserInfo() async throws -> (token: String, uid: String) {
-        @Shared(.authenticationToken) var authToken
-        @Shared(.internalAuthUID) var authUID
-        
-        guard let token = authToken else {
-            throw UserClientError.authenticationFailed("No authentication token available")
-        }
-        
-        guard let uid = authUID else {
-            throw UserClientError.authenticationFailed("No authenticated user")
-        }
-        
-        return (token: token, uid: uid)
-    }
     
     // MARK: - QR Code Generation Helpers
     
@@ -707,26 +854,27 @@ extension UserClient {
 
 @DependencyClient
 struct UserClient {
-    // gRPC service integration
-    var userService: UserServiceProtocol = MockUserService()
+    // gRPC service integration (uses adapter for mock)
+    var userService: UserServiceProtocol = MockUserServiceGRPCAdapter()
     
-    // Core User Operations (update shared state only)
-    var getUser: @Sendable () async throws -> User? = { nil }
-    var createUser: @Sendable (String, String, String, String) async throws -> Void = { _, _, _, _ in throw UserClientError.operationFailed }
-    var updateUser: @Sendable (User) async throws -> Void = { _ in throw UserClientError.operationFailed }
-    var deleteUser: @Sendable (UUID) async throws -> Void = { _ in throw UserClientError.operationFailed }
+    // Core User Operations - Features must pass auth tokens
+    var getUser: @Sendable (String, String) async throws -> User? = { _, _ in nil }
+    var createUser: @Sendable (String, String, String, String, String) async throws -> Void = { _, _, _, _, _ in throw UserClientError.operationFailed }
+    var updateUser: @Sendable (User, String) async throws -> Void = { _, _ in throw UserClientError.operationFailed }
+    var deleteUser: @Sendable (UUID, String) async throws -> Void = { _, _ in throw UserClientError.operationFailed }
     
-    
-    
-    // Avatar operations (Supabase storage via gRPC)
-    var updateAvatarData: @Sendable (UUID, Data) async throws -> Void = { _, _ in throw UserClientError.operationFailed }
+    // Avatar operations - Features must pass auth tokens
+    var updateAvatarData: @Sendable (UUID, Data, String) async throws -> Void = { _, _, _ in throw UserClientError.operationFailed }
     var downloadAvatarData: @Sendable (String) async throws -> Data = { _ in throw UserClientError.operationFailed }
-    var deleteAvatarData: @Sendable (UUID) async throws -> Void = { _ in throw UserClientError.operationFailed }
+    var deleteAvatarData: @Sendable (UUID, String) async throws -> Void = { _, _ in throw UserClientError.operationFailed }
     
-    // QR Code operations
-    var resetQRCode: @Sendable () async throws -> Void = { throw UserClientError.operationFailed }
+    // QR Code operations - Features must pass auth tokens  
+    var resetQRCode: @Sendable (String) async throws -> Void = { _ in throw UserClientError.operationFailed }
     var updateQRCodeImages: @Sendable () async -> Void = { }
     var clearQRCodeImages: @Sendable () async -> Void = { }
+    
+    // State management operations
+    var clearUserState: @Sendable () async throws -> Void = { }
 }
 
 extension UserClient: DependencyKey {
@@ -734,57 +882,44 @@ extension UserClient: DependencyKey {
     static let testValue = UserClient()
     
     static let mockValue = UserClient(
-        userService: MockUserService(),
+        userService: MockUserServiceGRPCAdapter(),
         
-        getUser: {
-            // Make gRPC call to get current user data
-            @Shared(.authenticationToken) var authToken
-            guard let token = authToken else {
-                throw UserClientError.networkError
-            }
-            
-            // Get user ID from shared authentication state
-            @Shared(.internalAuthUID) var internalAuthUID
-            guard let firebaseUID = internalAuthUID else {
-                throw UserClientError.userNotFound
-            }
-            
+        getUser: { authToken, uid in
             let service = MockUserService()
-            let request = GetUserRequest(uid: firebaseUID, authToken: token)
+            let user = try await service.getUser(uid: uid, authToken: authToken)
             
-            let userProto = try await service.getUser(request)
-            let user = userProto.toDomain()
-            
-            // Update shared state using read-only wrapper pattern
-            @Shared(.userState) var sharedUserState
-            let mutableState = UserState(
-                currentUser: user,
-                isLoading: false,
-                lastSyncTimestamp: Date()
-            )
-            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
-            
-            // Update legacy shared state for Features
-            @Shared(.currentUser) var currentUser
-            $currentUser.withLock { $0 = user }
-            
-            // Generate QR code images
-            user.generateAndCacheQRCodeImages()
-            
-            // Download avatar if available
-            if let avatarURL = user.avatarURL {
-                Task {
-                    do {
-                        // Mock avatar download simulation
-                        try await Task.sleep(for: .milliseconds(500))
-                        let imageData = Data() // Mock image data
-                        let metadata = ImageMetadata(avatarURL: avatarURL)
-                        @Shared(.userAvatarImage) var avatarImage
-                        $avatarImage.withLock { 
-                            $0 = AvatarImageWithMetadata(image: imageData, metadata: metadata)
+            if let user = user {
+                // Update shared state using read-only wrapper pattern
+                @Shared(.userState) var sharedUserState
+                let mutableState = UserInternalState(
+                    currentUser: user,
+                    isLoading: false,
+                    lastSyncTimestamp: Date()
+                )
+                $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+                
+                // Generate QR code images
+                user.generateAndCacheQRCodeImages()
+                
+                // Load avatar if available
+                if let avatarData = service.getAvatarData(userId: uid) {
+                    Task {
+                        let metadata = ImageMetadata(avatarURL: user.avatarURL)
+                        // Update avatar in unified state
+                        @Shared(.userState) var userState
+                        $userState.withLock { currentState in
+                            let internalState = currentState._state
+                            let avatarImageWithMetadata = AvatarImageWithMetadata(image: avatarData, metadata: metadata)
+                            let updatedState = UserInternalState(
+                                currentUser: internalState.currentUser,
+                                isLoading: internalState.isLoading,
+                                lastSyncTimestamp: internalState.lastSyncTimestamp,
+                                qrCodeImage: internalState.qrCodeImage,
+                                shareableQRCodeImage: internalState.shareableQRCodeImage,
+                                avatarImage: avatarImageWithMetadata
+                            )
+                            currentState = ReadOnlyUserState(updatedState)
                         }
-                    } catch {
-                        // Handle download error silently
                     }
                 }
             }
@@ -792,174 +927,117 @@ extension UserClient: DependencyKey {
             return user
         },
         
-        createUser: { firebaseUID, name, phoneNumber, phoneRegion in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
+        createUser: { firebaseUID, name, phoneNumber, phoneRegion, authToken in
             let service = MockUserService()
-            let request = CreateUserRequest(
-                uid: firebaseUID,
-                name: name,
-                phoneNumber: phoneNumber,
-                phoneRegion: phoneRegion,
-                notificationPreference: .thirtyMinutes, // Default to 30 minutes
-                isEmergencyAlertEnabled: false, // Default disabled
-                biometricAuthEnabled: false, // Default disabled
-                authToken: authInfo.token
-            )
-            
-            let userProto = try await service.createUser(request)
-            let newUser = userProto.toDomain()
+            let newUser = try await service.createUser(uid: firebaseUID, name: name, phoneNumber: phoneNumber, phoneRegion: phoneRegion, authToken: authToken)
             
             // Generate QR code images for new user
             newUser.generateAndCacheQRCodeImages()
             
             // Update shared state using read-only wrapper pattern
             @Shared(.userState) var sharedUserState
-            let mutableState = UserState(
+            let mutableState = UserInternalState(
                 currentUser: newUser,
                 isLoading: false,
                 lastSyncTimestamp: Date()
             )
             $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
             
-            // Update legacy shared state for Features
-            @Shared(.currentUser) var currentUser
-            $currentUser.withLock { $0 = newUser }
         },
         
-        updateUser: { user in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
+        updateUser: { user, authToken in
             let service = MockUserService()
-            let request = UpdateUserRequest(
-                id: user.id,
-                name: user.name,
-                phoneNumber: user.phoneNumber,
-                phoneRegion: user.phoneRegion,
-                emergencyNote: user.emergencyNote,
-                checkInInterval: user.checkInInterval,
-                lastCheckedIn: user.lastCheckedIn,
-                notificationPreference: user.notificationPreference,
-                isEmergencyAlertEnabled: user.isEmergencyAlertEnabled,
-                qrCodeId: user.qrCodeId,
-                avatarURL: user.avatarURL ?? "",
-                biometricAuthEnabled: user.biometricAuthEnabled,
-                authToken: authInfo.token
-            )
-            
-            let userProto = try await service.updateUser(request)
-            let updatedUser = userProto.toDomain()
+            let updatedUser = try await service.updateUser(user, authToken: authToken)
             
             // Update shared state using read-only wrapper pattern
             @Shared(.userState) var sharedUserState
-            let mutableState = UserState(
+            let mutableState = UserInternalState(
                 currentUser: updatedUser,
                 isLoading: false,
                 lastSyncTimestamp: Date()
             )
             $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
             
-            // Update legacy shared state for Features
-            @Shared(.currentUser) var currentUser
-            $currentUser.withLock { $0 = updatedUser }
         },
         
-        deleteUser: { userID in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
+        deleteUser: { userID, authToken in
             let service = MockUserService()
-            let request = DeleteUserRequest(userId: userID, authToken: authInfo.token)
-            
-            _ = try await service.deleteUser(request)
+            try await service.deleteUser(userId: userID.uuidString, authToken: authToken)
             
             // Clear shared state using read-only wrapper pattern
             @Shared(.userState) var sharedUserState
-            let mutableState = UserState(
+            let mutableState = UserInternalState(
                 currentUser: nil,
                 isLoading: false,
                 lastSyncTimestamp: Date()
             )
             $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
             
-            // Clear legacy shared state for Features
-            @Shared(.currentUser) var currentUser
-            $currentUser.withLock { $0 = nil }
         },
         
-        
-        updateAvatarData: { userID, imageData in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
+        updateAvatarData: { userID, imageData, authToken in
             let service = MockUserService()
-            let request = UpdateAvatarRequest(userId: userID, imageData: imageData, authToken: authInfo.token)
+            try await service.updateAvatarData(userId: userID.uuidString, imageData: imageData, authToken: authToken)
             
-            let response = try await service.updateAvatar(request)
-            let updatedUser = response.user.toDomain()
-            
-            // Cache the uploaded image in shared state with metadata
-            let metadata = ImageMetadata(avatarURL: response.avatarURL)
-            @Shared(.userAvatarImage) var avatarImage
-            $avatarImage.withLock { 
-                $0 = AvatarImageWithMetadata(image: imageData, metadata: metadata)
+            // Update shared state with avatar image
+            @Shared(.userState) var sharedUserState
+            $sharedUserState.withLock { currentState in
+                let internalState = currentState._state
+                let metadata = ImageMetadata(avatarURL: "mock://avatar/\(userID.uuidString)")
+                let avatarImageWithMetadata = AvatarImageWithMetadata(image: imageData, metadata: metadata)
+                let updatedState = UserInternalState(
+                    currentUser: internalState.currentUser,
+                    isLoading: internalState.isLoading,
+                    lastSyncTimestamp: Date(),
+                    qrCodeImage: internalState.qrCodeImage,
+                    shareableQRCodeImage: internalState.shareableQRCodeImage,
+                    avatarImage: avatarImageWithMetadata
+                )
+                currentState = ReadOnlyUserState(updatedState)
             }
             
-            // Update shared state using read-only wrapper pattern
-            @Shared(.userState) var sharedUserState
-            let mutableState = UserState(
-                currentUser: updatedUser,
-                isLoading: false,
-                lastSyncTimestamp: Date()
-            )
-            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
-            
-            // Update legacy shared state for Features
-            @Shared(.currentUser) var currentUser
-            $currentUser.withLock { $0 = updatedUser }
         },
         
         downloadAvatarData: { avatarURL in
-            // Simulate downloading from Supabase storage
-            try await Task.sleep(for: .milliseconds(1000))
+            // For mock, return the stored avatar data
+            try await Task.sleep(for: .milliseconds(500))
             
-            // In production, this would fetch from the Supabase storage URL
-            // For now, return mock avatar image data (1x1 pixel PNG)
-            let mockImageData = Data([
-                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
-                0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-                0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00,
-                0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8, 0x0F, 0x00, 0x00,
-                0x01, 0x00, 0x01, 0x5C, 0xCF, 0x80, 0x64, 0x00, 0x00, 0x00, 0x00, 0x49,
-                0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82
-            ])
-            return mockImageData
+            // Extract user ID from mock URL format
+            if let userID = extractUserIDFromAvatarURL(avatarURL) {
+                let service = MockUserService()
+                if let data = service.getAvatarData(userId: userID) {
+                    return data
+                }
+            }
+            
+            throw UserClientError.operationFailed
         },
         
-        deleteAvatarData: { userID in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
+        deleteAvatarData: { userID, authToken in
             let service = MockUserService()
-            let request = DeleteAvatarRequest(userId: userID, authToken: authInfo.token)
+            try await service.deleteAvatarData(userId: userID.uuidString, authToken: authToken)
             
-            let userProto = try await service.deleteAvatar(request)
-            let updatedUser = userProto.toDomain()
-            
-            // Clear avatar from shared state
-            @Shared(.userAvatarImage) var avatarImage
-            $avatarImage.withLock { $0 = nil }
-            
-            // Update shared state using read-only wrapper pattern
+            // Update shared state with cleared avatar
             @Shared(.userState) var sharedUserState
-            let mutableState = UserState(
-                currentUser: updatedUser,
-                isLoading: false,
-                lastSyncTimestamp: Date()
-            )
-            $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
+            $sharedUserState.withLock { currentState in
+                let internalState = currentState._state
+                let updatedState = UserInternalState(
+                    currentUser: internalState.currentUser,
+                    isLoading: internalState.isLoading,
+                    lastSyncTimestamp: Date(),
+                    qrCodeImage: internalState.qrCodeImage,
+                    shareableQRCodeImage: internalState.shareableQRCodeImage,
+                    avatarImage: nil
+                )
+                currentState = ReadOnlyUserState(updatedState)
+            }
             
-            // Update legacy shared state for Features
-            @Shared(.currentUser) var currentUser
-            $currentUser.withLock { $0 = updatedUser }
         },
         
         
-        resetQRCode: {
-            @Shared(.currentUser) var currentUser
-            guard var user = currentUser else {
+        resetQRCode: { authToken in
+            @Shared(.userState) var userState
+            guard var user = userState.currentUser else {
                 throw UserClientError.userNotFound
             }
             
@@ -969,7 +1047,6 @@ extension UserClient: DependencyKey {
             user.lastModified = Date()
             
             // Update user profile via gRPC to sync new QR ID with server
-            let authInfo = try await Self.getAuthenticatedUserInfo()
             let service = MockUserService()
             let request = UpdateUserRequest(
                 id: user.id,
@@ -984,41 +1061,63 @@ extension UserClient: DependencyKey {
                 qrCodeId: newQRCodeId,
                 avatarURL: user.avatarURL ?? "",
                 biometricAuthEnabled: user.biometricAuthEnabled,
-                authToken: authInfo.token
+                authToken: authToken
             )
             
             // Call gRPC to update user profile with new QR ID
-            let userProto = try await service.updateUser(request)
-            let updatedUser = userProto.toDomain()
+            let updatedUser = try await service.updateUser(user, authToken: authToken)
             
             // Generate fresh QR code images after reset
             updatedUser.generateAndCacheQRCodeImages()
             
             // Update shared state using read-only wrapper pattern
             @Shared(.userState) var sharedUserState
-            let mutableState = UserState(
+            let mutableState = UserInternalState(
                 currentUser: updatedUser,
                 isLoading: false,
                 lastSyncTimestamp: Date()
             )
             $sharedUserState.withLock { $0 = ReadOnlyUserState(mutableState) }
             
-            // Update legacy shared state for Features
-            $currentUser.withLock { $0 = updatedUser }
         },
         
         updateQRCodeImages: {
-            @Shared(.currentUser) var currentUser
-            guard let user = currentUser else { return }
+            @Shared(.userState) var userState
+            guard let user = userState.currentUser else { return }
             user.generateAndCacheQRCodeImages()
         },
         
         clearQRCodeImages: {
-            @Shared(.userQRCodeImage) var qrCodeImage
-            @Shared(.userShareableQRCodeImage) var shareableQRCodeImage
-            
-            $qrCodeImage.withLock { $0 = nil }
-            $shareableQRCodeImage.withLock { $0 = nil }
+            // Clear QR code images in unified state
+            @Shared(.userState) var sharedUserState
+            $sharedUserState.withLock { currentState in
+                let internalState = currentState._state
+                let clearedState = UserInternalState(
+                    currentUser: internalState.currentUser,
+                    isLoading: internalState.isLoading,
+                    lastSyncTimestamp: internalState.lastSyncTimestamp,
+                    qrCodeImage: nil,
+                    shareableQRCodeImage: nil,
+                    avatarImage: internalState.avatarImage
+                )
+                currentState = ReadOnlyUserState(clearedState)
+            }
+        },
+        
+        clearUserState: {
+            // Clear all user state - used during sign out
+            @Shared(.userState) var sharedUserState
+            let clearedState = UserInternalState(
+                currentUser: nil,
+                isLoading: false,
+                lastSyncTimestamp: nil,
+                qrCodeImage: nil,
+                shareableQRCodeImage: nil,
+                avatarImage: nil
+            )
+            $sharedUserState.withLock { currentState in
+                currentState = ReadOnlyUserState(clearedState)
+            }
         }
     )
 }
@@ -1028,6 +1127,16 @@ extension DependencyValues {
         get { self[UserClient.self] }
         set { self[UserClient.self] = newValue }
     }
+}
+
+// MARK: - Helper Functions
+
+private func extractUserIDFromAvatarURL(_ avatarURL: String) -> String? {
+    // Extract user ID from mock URL format: "mock://avatar/{userID}"
+    if avatarURL.hasPrefix("mock://avatar/") {
+        return String(avatarURL.dropFirst("mock://avatar/".count))
+    }
+    return nil
 }
 
 // MARK: - Mock Data Extensions

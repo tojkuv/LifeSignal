@@ -4,11 +4,21 @@ import ComposableArchitecture
 import Perception
 @_exported import Sharing
 
+private enum CheckInCancelID {
+    case timer
+    case longPress
+    case tapReset
+    case activationAnimation
+}
+
 @Reducer
 struct CheckInFeature {
     @ObservableState
     struct State: Equatable {
-        @Shared(.currentUser) var currentUser: User? = nil
+        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
+        @Shared(.userState) var userState: ReadOnlyUserState
+        
+        var currentUser: User? { userState.currentUser }
         
         var isCheckingIn = false
         var isAlertActive: Bool {
@@ -130,9 +140,9 @@ struct CheckInFeature {
                 
                 state.isCheckingIn = true
                 
-                return .run { [currentUser = state.currentUser] send in
+                return .run { [currentUser = state.currentUser, authToken = state.authState.authenticationToken] send in
                     do {
-                        guard let user = currentUser else {
+                        guard let user = currentUser, let token = authToken else {
                             await send(.checkInResponse(.failure(UserClientError.userNotFound)))
                             return
                         }
@@ -143,7 +153,7 @@ struct CheckInFeature {
                         updatedUser.lastModified = Date()
                         
                         // Call updateUser to persist the check-in
-                        try await userClient.updateUser(updatedUser)
+                        try await userClient.updateUser(updatedUser, token)
                         
                         // Send success system notification
                         try? await notificationClient.sendSystemNotification(
@@ -219,9 +229,9 @@ struct CheckInFeature {
                     // For simplicity, check current state to determine action
                     if state.isAlertActive && state.canDeactivateAlert {
                         // Was authenticating for alert deactivation
-                        return .run { [currentUser = state.currentUser] send in
+                        return .run { [currentUser = state.currentUser, authToken = state.authState.authenticationToken] send in
                             do {
-                                guard var user = currentUser else {
+                                guard var user = currentUser, let token = authToken else {
                                     await send(.alertResponse(.failure(UserClientError.userNotFound)))
                                     return
                                 }
@@ -230,10 +240,10 @@ struct CheckInFeature {
                                 user.setEmergencyAlertEnabled(false)
                                 
                                 // Call updateUser to persist the alert deactivation
-                                try await userClient.updateUser(user)
+                                try await userClient.updateUser(user, token)
                                 
                                 // Notify contacts about emergency alert deactivation
-                                try await notificationClient.notifyEmergencyAlertToggled(user.id, false)
+                                try await notificationClient.notifyEmergencyAlertToggled(user.id, false, token)
                                 
                                 await haptics.notification(.success)
                                 await send(.alertResponse(.success(())))
@@ -249,9 +259,9 @@ struct CheckInFeature {
                         
                         state.isCheckingIn = true
                         
-                        return .run { [currentUser = state.currentUser] send in
+                        return .run { [currentUser = state.currentUser, authToken = state.authState.authenticationToken] send in
                             do {
-                                guard let user = currentUser else {
+                                guard let user = currentUser, let token = authToken else {
                                     await send(.checkInResponse(.failure(UserClientError.userNotFound)))
                                     return
                                 }
@@ -262,7 +272,7 @@ struct CheckInFeature {
                                 updatedUser.lastModified = Date()
                                 
                                 // Call updateUser to persist the check-in
-                                try await userClient.updateUser(updatedUser)
+                                try await userClient.updateUser(updatedUser, token)
                                 
                                 // Send success system notification
                                 try? await notificationClient.sendSystemNotification(
@@ -312,9 +322,9 @@ struct CheckInFeature {
             case .activateAlert:
                 guard state.canActivateAlert else { return .none }
                 
-                return .run { [currentUser = state.currentUser] send in
+                return .run { [currentUser = state.currentUser, authToken = state.authState.authenticationToken] send in
                     do {
-                        guard var user = currentUser else {
+                        guard var user = currentUser, let token = authToken else {
                             await send(.alertResponse(.failure(UserClientError.userNotFound)))
                             return
                         }
@@ -324,10 +334,10 @@ struct CheckInFeature {
                         user.emergencyAlertTimestamp = Date()
                         
                         // Call updateUser to persist the alert activation
-                        try await userClient.updateUser(user)
+                        try await userClient.updateUser(user, token)
                         
                         // Notify contacts about emergency alert
-                        try await notificationClient.notifyEmergencyAlertToggled(user.id, true)
+                        try await notificationClient.notifyEmergencyAlertToggled(user.id, true, token)
                         
                         // Emergency alert notification is handled via notifyEmergencyAlertToggled
                         // which creates proper notification history via stream
@@ -347,9 +357,9 @@ struct CheckInFeature {
                     return .send(.authenticateBiometricForAlertDeactivation)
                 }
                 
-                return .run { [currentUser = state.currentUser] send in
+                return .run { [currentUser = state.currentUser, authToken = state.authState.authenticationToken] send in
                     do {
-                        guard var user = currentUser else {
+                        guard var user = currentUser, let token = authToken else {
                             await send(.alertResponse(.failure(UserClientError.userNotFound)))
                             return
                         }
@@ -358,10 +368,10 @@ struct CheckInFeature {
                         user.setEmergencyAlertEnabled(false)
                         
                         // Call updateUser to persist the alert deactivation
-                        try await userClient.updateUser(user)
+                        try await userClient.updateUser(user, token)
                         
                         // Notify contacts about emergency alert deactivation
-                        try await notificationClient.notifyEmergencyAlertToggled(user.id, false)
+                        try await notificationClient.notifyEmergencyAlertToggled(user.id, false, token)
                         
                         // Emergency alert deactivation is handled via notifyEmergencyAlertToggled
                         // which creates proper notification history via stream
@@ -415,7 +425,7 @@ struct CheckInFeature {
                         state.alertTapCount = 0 // Reset tap count
                         state.lastAlertTapTime = nil
                         return .merge(
-                            .cancel(id: CancelID.tapReset),
+                            .cancel(id: CheckInCancelID.tapReset),
                             .run { _ in await haptics.impact(.heavy) },
                             .send(.startActivationAnimation)
                         )
@@ -431,13 +441,13 @@ struct CheckInFeature {
                 state.lastAlertTapTime = now
                 
                 return .merge(
-                    .cancel(id: CancelID.tapReset),
+                    .cancel(id: CheckInCancelID.tapReset),
                     .run { _ in await haptics.impact(.medium) },
                     .run { send in
                         try? await Task.sleep(for: .seconds(2)) // Longer reset window
                         await send(.resetTapProgress)
                     }
-                    .cancellable(id: CancelID.tapReset)
+                    .cancellable(id: CheckInCancelID.tapReset)
                 )
                 
             case .startActivationAnimation:
@@ -465,7 +475,7 @@ struct CheckInFeature {
                         }
                     }
                 }
-                .cancellable(id: CancelID.activationAnimation)
+                .cancellable(id: CheckInCancelID.activationAnimation)
                 
             // Long press gestures
             case .longPressStarted:
@@ -500,19 +510,19 @@ struct CheckInFeature {
                         }
                     }
                 }
-                .cancellable(id: CancelID.longPress, cancelInFlight: true)
+                .cancellable(id: CheckInCancelID.longPress, cancelInFlight: true)
                 
             case .longPressEnded:
                 state.isLongPressing = false
                 state.longPressProgress = 0.0
-                return .cancel(id: CancelID.longPress)
+                return .cancel(id: CheckInCancelID.longPress)
                 
             case .dragGestureChanged:
                 // Cancel long press if user drags finger while pressing
                 if state.isLongPressing {
                     state.isLongPressing = false
                     state.longPressProgress = 0.0
-                    return .cancel(id: CancelID.longPress)
+                    return .cancel(id: CheckInCancelID.longPress)
                 }
                 return .none
                 
@@ -521,7 +531,7 @@ struct CheckInFeature {
                 if state.isLongPressing {
                     state.isLongPressing = false
                     state.longPressProgress = 0.0
-                    return .cancel(id: CancelID.longPress)
+                    return .cancel(id: CheckInCancelID.longPress)
                 }
                 return .none
                 
@@ -533,10 +543,10 @@ struct CheckInFeature {
                         try? await Task.sleep(for: .seconds(1))
                     }
                 }
-                .cancellable(id: CancelID.timer)
+                .cancellable(id: CheckInCancelID.timer)
 
             case .stopTimer:
-                return .cancel(id: CancelID.timer)
+                return .cancel(id: CheckInCancelID.timer)
                 
             case .updateTimer:
                 if let lastCheckIn = state.currentUser?.lastCheckedIn,
@@ -593,7 +603,7 @@ struct CheckInFeature {
                 return .none
                 
             case .debugCycleCheckInState:
-                return .run { [currentUser = state.currentUser] _ in
+                return .run { [currentUser = state.currentUser, userClient] _ in
                     guard var user = currentUser else { return }
                     
                     let now = Date()
@@ -625,19 +635,11 @@ struct CheckInFeature {
                         user.lastCheckedIn = now
                     }
                     
-                    // Update shared state directly for debug purposes
-                    @Shared(.currentUser) var sharedCurrentUser
-                    $sharedCurrentUser.withLock { $0 = user }
+                    // Update shared state directly for debug purposes - using UserClient
+                    try await userClient.updateUser(user, "")
                 }
             }
         }
-    }
-    
-    private enum CancelID {
-        case timer
-        case longPress
-        case tapReset
-        case activationAnimation
     }
 }
 

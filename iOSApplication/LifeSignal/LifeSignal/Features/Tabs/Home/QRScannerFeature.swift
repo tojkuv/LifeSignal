@@ -11,7 +11,10 @@ import Perception
 struct QRScannerFeature {
     @ObservableState
     struct State: Equatable {
-        @Shared(.currentUser) var currentUser: User? = nil
+        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
+        @Shared(.userState) var userState: ReadOnlyUserState
+        
+        var currentUser: User? { userState.currentUser }
         
         var isScanning = false
         var isLoading = false
@@ -400,14 +403,19 @@ struct QRScannerFeature {
             }
         }
         
-        return .run { [contactsClient, haptics, contact = state.contact] send in
+        return .run { [contactsClient, haptics, contact = state.contact, authToken = state.authState.authenticationToken, userId = state.userState.currentUser?.id] send in
             await haptics.notification(.success)
             await send(.contactAddResponse(Result {
-                try await contactsClient.addContact(
+                guard let token = authToken, let userID = userId else {
+                    throw ContactsClientError.authenticationRequired
+                }
+                return try await contactsClient.addContact(
                     contact.name,
                     contact.phoneNumber,
                     contact.isResponder,
-                    contact.isDependent
+                    contact.isDependent,
+                    token,
+                    userID
                 )
             }))
         }

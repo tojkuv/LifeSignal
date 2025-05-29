@@ -19,8 +19,11 @@ enum RespondersAlert: Equatable {
 struct RespondersFeature {
     @ObservableState
     struct State: Equatable {
+        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
         @Shared(.contacts) var contactsState: ReadOnlyContactsState
-        @Shared(.currentUser) var currentUser: User? = nil
+        @Shared(.userState) var userState: ReadOnlyUserState
+        
+        var currentUser: User? { userState.currentUser }
         
         var isLoading = false
         
@@ -222,14 +225,19 @@ struct RespondersFeature {
         case contactCards(IdentifiedActionOf<ContactCardFeature>)
         
         // Network responses
-        case pingResponse(Result<Void, Error>)
-        case removeResponse(Result<Void, Error>)
-        case refreshResponse(Result<Void, Error>)
-        case checkInResponse(Result<Void, Error>)
+        case pingSuccess
+        case pingFailure(Error)
+        case removeSuccess
+        case removeFailure(Error)
+        case refreshSuccess
+        case refreshFailure(Error)
+        case checkInSuccess
+        case checkInFailure(Error)
         
         // Biometric authentication
         case authenticateBiometricForPingClear
-        case biometricAuthenticationResult(Result<Bool, Error>)
+        case biometricAuthenticationSuccess(Bool)
+        case biometricAuthenticationFailure(Error)
     }
 
     @Dependency(\.contactsClient) var contactsClient
@@ -237,21 +245,76 @@ struct RespondersFeature {
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.userClient) var userClient
     @Dependency(\.biometricClient) var biometricClient
+    
+    // MARK: - Helper Action Methods
+    
+    private func refreshRespondersAction(state: inout State) -> Effect<Action> {
+        guard state.currentUser != nil else { return .none }
+        guard let authToken = state.authState.authenticationToken,
+              let userId = state.userState.currentUser?.id else {
+            return .send(.refreshFailure(ContactsClientError.authenticationRequired))
+        }
+        
+        state.isLoading = true
+        state.updateResponderCards()
+
+        return .run { send in
+            do {
+                try await contactsClient.refreshContacts(authToken, userId)
+                await send(.refreshSuccess)
+            } catch {
+                await send(.refreshFailure(error))
+            }
+        }
+    }
+    
+    private func pingContactAction(state: inout State, contact: Contact) -> Effect<Action> {
+        guard let authToken = state.authState.authenticationToken else {
+            return .send(.pingFailure(ContactsClientError.authenticationRequired))
+        }
+        
+        state.isLoading = true
+        let senderName = state.currentUser?.name ?? "Someone"
+
+        return .run { send in
+            await haptics.notification(.warning)
+            do {
+                try await notificationClient.sendPingNotification(
+                    .receiveResponderPing,
+                    "You Received a Ping", 
+                    "\(senderName) sent you a check-in ping",
+                    contact.id,
+                    authToken
+                )
+                await send(.pingSuccess)
+            } catch {
+                await send(.pingFailure(error))
+            }
+        }
+    }
+    
+    private func removeContactAction(state: inout State, contact: Contact) -> Effect<Action> {
+        state.confirmationAlert = AlertState {
+            TextState("Remove Responder")
+        } actions: {
+            ButtonState(role: .destructive, action: .confirmRemove(contact)) {
+                TextState("Remove")
+            }
+            ButtonState(role: .cancel) {
+                TextState("Cancel")
+            }
+        } message: {
+            TextState("Are you sure you want to remove \(contact.name) as a responder?")
+        }
+        return .none
+    }
 
     var body: some ReducerOf<Self> {
-        Reduce { state, action in
+        Reduce<State, Action> { state, action in
             switch action {
             // Data management
             case .refreshResponders:
-                guard state.currentUser != nil else { return .none }
-                state.isLoading = true
-                state.updateResponderCards() // Update cards with current data
-
-                return .run { [contactsClient] send in
-                    await send(.refreshResponse(Result {
-                        try await contactsClient.refreshContacts()
-                    }))
-                }
+                return refreshRespondersAction(state: &state)
 
             case .contactsChanged:
                 state.updateResponderCards()
@@ -263,36 +326,10 @@ struct RespondersFeature {
                 return .none
 
             case let .pingContact(contact):
-                state.isLoading = true
-                let senderName = state.currentUser?.name ?? "Someone"
-
-                return .run { send in
-                    await haptics.notification(.warning)
-                    await send(.pingResponse(Result {
-                        // Send ping notification to responder via NotificationClient
-                        try await notificationClient.sendPingNotification(
-                            .receiveResponderPing,
-                            "You Received a Ping", 
-                            "\(senderName) sent you a check-in ping",
-                            contact.id
-                        )
-                    }))
-                }
+                return pingContactAction(state: &state, contact: contact)
 
             case let .removeContact(contact):
-                state.confirmationAlert = AlertState {
-                    TextState("Remove Responder")
-                } actions: {
-                    ButtonState(role: .destructive, action: .confirmRemove(contact)) {
-                        TextState("Remove")
-                    }
-                    ButtonState(role: .cancel) {
-                        TextState("Cancel")
-                    }
-                } message: {
-                    TextState("Are you sure you want to remove \(contact.name) as a responder?")
-                }
-                return .none
+                return removeContactAction(state: &state, contact: contact)
 
             case .clearAllPings:
                 guard state.pendingPingsCount > 0 else { return .none }
@@ -345,19 +382,31 @@ struct RespondersFeature {
                 return .none
 
             case .confirmationAlert(.presented(.confirmRemove(let contact))):
+                guard let authToken = state.authState.authenticationToken else {
+                    return .send(.removeFailure(ContactsClientError.authenticationRequired))
+                }
+                
                 state.isLoading = true
 
                 return .run { send in
                     await haptics.notification(.success)
-                    await send(.removeResponse(Result {
-                        try await contactsClient.removeContact(contact.id)
-                    }))
+                    do {
+                        try await contactsClient.removeContact(contact.id, authToken)
+                        await send(.removeSuccess)
+                    } catch {
+                        await send(.removeFailure(error))
+                    }
                 }
 
             case .confirmationAlert(.presented(.confirmClearAllPings)):
                 // Check biometric requirement before clearing pings
                 if state.currentUser?.biometricAuthEnabled == true {
                     return .send(.authenticateBiometricForPingClear)
+                }
+                
+                guard let authToken = state.authState.authenticationToken,
+                      let currentUser = state.currentUser else {
+                    return .send(.pingFailure(ContactsClientError.authenticationRequired))
                 }
                 
                 state.isLoading = true
@@ -372,23 +421,22 @@ struct RespondersFeature {
                     return updatedContact
                 }
 
-                return .run { [haptics, notificationClient, contactsClient, userClient, currentUser = state.currentUser] send in
+                return .run { send in
                     await haptics.notification(.success)
                     
                     // First: Perform check-in since responding to pings means user is safe
-                    await send(.checkInResponse(Result {
-                        guard let user = currentUser else {
-                            throw UserClientError.userNotFound
-                        }
-                        
+                    do {
                         // Update user with new check-in timestamp
-                        var updatedUser = user
+                        var updatedUser = currentUser
                         updatedUser.lastCheckedIn = Date()
                         updatedUser.lastModified = Date()
                         
                         // Call updateUser to persist the check-in
-                        try await userClient.updateUser(updatedUser)
-                    }))
+                        try await userClient.updateUser(updatedUser, authToken)
+                        await send(.checkInSuccess)
+                    } catch {
+                        await send(.checkInFailure(error))
+                    }
                     
                     // Second: Send acknowledgment notifications to each contact who sent pings
                     for originalContact in contactsToNotify {
@@ -397,7 +445,8 @@ struct RespondersFeature {
                                 .receiveDependentPingResponded,
                                 "Ping Acknowledged",
                                 "Your ping has been acknowledged",
-                                originalContact.id
+                                originalContact.id,
+                                authToken
                             )
                         } catch {
                             // Continue with other notifications even if one fails
@@ -407,22 +456,25 @@ struct RespondersFeature {
                     
                     // Third: Update each contact's state to clear the pings
                     for contact in contactsToUpdate {
-                        await contactsClient.updateContact(contact)
+                        try await contactsClient.updateContact(contact, authToken)
                     }
                     
-                    await send(.pingResponse(Result {
-                        // Clear notification history (but don't send duplicate notifications)
-                        try await notificationClient.clearAllReceivedPings()
-                    }))
+                    // Fourth: Clear notification history
+                    do {
+                        try await notificationClient.clearAllReceivedPings(authToken)
+                        await send(.pingSuccess)
+                    } catch {
+                        await send(.pingFailure(error))
+                    }
                 }
 
             case .confirmationAlert:
                 return .none
 
             // Network responses
-            case .pingResponse(.success):
+            case .pingSuccess:
                 state.isLoading = false
-                return .run { [haptics, notificationClient] _ in
+                return .run { _ in
                     await haptics.notification(.success)
                     try? await notificationClient.sendSystemNotification(
                         "Check-in Complete",
@@ -430,9 +482,9 @@ struct RespondersFeature {
                     )
                 }
 
-            case let .pingResponse(.failure(error)):
+            case let .pingFailure(error):
                 state.isLoading = false
-                return .run { [haptics, notificationClient] _ in
+                return .run { _ in
                     await haptics.notification(.error)
                     try? await notificationClient.sendSystemNotification(
                         "Operation Failed",
@@ -440,9 +492,9 @@ struct RespondersFeature {
                     )
                 }
 
-            case .removeResponse(.success):
+            case .removeSuccess:
                 state.isLoading = false
-                return .run { [haptics, notificationClient] _ in
+                return .run { _ in
                     await haptics.notification(.success)
                     try? await notificationClient.sendSystemNotification(
                         "Responder Removed",
@@ -450,9 +502,9 @@ struct RespondersFeature {
                     )
                 }
 
-            case let .removeResponse(.failure(error)):
+            case let .removeFailure(error):
                 state.isLoading = false
-                return .run { [haptics, notificationClient] _ in
+                return .run { _ in
                     await haptics.notification(.error)
                     try? await notificationClient.sendSystemNotification(
                         "Remove Failed",
@@ -460,7 +512,7 @@ struct RespondersFeature {
                     )
                 }
 
-            case .refreshResponse(.success):
+            case .refreshSuccess:
                 state.isLoading = false
                 state.updateResponderCards()
                 // Also update the contact details if open and the contact still exists
@@ -470,9 +522,9 @@ struct RespondersFeature {
                 }
                 return .none
 
-            case let .refreshResponse(.failure(error)):
+            case let .refreshFailure(error):
                 state.isLoading = false
-                return .run { [haptics, notificationClient] _ in
+                return .run { _ in
                     await haptics.notification(.error)
                     try? await notificationClient.sendSystemNotification(
                         "Refresh Failed",
@@ -480,13 +532,13 @@ struct RespondersFeature {
                     )
                 }
                 
-            case .checkInResponse(.success):
+            case .checkInSuccess:
                 // Check-in successful - continue with ping clearing
                 return .none
                 
-            case let .checkInResponse(.failure(error)):
+            case let .checkInFailure(error):
                 // Check-in failed but continue with ping clearing anyway
-                return .run { [haptics, notificationClient] _ in
+                return .run { _ in
                     await haptics.notification(.warning)
                     try? await notificationClient.sendSystemNotification(
                         "Check-in Issue",
@@ -496,15 +548,23 @@ struct RespondersFeature {
                 
             // Biometric authentication
             case .authenticateBiometricForPingClear:
-                return .run { [biometricClient] send in
-                    await send(.biometricAuthenticationResult(Result {
-                        try await biometricClient.authenticate("Authenticate to respond to pings")
-                    }))
+                return .run { send in
+                    do {
+                        let success = try await biometricClient.authenticate("Authenticate to respond to pings")
+                        await send(.biometricAuthenticationSuccess(success))
+                    } catch {
+                        await send(.biometricAuthenticationFailure(error))
+                    }
                 }
                 
-            case let .biometricAuthenticationResult(.success(success)):
+            case let .biometricAuthenticationSuccess(success):
                 if success {
-                    // Proceed with ping clearing
+                    // Proceed with ping clearing - reuse the existing logic
+                    guard let authToken = state.authState.authenticationToken,
+                          let currentUser = state.currentUser else {
+                        return .send(.pingFailure(ContactsClientError.authenticationRequired))
+                    }
+                    
                     state.isLoading = true
                     state.showClearAllPingsConfirmation = false
 
@@ -517,23 +577,22 @@ struct RespondersFeature {
                         return updatedContact
                     }
 
-                    return .run { [haptics, notificationClient, contactsClient, userClient, currentUser = state.currentUser] send in
+                    return .run { send in
                         await haptics.notification(.success)
                         
                         // First: Perform check-in since responding to pings means user is safe
-                        await send(.checkInResponse(Result {
-                            guard let user = currentUser else {
-                                throw UserClientError.userNotFound
-                            }
-                            
+                        do {
                             // Update user with new check-in timestamp
-                            var updatedUser = user
+                            var updatedUser = currentUser
                             updatedUser.lastCheckedIn = Date()
                             updatedUser.lastModified = Date()
                             
                             // Call updateUser to persist the check-in
-                            try await userClient.updateUser(updatedUser)
-                        }))
+                            try await userClient.updateUser(updatedUser, authToken)
+                            await send(.checkInSuccess)
+                        } catch {
+                            await send(.checkInFailure(error))
+                        }
                         
                         // Second: Send acknowledgment notifications to each contact who sent pings
                         for originalContact in contactsToNotify {
@@ -542,7 +601,8 @@ struct RespondersFeature {
                                     .receiveDependentPingResponded,
                                     "Ping Acknowledged",
                                     "Your ping has been acknowledged",
-                                    originalContact.id
+                                    originalContact.id,
+                                    authToken
                                 )
                             } catch {
                                 // Continue with other notifications even if one fails
@@ -552,13 +612,16 @@ struct RespondersFeature {
                         
                         // Third: Update each contact's state to clear the pings
                         for contact in contactsToUpdate {
-                            await contactsClient.updateContact(contact)
+                            try await contactsClient.updateContact(contact, authToken)
                         }
                         
-                        await send(.pingResponse(Result {
-                            // Clear notification history (but don't send duplicate notifications)
-                            try await notificationClient.clearAllReceivedPings()
-                        }))
+                        // Fourth: Clear notification history
+                        do {
+                            try await notificationClient.clearAllReceivedPings(authToken)
+                            await send(.pingSuccess)
+                        } catch {
+                            await send(.pingFailure(error))
+                        }
                     }
                 } else {
                     return .run { _ in
@@ -566,7 +629,7 @@ struct RespondersFeature {
                     }
                 }
                 
-            case let .biometricAuthenticationResult(.failure(error)):
+            case let .biometricAuthenticationFailure(error):
                 return .run { [notificationClient] _ in
                     await haptics.notification(.error)
                     

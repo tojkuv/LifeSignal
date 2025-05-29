@@ -12,14 +12,23 @@ enum DependentsAlert: Equatable {
     case confirmPing(Contact)
 }
 
+enum DependentsSortMode: String, CaseIterable, Equatable {
+    case timeLeft = "Time Left"
+    case name = "Name"
+    case dateAdded = "Date Added"
+}
+
 @Reducer
 struct DependentsFeature {
     @ObservableState
     struct State: Equatable {
+        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
         @Shared(.contacts) var contactsState: ReadOnlyContactsState
-        @Shared(.currentUser) var currentUser: User? = nil
+        @Shared(.userState) var userState: ReadOnlyUserState
         
-        var sortMode: SortMode = .timeLeft
+        var currentUser: User? { userState.currentUser }
+        
+        var sortMode: DependentsSortMode = .timeLeft
         @Presents var contactDetails: ContactDetailsSheetFeature.State?
         @Presents var confirmationAlert: AlertState<DependentsAlert>?
         @Presents var notificationsHistory: NotificationsHistorySheetFeature.State?
@@ -43,7 +52,7 @@ struct DependentsFeature {
             })
         }
         
-        private func sortedContacts(_ contacts: [Contact], by mode: SortMode) -> [Contact] {
+        private func sortedContacts(_ contacts: [Contact], by mode: DependentsSortMode) -> [Contact] {
             // First group by priority: [manual alert, not responsive, ping status, default]
             let grouped = Dictionary(grouping: contacts) { getContactPriority($0) }
             let sortedKeys = grouped.keys.sorted()
@@ -82,11 +91,6 @@ struct DependentsFeature {
             return contact.checkInInterval - timeSince
         }
         
-        enum SortMode: String, CaseIterable, Equatable {
-            case timeLeft = "Time Left"
-            case name = "Name"
-            case dateAdded = "Date Added"
-        }
         
         var dependentCount: Int {
             dependents.count
@@ -422,7 +426,7 @@ struct DependentsFeature {
         // Data management
         case refreshDependents
         case contactsChanged
-        case setSortMode(State.SortMode)
+        case setSortMode(DependentsSortMode)
         
         // Contact interactions
         case selectContact(Contact)
@@ -439,10 +443,14 @@ struct DependentsFeature {
         case contactCards(IdentifiedActionOf<ContactCardFeature>)
         
         // Network responses
-        case pingResponse(Result<Void, Error>)
-        case removeResponse(Result<Void, Error>)
-        case dependentStatusResponse(Result<Contact, Error>)
-        case refreshResponse(Result<Void, Error>)
+        case pingSuccess
+        case pingFailure(Error)
+        case removeSuccess
+        case removeFailure(Error)
+        case dependentStatusSuccess(Contact)
+        case dependentStatusFailure(Error)
+        case refreshSuccess
+        case refreshFailure(Error)
     }
 
     @Dependency(\.contactsClient) var contactsClient
@@ -459,13 +467,21 @@ struct DependentsFeature {
 
             // Data management
             case .refreshDependents:
-                guard state.currentUser != nil else { return .none }
-                state.updateDependentCards() // Update cards with current data
+                guard let currentUser = state.currentUser else { return .none }
+                guard let authToken = state.authState.authenticationToken else {
+                    return .send(.refreshFailure(ContactsClientError.authenticationRequired))
+                }
                 
-                return .run { [contactsClient] send in
-                    await send(.refreshResponse(Result {
-                        try await contactsClient.refreshContacts()
-                    }))
+                state.updateDependentCards()
+                let userId = currentUser.id
+                
+                return .run { send in
+                    do {
+                        try await contactsClient.refreshContacts(authToken, userId)
+                        await send(.refreshSuccess)
+                    } catch {
+                        await send(.refreshFailure(error))
+                    }
                 }
 
             case .contactsChanged:
@@ -517,16 +533,13 @@ struct DependentsFeature {
                 return .none
 
             case let .toggleDependentStatus(contact):
-
                 return .run { send in
                     // Since ContactsClient doesn't have updateContact method, 
                     // we simulate the status change by removing and re-adding
-                    await send(.dependentStatusResponse(Result {
-                        // This would be handled by gRPC streaming updates in production
-                        var updatedContact = contact
-                        updatedContact.isDependent.toggle()
-                        return updatedContact
-                    }))
+                    // This would be handled by gRPC streaming updates in production
+                    var updatedContact = contact
+                    updatedContact.isDependent.toggle()
+                    await send(.dependentStatusSuccess(updatedContact))
                 }
 
             case let .showRemoveConfirmation(contact):
@@ -571,45 +584,49 @@ struct DependentsFeature {
                 return .none
 
             case .confirmationAlert(.presented(.confirmPing(let contact))):
-
+                guard let authToken = state.authState.authenticationToken else {
+                    return .send(.pingFailure(ContactsClientError.authenticationRequired))
+                }
+                
                 return .run { send in
                     await haptics.notification(.warning)
-                    await send(.pingResponse(Result {
+                    do {
                         // Update contact to show outgoing ping
                         var updatedContact = contact
                         updatedContact.hasOutgoingPing = true
                         updatedContact.outgoingPingTimestamp = Date()
-                        await contactsClient.updateContact(updatedContact)
+                        try await contactsClient.updateContact(updatedContact, authToken)
                         
                         // Send ping notification via NotificationClient
                         try await notificationClient.sendPingNotification(
                             .sendDependentPing,
                             "Ping Sent", 
                             "Sent check-in ping to \(contact.name)",
-                            contact.id
+                            contact.id,
+                            authToken
                         )
-                    }))
+                        await send(.pingSuccess)
+                    } catch {
+                        await send(.pingFailure(error))
+                    }
                 }
 
             case .confirmationAlert(.presented(.confirmRemove(let contact))):
-
                 return .run { send in
                     await haptics.notification(.success)
-                    await send(.dependentStatusResponse(Result {
-                        // Remove dependent status - would be handled by gRPC streaming in production
-                        var updatedContact = contact
-                        updatedContact.isDependent = false
-                        return updatedContact
-                    }))
+                    // Remove dependent status - would be handled by gRPC streaming in production
+                    var updatedContact = contact
+                    updatedContact.isDependent = false
+                    await send(.dependentStatusSuccess(updatedContact))
                 }
 
             case .confirmationAlert:
                 return .none
 
             // Network responses
-            case .pingResponse(.success):
+            case .pingSuccess:
                 state.updateDependentCards()
-                return .run { [haptics, notificationClient] _ in
+                return .run { _ in
                     await haptics.notification(.success)
                     try? await notificationClient.sendSystemNotification(
                         "Ping Sent",
@@ -617,8 +634,8 @@ struct DependentsFeature {
                     )
                 }
 
-            case let .pingResponse(.failure(error)):
-                return .run { [haptics, notificationClient] _ in
+            case let .pingFailure(error):
+                return .run { _ in
                     await haptics.notification(.error)
                     try? await notificationClient.sendSystemNotification(
                         "Ping Failed",
@@ -626,8 +643,8 @@ struct DependentsFeature {
                     )
                 }
 
-            case .removeResponse(.success):
-                return .run { [haptics, notificationClient] _ in
+            case .removeSuccess:
+                return .run { _ in
                     await haptics.notification(.success)
                     try? await notificationClient.sendSystemNotification(
                         "Dependent Removed",
@@ -635,8 +652,8 @@ struct DependentsFeature {
                     )
                 }
 
-            case let .removeResponse(.failure(error)):
-                return .run { [haptics, notificationClient] _ in
+            case let .removeFailure(error):
+                return .run { _ in
                     await haptics.notification(.error)
                     try? await notificationClient.sendSystemNotification(
                         "Remove Failed",
@@ -644,9 +661,12 @@ struct DependentsFeature {
                     )
                 }
 
-            case let .dependentStatusResponse(.success(updatedContact)):
-                return .run { [contactsClient, haptics, notificationClient] _ in
-                    await contactsClient.updateContact(updatedContact)
+            case let .dependentStatusSuccess(updatedContact):
+                guard let authToken = state.authState.authenticationToken else {
+                    return .none
+                }
+                return .run { _ in
+                    try await contactsClient.updateContact(updatedContact, authToken)
                     await haptics.notification(.success)
                     try? await notificationClient.sendSystemNotification(
                         "Status Updated",
@@ -654,8 +674,8 @@ struct DependentsFeature {
                     )
                 }
 
-            case let .dependentStatusResponse(.failure(error)):
-                return .run { [haptics, notificationClient] _ in
+            case let .dependentStatusFailure(error):
+                return .run { _ in
                     await haptics.notification(.error)
                     try? await notificationClient.sendSystemNotification(
                         "Status Update Failed",
@@ -663,7 +683,7 @@ struct DependentsFeature {
                     )
                 }
 
-            case .refreshResponse(.success):
+            case .refreshSuccess:
                 state.updateDependentCards()
                 // Also update the contact details if open and the contact still exists
                 if let contactDetails = state.contactDetails,
@@ -672,8 +692,8 @@ struct DependentsFeature {
                 }
                 return .none
 
-            case .refreshResponse(.failure):
-                return .run { [haptics, notificationClient] _ in
+            case .refreshFailure:
+                return .run { _ in
                     await haptics.notification(.warning)
                     try? await notificationClient.sendSystemNotification(
                         "Sync Issue",
@@ -782,7 +802,7 @@ private extension DependentsView {
     @ViewBuilder
     var sortMenuButton: some View {
         Menu {
-            ForEach(DependentsFeature.State.SortMode.allCases, id: \.self) { sortMode in
+            ForEach(DependentsSortMode.allCases, id: \.self) { sortMode in
                 Button(action: {
                     store.send(.setSortMode(sortMode), animation: .default)
                 }) {

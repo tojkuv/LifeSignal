@@ -20,6 +20,7 @@ enum ContactRole: Equatable {
 struct ContactDetailsSheetFeature {
     @ObservableState
     struct State: Equatable {
+        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
         var contact: Contact
         var isLoading = false
         @Presents var alert: AlertState<ContactDetailsAlert>?
@@ -215,10 +216,13 @@ struct ContactDetailsSheetFeature {
                 
             case .alert(.presented(.confirmDelete)):
                 state.isLoading = true
-                return .run { [contact = state.contact] send in
+                return .run { [contact = state.contact, authToken = state.authState.authenticationToken] send in
                     await haptics.notification(.warning)
                     await send(.contactDeleteResponse(Result {
-                        try await contactsClient.removeContact(contact.id)
+                        guard let token = authToken else {
+                            throw ContactsClientError.authenticationRequired
+                        }
+                        try await contactsClient.removeContact(contact.id, token)
                     }))
                 }
                 
@@ -238,41 +242,50 @@ struct ContactDetailsSheetFeature {
                 state.contact = updatedContact
                 state.isLoading = true
                 
-                return .run { [contact = updatedContact, originalContact = state.contact] send in
+                return .run { [contact = updatedContact, originalContact = state.contact, authToken = state.authState.authenticationToken] send in
                     await haptics.notification(.success)
                     
                     // If we cancelled an outgoing ping, send notification
-                    if role == .dependent && !newValue && originalContact.hasOutgoingPing {
+                    if role == .dependent && !newValue && originalContact.hasOutgoingPing, let token = authToken {
                         try? await notificationClient.sendPingNotification(
                             .cancelDependentPing,
                             "Ping Cancelled",
                             "Ping to \(contact.name) was cancelled when removing dependent role",
-                            contact.id
+                            contact.id,
+                            token
                         )
                     }
                     
                     await send(.contactUpdateResponse(Result {
-                        await contactsClient.updateContact(contact)
+                        guard let token = authToken else {
+                            throw ContactsClientError.authenticationRequired
+                        }
+                        try await contactsClient.updateContact(contact, token)
                         return contact
                     }))
                 }
                 
             case .alert(.presented(.confirmSendPing)):
-                return .run { [contact = state.contact] send in
+                return .run { [contact = state.contact, authToken = state.authState.authenticationToken] send in
                     await haptics.impact(.medium)
                     do {
+                        guard let token = authToken else {
+                            throw ContactsClientError.authenticationRequired
+                        }
+                        
                         // Update contact to show outgoing ping
                         var updatedContact = contact
                         updatedContact.hasOutgoingPing = true
                         updatedContact.outgoingPingTimestamp = Date()
-                        await contactsClient.updateContact(updatedContact)
+                        try await contactsClient.updateContact(updatedContact, token)
                         
                         // Send ping notification
                         try await notificationClient.sendPingNotification(
                             .sendDependentPing,
                             "Ping Sent",
                             "You sent a ping to \(contact.name)",
-                            contact.id
+                            contact.id,
+                            token
                         )
                         await send(.pingResponse(.success(())))
                     } catch {
@@ -281,21 +294,26 @@ struct ContactDetailsSheetFeature {
                 }
                 
             case .alert(.presented(.confirmCancelPing)):
-                return .run { [contact = state.contact] send in
+                return .run { [contact = state.contact, authToken = state.authState.authenticationToken] send in
                     await haptics.impact(.medium)
                     do {
+                        guard let token = authToken else {
+                            throw ContactsClientError.authenticationRequired
+                        }
+                        
                         // Clear the ping
                         var updatedContact = contact
                         updatedContact.hasOutgoingPing = false
                         updatedContact.outgoingPingTimestamp = nil
-                        await contactsClient.updateContact(updatedContact)
+                        try await contactsClient.updateContact(updatedContact, token)
                         
                         // Send notification about clearing ping
                         try await notificationClient.sendPingNotification(
                             .cancelDependentPing,
                             "Ping Cancelled",
                             "You cancelled the ping to \(contact.name)",
-                            contact.id
+                            contact.id,
+                            token
                         )
                         await send(.pingResponse(.success(())))
                     } catch {

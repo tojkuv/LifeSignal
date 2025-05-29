@@ -10,9 +10,11 @@ import UIKit
 struct ProfileFeature {
     @ObservableState
     struct State: Equatable {
-        @Shared(.currentUser) var currentUser: User? = nil
-        @Shared(.sessionState) var sessionState: SessionState = .unauthenticated
-        @Shared(.userAvatarImage) var avatarImageData: AvatarImageWithMetadata? = nil
+        @Shared(.userState) var userState: ReadOnlyUserState
+        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
+        
+        var currentUser: User? { userState.currentUser }
+        var avatarImageData: AvatarImageWithMetadata? { userState.avatarImage }
         
         
         // Sheet states to match mock UI
@@ -21,6 +23,7 @@ struct ProfileFeature {
         var showEditAvatarSheet = false
         var showPhoneNumberChangeSheet = false
         var showSignOutConfirmation = false
+        var showDeleteAccountConfirmation = false
         var showDeleteAvatarConfirmation = false
         var showImagePicker = false
         
@@ -31,13 +34,14 @@ struct ProfileFeature {
         
         static func == (lhs: State, rhs: State) -> Bool {
             lhs.currentUser == rhs.currentUser &&
-            lhs.sessionState == rhs.sessionState &&
+            lhs.authState == rhs.authState &&
             lhs.avatarImageData == rhs.avatarImageData &&
             lhs.showEditDescriptionSheet == rhs.showEditDescriptionSheet &&
             lhs.showEditNameSheet == rhs.showEditNameSheet &&
             lhs.showEditAvatarSheet == rhs.showEditAvatarSheet &&
             lhs.showPhoneNumberChangeSheet == rhs.showPhoneNumberChangeSheet &&
             lhs.showSignOutConfirmation == rhs.showSignOutConfirmation &&
+            lhs.showDeleteAccountConfirmation == rhs.showDeleteAccountConfirmation &&
             lhs.showDeleteAvatarConfirmation == rhs.showDeleteAvatarConfirmation &&
             lhs.showImagePicker == rhs.showImagePicker &&
             lhs.newDescription == rhs.newDescription &&
@@ -120,6 +124,8 @@ struct ProfileFeature {
         // Authentication
         case confirmSignOut
         case signOut
+        case confirmDeleteAccount
+        case deleteAccount
         
         // Focus states
         case handleTextEditorFocusChange(Bool)
@@ -130,10 +136,19 @@ struct ProfileFeature {
         case uploadAvatarResponse(Result<URL, Error>)
         case phoneVerificationSent(Result<String, Error>)
         case phoneNumberChanged(Result<Void, Error>)
+        
+        // Delegate actions
+        @CasePathable
+        enum Delegate {
+            case signOutRequested
+            case deleteAccountRequested
+        }
+        case delegate(Delegate)
     }
     
     @Dependency(\.userClient) var userClient
-    @Dependency(\.sessionClient) var sessionClient
+    @Dependency(\.authenticationClient) var authenticationClient
+    @Dependency(\.onboardingClient) var onboardingClient
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.notificationClient) var notificationClient
     @Dependency(\.phoneNumberFormatter) var phoneNumberFormatter
@@ -216,10 +231,10 @@ struct ProfileFeature {
                     }
                 }
                 
-                return .run { [phoneNumber = state.phoneNumberEntry.phoneNumber, sessionClient] send in
+                return .run { [phoneNumber = state.phoneNumberEntry.phoneNumber, authenticationClient] send in
                     await send(.phoneVerificationSent(
                         Result {
-                            try await sessionClient.sendPhoneChangeVerificationCode(phoneNumber)
+                            try await authenticationClient.sendPhoneChangeVerificationCode(phoneNumber)
                         }
                     ))
                 }
@@ -245,10 +260,10 @@ struct ProfileFeature {
                     }
                 }
                 
-                return .run { [verificationID = verificationID, code = state.verificationCodeEntry.verificationCode, sessionClient] send in
+                return .run { [verificationID = verificationID, code = state.verificationCodeEntry.verificationCode, authenticationClient] send in
                     await send(.phoneNumberChanged(
                         Result {
-                            try await sessionClient.changePhoneNumber(verificationID, code)
+                            try await authenticationClient.changePhoneNumber(verificationID, code)
                         }
                     ))
                 }
@@ -267,24 +282,17 @@ struct ProfileFeature {
 
             case .signOut:
                 state.showSignOutConfirmation = false
-                return .run { [sessionClient, haptics, notificationClient] _ in
-                    do {
-                        try await sessionClient.endSession()
-                        await haptics.notification(.success)
-                        
-                        try? await notificationClient.sendSystemNotification(
-                            "Signed Out",
-                            "You have been successfully signed out of your account."
-                        )
-                    } catch {
-                        await haptics.notification(.error)
-                        
-                        try? await notificationClient.sendSystemNotification(
-                            "Sign Out Issue",
-                            "There was an issue signing out, but you have been logged out locally."
-                        )
-                    }
+                return .send(.delegate(.signOutRequested))
+                
+            case .confirmDeleteAccount:
+                state.showDeleteAccountConfirmation = true
+                return .run { _ in
+                    await haptics.impact(.heavy)
                 }
+
+            case .deleteAccount:
+                state.showDeleteAccountConfirmation = false
+                return .send(.delegate(.deleteAccountRequested))
 
             case .saveEditedDescription:
                 let trimmedDescription = state.newDescription.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -303,9 +311,12 @@ struct ProfileFeature {
                 
                 state.showEditDescriptionSheet = false
                 
-                return .run { [userClient, user] send in
+                return .run { [userClient, user, authToken = state.authState.authenticationToken] send in
                     await send(.updateResponse(Result {
-                        try await userClient.updateUser(user)
+                        guard let token = authToken else {
+                            throw UserClientError.authenticationFailed("Missing authentication token")
+                        }
+                        try await userClient.updateUser(user, token)
                     }))
                 }
 
@@ -319,7 +330,7 @@ struct ProfileFeature {
             case .saveEditedName:
                 let trimmedName = state.newName.trimmingCharacters(in: .whitespacesAndNewlines)
                 
-                let validationResult = sessionClient.validateName(trimmedName)
+                let validationResult = onboardingClient.validateName(trimmedName)
                 guard validationResult.isValid else {
                     return .run { [notificationClient, haptics, errorMessage = validationResult.errorMessage] _ in
                         try? await notificationClient.sendSystemNotification(
@@ -341,9 +352,12 @@ struct ProfileFeature {
                 
                 state.showEditNameSheet = false
                 
-                return .run { [userClient, user] send in
+                return .run { [userClient, user, authToken = state.authState.authenticationToken] send in
                     await send(.updateResponse(Result {
-                        try await userClient.updateUser(user)
+                        guard let token = authToken else {
+                            throw UserClientError.authenticationFailed("Missing authentication token")
+                        }
+                        try await userClient.updateUser(user, token)
                     }))
                 }
 
@@ -364,13 +378,17 @@ struct ProfileFeature {
                 state.showEditAvatarSheet = false
                 state.showImagePicker = false
                 
-                return .run { [userClient, notificationClient, userID = user.id] send in
+                return .run { [userClient, notificationClient, userID = user.id, authToken = state.authState.authenticationToken] send in
                     await send(.updateResponse(Result {
                         guard let imageData = image.jpegData(compressionQuality: 0.8) else {
                             throw UserClientError.operationFailed
                         }
                         
-                        try await userClient.updateAvatarData(userID, imageData)
+                        guard let token = authToken else {
+                            throw UserClientError.authenticationFailed("Missing authentication token")
+                        }
+                        
+                        try await userClient.updateAvatarData(userID, imageData, token)
                         
                         try? await notificationClient.sendSystemNotification(
                             "Avatar Updated",
@@ -390,9 +408,13 @@ struct ProfileFeature {
                 state.showDeleteAvatarConfirmation = false
                 state.showEditAvatarSheet = false
                 
-                return .run { [userClient, notificationClient, userID = user.id] send in
+                return .run { [userClient, notificationClient, userID = user.id, authToken = state.authState.authenticationToken] send in
                     await send(.updateResponse(Result {
-                        try await userClient.deleteAvatarData(userID)
+                        guard let token = authToken else {
+                            throw UserClientError.authenticationFailed("Missing authentication token")
+                        }
+                        
+                        try await userClient.deleteAvatarData(userID, token)
                         
                         try? await notificationClient.sendSystemNotification(
                             "Avatar Deleted",
@@ -443,9 +465,12 @@ struct ProfileFeature {
                 guard var user = state.currentUser else { return .none }
                 user.avatarURL = url.absoluteString
                 let updatedUser = user
-                return .run { [userClient] send in
+                return .run { [userClient, authToken = state.authState.authenticationToken] send in
                     await send(.updateResponse(Result {
-                        try await userClient.updateUser(updatedUser)
+                        guard let token = authToken else {
+                            throw UserClientError.authenticationFailed("Missing authentication token")
+                        }
+                        try await userClient.updateUser(updatedUser, token)
                     }))
                 }
 
@@ -502,6 +527,9 @@ struct ProfileFeature {
                         "Failed to change phone number: \(errorMessage)"
                     )
                 }
+                
+            case .delegate:
+                return .none
             }
         }
     }
@@ -690,6 +718,15 @@ struct ProfileView: View {
             }
             .padding(.horizontal)
             
+            Button(action: {
+                store.send(.confirmDeleteAccount, animation: .default)
+            }) {
+                Text("Delete Account")
+                    .font(.body)
+                    .foregroundColor(.red)
+            }
+            .padding(.horizontal)
+            
             Spacer()
         }
     }
@@ -775,6 +812,14 @@ extension ProfileView {
                 }
             } message: {
                 Text("Are you sure you want to sign out?")
+            }
+            .alert("Delete Account", isPresented: $store.showDeleteAccountConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Delete Account", role: .destructive) {
+                    store.send(.deleteAccount, animation: .default)
+                }
+            } message: {
+                Text("This action cannot be undone. All your data will be permanently deleted.")
             }
             .alert("Delete Avatar", isPresented: $store.showDeleteAvatarConfirmation) {
                 Button("Cancel", role: .cancel) { }

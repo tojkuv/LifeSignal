@@ -31,12 +31,12 @@ enum NotificationFilterType: String, CaseIterable {
 struct NotificationsHistorySheetFeature {
     @ObservableState
     struct State: Equatable {
-        @Shared(.notifications) var allNotifications: [NotificationItem] = []
+        @Shared(.notificationState) var notificationState: ReadOnlyNotificationState
         var selectedFilter: NotificationFilterType = .alerts // Default to Alerts
 
         var filteredNotifications: [NotificationItem] {
             let filterTypes = selectedFilter.notificationTypes
-            return allNotifications.filter { filterTypes.contains($0.type) }
+            return notificationState.notifications.filter { filterTypes.contains($0.type) }
         }
 
         var sortedNotifications: [NotificationItem] {

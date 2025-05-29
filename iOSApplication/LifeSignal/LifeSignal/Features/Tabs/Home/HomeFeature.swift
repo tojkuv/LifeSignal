@@ -21,6 +21,8 @@ struct HomeFeature {
     /// Home state conforming to TCA patterns
     @ObservableState
     struct State: Equatable {
+        // Authentication state
+        @Shared(.authenticationInternalState) var authState: ReadOnlyAuthenticationState
         // User Data
         @Shared(.userState) var userState: ReadOnlyUserState
         
@@ -135,7 +137,7 @@ struct HomeFeature {
     @Dependency(\.notificationClient) var notificationClient
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.contactsClient) var contactsClient
-    @Dependency(\.sessionClient) var sessionClient
+    @Dependency(\.authenticationClient) var authenticationClient
     @Dependency(\.biometricClient) var biometricClient
 
     /// Home reducer body implementing business logic
@@ -161,9 +163,12 @@ struct HomeFeature {
             return .send(.loadUser)
             
         case .loadUser:
-            return loadUserEffect()
+            return loadUserEffect(
+                authToken: state.authState.authenticationToken,
+                uid: state.authState.internalAuthUID
+            )
             
-        case let .userLoaded(user):
+        case let .userLoaded(_):
             return .merge(.send(.initializeIntervalPicker), .send(.generateQRCode))
             
         case .generateQRCode:
@@ -219,7 +224,7 @@ struct HomeFeature {
                 await haptics.notification(.success)
             }
             
-        case let .biometricAuthResponse(.failure(error)):
+        case let .biometricAuthResponse(.failure(_)):
             return .run { [notificationClient] _ in
                 await haptics.notification(.error)
                 try? await notificationClient.sendSystemNotification(
@@ -235,11 +240,15 @@ struct HomeFeature {
     
     // MARK: - Effect Functions
     
-    private func loadUserEffect() -> Effect<Action> {
+    private func loadUserEffect(authToken: String?, uid: String?) -> Effect<Action> {
         .run { [userClient, haptics, notificationClient] send in
             do {
+                guard let token = authToken, let userUid = uid else {
+                    throw UserClientError.authenticationFailed("Missing authentication credentials")
+                }
+                
                 // UserClient automatically updates shared state when loading user data
-                if let user = try await userClient.getUser() {
+                if let user = try await userClient.getUser(token, userUid) {
                     await send(.userLoaded(user))
                 }
             } catch {
@@ -264,8 +273,8 @@ struct HomeFeature {
             }
             
             // First check if we already have a cached QR code in shared state
-            @Shared(.userQRCodeImage) var qrCodeImage
-            if let cached = qrCodeImage,
+            @Shared(.userState) var userState
+            if let cached = userState.qrCodeImage,
                cached.metadata.qrCodeId == user.qrCodeId,
                let image = UIImage(data: cached.image) {
                 await send(.qrCodeGenerated(image))
@@ -281,14 +290,7 @@ struct HomeFeature {
                 image = UserClient.generateMockQRCodeImage(data: user.qrCodeId.uuidString, size: 300)
             }
             
-            // Cache the generated image in shared state
-            if let imageData = image.pngData() {
-                Task { @MainActor in
-                    let metadata = ImageMetadata(qrCodeId: user.qrCodeId)
-                    let cachedImage = QRImageWithMetadata(image: imageData, metadata: metadata)
-                    $qrCodeImage.withLock { $0 = cachedImage }
-                }
-            }
+            // QR code caching is handled by UserClient automatically
             
             await send(.qrCodeGenerated(image))
         }
@@ -324,8 +326,8 @@ struct HomeFeature {
                 return
             }
             
-            @Shared(.userShareableQRCodeImage) var shareableImage
-            if let cached = shareableImage,
+            @Shared(.userState) var userState
+            if let cached = userState.shareableQRCodeImage,
                cached.metadata.qrCodeId == user.qrCodeId,
                let image = UIImage(data: cached.image) {
                 await send(.shareableQRCodeGenerated(image))
@@ -333,8 +335,7 @@ struct HomeFeature {
             }
             
             let qrImage: UIImage
-            @Shared(.userQRCodeImage) var qrCodeImage
-            if let cached = qrCodeImage,
+            if let cached = userState.qrCodeImage,
                cached.metadata.qrCodeId == user.qrCodeId,
                let image = UIImage(data: cached.image) {
                 qrImage = image
@@ -350,14 +351,7 @@ struct HomeFeature {
                 image = UserClient.generateMockShareableQRCodeImage(qrImage: qrImage, userName: user.name)
             }
             
-            // Cache the generated shareable image in shared state
-            if let imageData = image.pngData() {
-                Task { @MainActor in
-                    let metadata = ImageMetadata(qrCodeId: user.qrCodeId)
-                    let cachedImage = QRImageWithMetadata(image: imageData, metadata: metadata)
-                    $shareableImage.withLock { $0 = cachedImage }
-                }
-            }
+            // QR code caching is handled by UserClient
             
             await send(.shareableQRCodeGenerated(image))
         }
@@ -382,8 +376,8 @@ struct HomeFeature {
     private func shareQRCodeEffect(state: inout State) -> Effect<Action> {
         return .run { [currentUser = state.currentUser] send in
             // Check shared state for cached shareable QR code
-            @Shared(.userShareableQRCodeImage) var shareableImage
-            if let cached = shareableImage,
+            @Shared(.userState) var userState
+            if let cached = userState.shareableQRCodeImage,
                let user = currentUser,
                cached.metadata.qrCodeId == user.qrCodeId,
                let image = UIImage(data: cached.image) {
@@ -400,12 +394,12 @@ struct HomeFeature {
     }
     
     private func updateCheckInIntervalEffect(state: State, interval: TimeInterval) -> Effect<Action> {
-        .run { [currentUser = state.currentUser, userClient, haptics, notificationClient] send in
+        .run { [currentUser = state.currentUser, authToken = state.authState.authenticationToken, userClient, haptics, notificationClient] send in
             do {
-                guard var user = currentUser else { return }
+                guard var user = currentUser, let token = authToken else { return }
                 user.checkInInterval = interval
                 user.lastModified = Date()
-                try await userClient.updateUser(user)
+                try await userClient.updateUser(user, token)
                 // The shared state will be updated by UserClient, refresh picker to reflect changes
                 await send(.initializeIntervalPicker)
                 await haptics.notification(.success)
@@ -486,9 +480,9 @@ struct HomeFeature {
     }
     
     private func updateNotificationSettingsEffect(state: State, enabled: Bool, notify30Min: Bool, notify2Hours: Bool) -> Effect<Action> {
-        .run { [currentUser = state.currentUser, userClient, haptics, notificationClient] send in
+        .run { [currentUser = state.currentUser, authToken = state.authState.authenticationToken, userClient, haptics, notificationClient] send in
             do {
-                guard var user = currentUser else { return }
+                guard var user = currentUser, let token = authToken else { return }
                 
                 if !enabled {
                     user.notificationPreference = .disabled
@@ -499,7 +493,7 @@ struct HomeFeature {
                 }
                 
                 user.lastModified = Date()
-                try await userClient.updateUser(user)
+                try await userClient.updateUser(user, token)
                 // UserClient automatically updates shared state and persists changes
                 
                 await haptics.notification(.success)
@@ -518,9 +512,9 @@ struct HomeFeature {
     }
     
     private func updateBiometricAuthSettingEffect(state: State, enabled: Bool) -> Effect<Action> {
-        .run { [currentUser = state.currentUser, userClient, biometricClient, haptics, notificationClient] send in
+        .run { [currentUser = state.currentUser, authToken = state.authState.authenticationToken, userClient, biometricClient, haptics, notificationClient] send in
             do {
-                guard var user = currentUser else {
+                guard var user = currentUser, let token = authToken else {
                     await send(.biometricAuthResponse(.failure(UserClientError.userNotFound)))
                     return
                 }
@@ -545,7 +539,7 @@ struct HomeFeature {
                 // Update user setting
                 user.biometricAuthEnabled = enabled
                 user.lastModified = Date()
-                try await userClient.updateUser(user)
+                try await userClient.updateUser(user, token)
                 
                 await send(.biometricAuthResponse(.success(())))
                 
@@ -727,10 +721,14 @@ struct HomeFeature {
         // state.qrCodeImage = nil
         // state.isQRCodeReady = false
         
-        return .run { [userClient, haptics, notificationClient] send in
+        return .run { [authToken = state.authState.authenticationToken, userClient, haptics, notificationClient] send in
             do {
+                guard let token = authToken else {
+                    throw UserClientError.authenticationFailed("Missing authentication token")
+                }
+                
                 // Use UserClient's resetQRCode method which handles everything properly
-                try await userClient.resetQRCode()
+                try await userClient.resetQRCode(token)
                 
                 await haptics.notification(.success)
                 try? await notificationClient.sendSystemNotification(

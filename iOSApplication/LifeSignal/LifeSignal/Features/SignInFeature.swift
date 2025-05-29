@@ -8,10 +8,7 @@ import Perception
 struct SignInFeature {
     @ObservableState
     struct State: Equatable {
-        // Read-only access to shared state through SessionClient only (no direct mutation)
-        @Shared(.currentUser) var currentUser: User? = nil
-        @Shared(.sessionState) var sessionState: SessionState = .unauthenticated
-        @Shared(.needsOnboarding) var needsOnboarding: Bool = false
+        // SignInFeature does not read session state - only ApplicationFeature handles session management
 
         // UI state
         var verificationID: String? = nil
@@ -64,8 +61,9 @@ struct SignInFeature {
         case debugSessionResult(Result<Void, Error>)
     }
 
-    // Features only use SessionClient, which orchestrates other clients
-    @Dependency(\.sessionClient) var sessionClient
+    // SignInFeature only uses AuthenticationClient for shared state
+    // PureUtilities clients are allowed for UI/device functionality
+    @Dependency(\.authenticationClient) var authenticationClient
 
     var body: some ReducerOf<Self> {
         Scope(state: \.phoneNumberEntry, action: \.phoneNumberEntry) {
@@ -122,24 +120,13 @@ struct SignInFeature {
                 return .none
                 
             case .signOut:
-                return .run { send in
-                    do {
-                        try await sessionClient.endSession()
-                    } catch {
-                        // Handle error silently, session cleanup should still happen
-                    }
-                    // Session cleanup completed
-                }
+                // SignInFeature should not handle coordinated sign out - that's ApplicationFeature's responsibility
+                return .none
                 
             case .debugSkipSignInAndOnboarding:
-                state.isLoading = true
-                return .run { send in
-                    await send(.debugSessionResult(
-                        Result {
-                            try await sessionClient.debugSkipAuthenticationAndOnboarding()
-                        }
-                    ))
-                }
+                // This debug feature is no longer available with the new architecture
+                state.isLoading = false
+                return .none
                 
             case let .verificationCodeSent(.success(verificationID)):
                 // Verification code sent successfully
@@ -160,13 +147,8 @@ struct SignInFeature {
             case let .sessionStartResult(.success):
                 state.isLoading = false
                 state.verificationCodeEntry.isLoading = false
-                // Clear form after successful sign-in
-                state.phoneNumberEntry.phoneNumber = ""
-                state.phoneNumberEntry.canSendCode = false
-                state.verificationCodeEntry.verificationCode = ""
-                state.verificationCodeEntry.canVerifyCode = false
-                state.verificationID = nil
-                state.showPhoneEntry = true
+                // Don't change UI state or clear form yet - let ApplicationFeature handle navigation
+                // Form will be cleared when the user signs out or when resetForm is called
                 return .none
                 
             case let .sessionStartResult(.failure(error)):
@@ -194,7 +176,7 @@ struct SignInFeature {
                 return .run { [phoneNumber = state.phoneNumberEntry.phoneNumber] send in
                     await send(.verificationCodeSent(
                         Result {
-                            try await sessionClient.sendVerificationCode(phoneNumber)
+                            try await authenticationClient.sendVerificationCode(phoneNumber)
                         }
                     ))
                 }
@@ -214,7 +196,8 @@ struct SignInFeature {
                 return .run { [verificationID = verificationID, code = state.verificationCodeEntry.verificationCode] send in
                     await send(.sessionStartResult(
                         Result {
-                            try await sessionClient.verifyPhoneCodeAndStartSession(verificationID, code)
+                            try await authenticationClient.createAuthenticationSession(verificationID, code)
+                            // ApplicationFeature will handle user data loading after authentication
                         }
                     ))
                 }
@@ -357,7 +340,7 @@ struct SignInView: View {
         store: Store(initialState: SignInFeature.State()) {
             SignInFeature()
         } withDependencies: {
-            $0.sessionClient = .mockValue
+            $0.authenticationClient = .mockValue
         }
     )
 }

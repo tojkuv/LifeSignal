@@ -157,152 +157,154 @@ struct Contact_Proto: Sendable {
     var lastUpdated: Int64
 }
 
-// MARK: - Mock gRPC Service
+// MARK: - Mock Contacts Backend Service
 
-final class MockContactService: ContactServiceProtocol {
-    func getContacts(_ request: GetContactsRequest) async throws -> GetContactsResponse {
-        try await Task.sleep(for: .milliseconds(500))
-
+/// Simple mock backend for contacts data persistence
+final class MockContactsBackendService: Sendable {
+    
+    // Simple data storage keys
+    private static let contactsKey = "MockContactsBackend_Contacts"
+    
+    // MARK: - Data Persistence
+    
+    private func getStoredContacts() -> [Contact] {
+        guard let data = UserDefaults.standard.data(forKey: Self.contactsKey),
+              let decoded = try? JSONDecoder().decode([Contact].self, from: data) else {
+            return []
+        }
+        return decoded
+    }
+    
+    private func storeContacts(_ contacts: [Contact]) {
+        guard let data = try? JSONEncoder().encode(contacts) else { return }
+        UserDefaults.standard.set(data, forKey: Self.contactsKey)
+    }
+    
+    // MARK: - Simple Operations
+    
+    func getContacts() -> [Contact] {
+        let stored = getStoredContacts()
+        if stored.isEmpty {
+            // Return mock contacts if none stored
+            return createMockContacts()
+        }
+        return stored
+    }
+    
+    func addContact(_ contact: Contact) {
+        var contacts = getStoredContacts()
+        contacts.append(contact)
+        storeContacts(contacts)
+    }
+    
+    func updateContact(_ contact: Contact) {
+        var contacts = getStoredContacts()
+        if let index = contacts.firstIndex(where: { $0.id == contact.id }) {
+            contacts[index] = contact
+            storeContacts(contacts)
+        }
+    }
+    
+    func deleteContact(id: UUID) {
+        var contacts = getStoredContacts()
+        contacts.removeAll { $0.id == id }
+        storeContacts(contacts)
+    }
+    
+    private func createMockContacts() -> [Contact] {
         let mockContacts = [
-            Contact_Proto(
-                id: "99999999-9999-9999-9999-999999999001", // Fixed UUID for John Doe
+            Contact(
+                id: UUID(uuidString: "99999999-9999-9999-9999-999999999001")!,
                 name: "John Doe",
                 phoneNumber: "+1234567890",
                 isResponder: true,
                 isDependent: false,
                 emergencyNote: "Emergency contact",
-                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-3600).timeIntervalSince1970), // 1 hour ago
+                lastCheckInTimestamp: Date().addingTimeInterval(-3600), // 1 hour ago
                 checkInInterval: 86400,
                 hasIncomingPing: false,
                 hasOutgoingPing: false,
                 hasManualAlertActive: false,
                 hasNotResponsiveAlert: false,
-                incomingPingTimestamp: nil,
-                outgoingPingTimestamp: nil,
-                emergencyAlertTimestamp: nil,
-                notResponsiveAlertTimestamp: nil,
                 profileImageURL: "https://example.com/profile/john_doe.jpg",
-                dateAdded: Int64(Date().addingTimeInterval(-604800).timeIntervalSince1970),
-                lastUpdated: Int64(Date().timeIntervalSince1970)
+                dateAdded: Date().addingTimeInterval(-604800),
+                lastUpdated: Date()
             ),
-            Contact_Proto(
-                id: "99999999-9999-9999-9999-999999999002", // Fixed UUID for Jane Smith
+            Contact(
+                id: UUID(uuidString: "99999999-9999-9999-9999-999999999002")!,
                 name: "Jane Smith",
                 phoneNumber: "+0987654321",
                 isResponder: false,
                 isDependent: true,
                 emergencyNote: "Dependent contact",
-                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-7200).timeIntervalSince1970), // 2 hours ago
+                lastCheckInTimestamp: Date().addingTimeInterval(-7200), // 2 hours ago
                 checkInInterval: 43200,
                 hasIncomingPing: true,
                 hasOutgoingPing: false,
                 hasManualAlertActive: false,
                 hasNotResponsiveAlert: true,
-                incomingPingTimestamp: Int64(Date().addingTimeInterval(-1800).timeIntervalSince1970),
-                outgoingPingTimestamp: nil,
-                emergencyAlertTimestamp: nil,
-                notResponsiveAlertTimestamp: Int64(Date().addingTimeInterval(-7200).timeIntervalSince1970),
                 profileImageURL: nil,
-                dateAdded: Int64(Date().addingTimeInterval(-259200).timeIntervalSince1970),
-                lastUpdated: Int64(Date().timeIntervalSince1970)
+                dateAdded: Date().addingTimeInterval(-259200),
+                lastUpdated: Date()
             ),
-            Contact_Proto(
-                id: "99999999-9999-9999-9999-999999999003", // Fixed UUID for Lisa Thompson
+            Contact(
+                id: UUID(uuidString: "99999999-9999-9999-9999-999999999003")!,
                 name: "Lisa Thompson",
                 phoneNumber: "+1555123456",
                 isResponder: true,
                 isDependent: false,
                 emergencyNote: "Has severe allergies to peanuts",
-                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-1800).timeIntervalSince1970), // 30 minutes ago
+                lastCheckInTimestamp: Date().addingTimeInterval(-1800), // 30 minutes ago
                 checkInInterval: 86400,
                 hasIncomingPing: false,
                 hasOutgoingPing: false,
                 hasManualAlertActive: false,
                 hasNotResponsiveAlert: false,
-                incomingPingTimestamp: nil,
-                outgoingPingTimestamp: nil,
-                emergencyAlertTimestamp: nil,
-                notResponsiveAlertTimestamp: nil,
                 profileImageURL: nil,
-                dateAdded: Int64(Date().addingTimeInterval(-432000).timeIntervalSince1970), // 5 days ago
-                lastUpdated: Int64(Date().timeIntervalSince1970)
-            ),
-            Contact_Proto(
-                id: "99999999-9999-9999-9999-999999999004", // Fixed UUID for Mike Chen
-                name: "Mike Chen",
-                phoneNumber: "+1555789012",
-                isResponder: true,
-                isDependent: false,
-                emergencyNote: "Takes medication for heart condition",
-                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-10800).timeIntervalSince1970), // 3 hours ago
-                checkInInterval: 86400,
-                hasIncomingPing: false,
-                hasOutgoingPing: false,
-                hasManualAlertActive: false,
-                hasNotResponsiveAlert: false,
-                incomingPingTimestamp: nil,
-                outgoingPingTimestamp: nil,
-                emergencyAlertTimestamp: nil,
-                notResponsiveAlertTimestamp: nil,
-                profileImageURL: nil,
-                dateAdded: Int64(Date().addingTimeInterval(-345600).timeIntervalSince1970), // 4 days ago
-                lastUpdated: Int64(Date().timeIntervalSince1970)
-            ),
-            Contact_Proto(
-                id: "99999999-9999-9999-9999-999999999005", // Fixed UUID for Sarah Johnson
-                name: "Sarah Johnson",
-                phoneNumber: "+1555345678",
-                isResponder: false,
-                isDependent: true,
-                emergencyNote: "Contact work if not reachable",
-                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-5400).timeIntervalSince1970), // 1.5 hours ago
-                checkInInterval: 43200, // 12 hours
-                hasIncomingPing: false,
-                hasOutgoingPing: false,
-                hasManualAlertActive: false,
-                hasNotResponsiveAlert: false,
-                incomingPingTimestamp: nil,
-                outgoingPingTimestamp: nil,
-                emergencyAlertTimestamp: nil,
-                notResponsiveAlertTimestamp: nil,
-                profileImageURL: nil,
-                dateAdded: Int64(Date().addingTimeInterval(-172800).timeIntervalSince1970), // 2 days ago
-                lastUpdated: Int64(Date().timeIntervalSince1970)
-            ),
-            Contact_Proto(
-                id: "99999999-9999-9999-9999-999999999006", // Fixed UUID for Emma Wilson
-                name: "Emma Wilson",
-                phoneNumber: "+1555901234",
-                isResponder: true,
-                isDependent: false,
-                emergencyNote: "Lives alone - check neighbor if needed",
-                lastCheckInTimestamp: Int64(Date().addingTimeInterval(-14400).timeIntervalSince1970), // 4 hours ago
-                checkInInterval: 86400,
-                hasIncomingPing: false,
-                hasOutgoingPing: false,
-                hasManualAlertActive: false,
-                hasNotResponsiveAlert: false,
-                incomingPingTimestamp: nil,
-                outgoingPingTimestamp: nil,
-                emergencyAlertTimestamp: nil,
-                notResponsiveAlertTimestamp: nil,
-                profileImageURL: nil,
-                dateAdded: Int64(Date().addingTimeInterval(-86400).timeIntervalSince1970), // 1 day ago
-                lastUpdated: Int64(Date().timeIntervalSince1970)
+                dateAdded: Date().addingTimeInterval(-432000),
+                lastUpdated: Date()
             )
         ]
-
-        return GetContactsResponse(contacts: mockContacts)
+        
+        storeContacts(mockContacts)
+        return mockContacts
     }
+    
+    // Helper method to clear all backend data for testing
+    static func clearAllBackendData() {
+        UserDefaults.standard.removeObject(forKey: contactsKey)
+    }
+}
 
-    func addContact(_ request: AddContactRequest) async throws -> Contact_Proto {
+// MARK: - Simple Contact Service Protocol (for mock implementation)
+
+protocol SimpleContactServiceProtocol: Sendable {
+    func getContacts(userId: UUID, authToken: String) async throws -> [Contact]
+    func addContact(name: String, phoneNumber: String, isResponder: Bool, isDependent: Bool, userId: UUID, authToken: String) async throws -> Contact
+    func updateContact(_ contact: Contact, authToken: String) async throws -> Contact
+    func deleteContact(id: UUID, authToken: String) async throws
+    static func clearAllMockData()
+}
+
+// MARK: - Mock Contact Service (Simple interface)
+
+final class MockContactService: SimpleContactServiceProtocol, Sendable {
+    
+    private let backend = MockContactsBackendService()
+    func getContacts(userId: UUID, authToken: String) async throws -> [Contact] {
+        try await Task.sleep(for: .milliseconds(500))
+        return backend.getContacts()
+    }
+    
+    func addContact(name: String, phoneNumber: String, isResponder: Bool, isDependent: Bool, userId: UUID, authToken: String) async throws -> Contact {
         try await Task.sleep(for: .milliseconds(800))
-        return Contact_Proto(
-            id: UUID().uuidString,
-            name: request.name,
-            phoneNumber: request.phoneNumber,
-            isResponder: request.isResponder,
-            isDependent: request.isDependent,
+        
+        let newContact = Contact(
+            id: UUID(),
+            name: name,
+            phoneNumber: phoneNumber,
+            isResponder: isResponder,
+            isDependent: isDependent,
             emergencyNote: "",
             lastCheckInTimestamp: nil,
             checkInInterval: 86400,
@@ -310,54 +312,95 @@ final class MockContactService: ContactServiceProtocol {
             hasOutgoingPing: false,
             hasManualAlertActive: false,
             hasNotResponsiveAlert: false,
-            incomingPingTimestamp: nil,
-            outgoingPingTimestamp: nil,
-            emergencyAlertTimestamp: nil,
-            notResponsiveAlertTimestamp: nil,
             profileImageURL: nil,
-            dateAdded: Int64(Date().timeIntervalSince1970),
-            lastUpdated: Int64(Date().timeIntervalSince1970)
+            dateAdded: Date(),
+            lastUpdated: Date()
         )
+        
+        backend.addContact(newContact)
+        return newContact
     }
-
-    func removeContact(_ request: RemoveContactRequest) async throws -> Empty_Proto {
+    
+    func updateContact(_ contact: Contact, authToken: String) async throws -> Contact {
+        try await Task.sleep(for: .milliseconds(600))
+        backend.updateContact(contact)
+        return contact
+    }
+    
+    func deleteContact(id: UUID, authToken: String) async throws {
         try await Task.sleep(for: .milliseconds(500))
+        backend.deleteContact(id: id)
+    }
+    
+    // Helper method to clear all mock data for testing
+    static func clearAllMockData() {
+        MockContactsBackendService.clearAllBackendData()
+    }
+}
+
+// MARK: - Mock gRPC Adapter (converts simple service to gRPC protocol)
+
+final class MockContactServiceGRPCAdapter: ContactServiceProtocol, Sendable {
+    
+    private let simpleService = MockContactService()
+    
+    func getContacts(_ request: GetContactsRequest) async throws -> GetContactsResponse {
+        let contacts = try await simpleService.getContacts(userId: request.userId, authToken: request.authToken)
+        let contactProtos = contacts.map { $0.toProto() }
+        return GetContactsResponse(contacts: contactProtos)
+    }
+    
+    func addContact(_ request: AddContactRequest) async throws -> Contact_Proto {
+        let contact = try await simpleService.addContact(
+            name: request.name,
+            phoneNumber: request.phoneNumber,
+            isResponder: request.isResponder,
+            isDependent: request.isDependent,
+            userId: request.userId,
+            authToken: request.authToken
+        )
+        return contact.toProto()
+    }
+    
+    func removeContact(_ request: RemoveContactRequest) async throws -> Empty_Proto {
+        try await simpleService.deleteContact(id: request.contactId, authToken: request.authToken)
         return Empty_Proto()
     }
-
+    
     func streamContactUpdates(_ request: StreamContactUpdatesRequest) -> AsyncStream<Contact_Proto> {
-        AsyncStream { continuation in
+        return AsyncStream { continuation in
             Task {
-                for i in 0..<5 {
-                    try? await Task.sleep(for: .seconds(2))
-                    let contact = Contact_Proto(
-                        id: UUID().uuidString,
-                        name: "Streamed Contact \(i)",
-                        phoneNumber: "+123456789\(i)",
-                        isResponder: i % 2 == 0,
-                        isDependent: i % 2 == 1,
-                        emergencyNote: "",
-                        lastCheckInTimestamp: nil,
+                // Mock gRPC streaming - simulates receiving contact updates from server
+                for i in 0..<3 {
+                    try? await Task.sleep(for: .seconds(5))
+                    
+                    // Generate a mock contact update
+                    let contact = Contact(
+                        id: UUID(),
+                        name: "Streamed Contact \(i + 1)",
+                        phoneNumber: "+1\(Int.random(in: 1000000000...9999999999))",
+                        isResponder: true,
+                        isDependent: false,
+                        emergencyNote: "Streaming update \(i + 1)",
+                        lastCheckInTimestamp: Date(),
                         checkInInterval: 86400,
-                        hasIncomingPing: false,
+                        hasIncomingPing: i % 2 == 0,
                         hasOutgoingPing: false,
-                        hasManualAlertActive: false,
+                        hasManualAlertActive: i == 2,
                         hasNotResponsiveAlert: false,
-                        incomingPingTimestamp: nil,
-                        outgoingPingTimestamp: nil,
-                        emergencyAlertTimestamp: nil,
-                        notResponsiveAlertTimestamp: nil,
                         profileImageURL: nil,
-                        dateAdded: Int64(Date().timeIntervalSince1970),
-                        lastUpdated: Int64(Date().timeIntervalSince1970)
+                        dateAdded: Date(),
+                        lastUpdated: Date()
                     )
-                    continuation.yield(contact)
+                    
+                    continuation.yield(contact.toProto())
                 }
                 continuation.finish()
             }
         }
     }
 }
+
 
 // MARK: - Proto Mapping Extensions
 
@@ -384,6 +427,32 @@ extension Contact_Proto {
             profileImageData: nil,
             dateAdded: Date(timeIntervalSince1970: TimeInterval(dateAdded)),
             lastUpdated: Date(timeIntervalSince1970: TimeInterval(lastUpdated))
+        )
+    }
+}
+
+extension Contact {
+    func toProto() -> Contact_Proto {
+        Contact_Proto(
+            id: id.uuidString,
+            name: name,
+            phoneNumber: phoneNumber,
+            isResponder: isResponder,
+            isDependent: isDependent,
+            emergencyNote: emergencyNote,
+            lastCheckInTimestamp: lastCheckInTimestamp.map { Int64($0.timeIntervalSince1970) },
+            checkInInterval: Int64(checkInInterval),
+            hasIncomingPing: hasIncomingPing,
+            hasOutgoingPing: hasOutgoingPing,
+            hasManualAlertActive: hasManualAlertActive,
+            hasNotResponsiveAlert: hasNotResponsiveAlert,
+            incomingPingTimestamp: incomingPingTimestamp.map { Int64($0.timeIntervalSince1970) },
+            outgoingPingTimestamp: outgoingPingTimestamp.map { Int64($0.timeIntervalSince1970) },
+            emergencyAlertTimestamp: emergencyAlertTimestamp.map { Int64($0.timeIntervalSince1970) },
+            notResponsiveAlertTimestamp: notResponsiveAlertTimestamp.map { Int64($0.timeIntervalSince1970) },
+            profileImageURL: profileImageURL,
+            dateAdded: Int64(dateAdded.timeIntervalSince1970),
+            lastUpdated: Int64(lastUpdated.timeIntervalSince1970)
         )
     }
 }
@@ -463,48 +532,39 @@ enum ContactsClientError: Error, LocalizedError {
 // MARK: - ContactsClient Internal Helpers
 
 extension ContactsClient {
-    private static func getAuthenticatedUserInfo() async throws -> (token: String, userId: UUID) {
-        @Shared(.authenticationToken) var authToken
-        @Shared(.currentUser) var currentUser
-        
-        guard let token = authToken else {
-            throw ContactsClientError.authenticationRequired
-        }
-        
-        guard let user = currentUser else {
-            throw ContactsClientError.authenticationRequired
-        }
-        
-        return (token: token, userId: user.id)
-    }
 }
 
 // MARK: - ContactsClient (TCA Shared State Pattern)
 
 @DependencyClient
 struct ContactsClient {
-    // MARK: - Service Integration
-    var contactService: ContactServiceProtocol = MockContactService()
+    // MARK: - Service Integration (uses adapter for mock)
+    var contactService: ContactServiceProtocol = MockContactServiceGRPCAdapter()
     
-    // MARK: - Core CRUD Operations
+    // MARK: - Core CRUD Operations - Features must pass auth tokens
     var getContacts: @Sendable () async -> [Contact] = { [] }
     var getContact: @Sendable (UUID) async throws -> Contact? = { _ in nil }
     var getContactByQRCode: @Sendable (String) async throws -> Contact = { qrCodeId in
         throw ContactsClientError.contactNotFound("Contact not found for QR code: \(qrCodeId)")
     }
-    var addContact: @Sendable (String, String, Bool, Bool) async throws -> Contact = { _, _, _, _ in
+    var addContact: @Sendable (String, String, Bool, Bool, String, UUID) async throws -> Contact = { _, _, _, _, _, _ in
         throw ContactsClientError.saveFailed("Contact")
     }
-    var removeContact: @Sendable (UUID) async throws -> Void = { _ in }
-    var updateContact: @Sendable (Contact) async -> Void = { _ in }
-    var refreshContacts: @Sendable () async throws -> Void = { }
+    var removeContact: @Sendable (UUID, String) async throws -> Void = { _, _ in }
+    var updateContact: @Sendable (Contact, String) async throws -> Void = { _, _ in }
+    var refreshContacts: @Sendable (String, UUID) async throws -> Void = { _, _ in }
     
-    // MARK: - Real-time Contact Updates (gRPC Streaming)
-    var startContactUpdatesStream: @Sendable () async throws -> Void = { }
+    // MARK: - Real-time Contact Updates (gRPC Streaming) - Features must pass auth tokens
+    var startContactUpdatesStream: @Sendable (String, UUID) async throws -> Void = { _, _ in }
     var stopContactUpdatesStream: @Sendable () async -> Void = { }
     var contactUpdates: @Sendable () -> AsyncStream<Contact> = {
         AsyncStream { _ in }
     }
+    
+    // MARK: - State Management
+    
+    /// Clears contacts state (used for coordinated state clearing).
+    var clearContactsState: @Sendable () async throws -> Void = { }
 }
 
 extension ContactsClient: DependencyKey {
@@ -568,21 +628,17 @@ extension ContactsClient: DependencyKey {
             return contact
         },
         
-        addContact: { name, phoneNumber, isResponder, isDependent in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
+        addContact: { name, phoneNumber, isResponder, isDependent, authToken, userId in
             let service = MockContactService()
             
-            let request = AddContactRequest(
-                userId: authInfo.userId,
-                phoneNumber: phoneNumber,
-                name: name,
-                isResponder: isResponder,
+            let newContact = try await service.addContact(
+                name: name, 
+                phoneNumber: phoneNumber, 
+                isResponder: isResponder, 
                 isDependent: isDependent,
-                authToken: authInfo.token
+                userId: userId,
+                authToken: authToken
             )
-            
-            let contactProto = try await service.addContact(request)
-            let newContact = contactProto.toDomain()
             
             // Update shared state via fileprivate init (ONLY Clients can do this)
             @Shared(.contacts) var sharedContactsState
@@ -596,12 +652,10 @@ extension ContactsClient: DependencyKey {
             return newContact
         },
         
-        removeContact: { contactId in
-            let authInfo = try await Self.getAuthenticatedUserInfo()
+        removeContact: { contactId, authToken in
             let service = MockContactService()
             
-            let request = RemoveContactRequest(contactId: contactId, authToken: authInfo.token)
-            _ = try await service.removeContact(request)
+            try await service.deleteContact(id: contactId, authToken: authToken)
             
             // Update shared state via fileprivate init
             @Shared(.contacts) var sharedContactsState
@@ -614,7 +668,11 @@ extension ContactsClient: DependencyKey {
             $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
         },
         
-        updateContact: { updatedContact in
+        updateContact: { updatedContact, authToken in
+            let service = MockContactService()
+            
+            _ = try await service.updateContact(updatedContact, authToken: authToken)
+            
             // Update shared state via fileprivate init
             @Shared(.contacts) var sharedContactsState
             var contacts = sharedContactsState.contacts
@@ -630,17 +688,10 @@ extension ContactsClient: DependencyKey {
             $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
         },
         
-        refreshContacts: {
-            // ContactsClient should NOT mutate SessionClient's state
-            // If no authentication, SessionClient should handle this
-            let authInfo = try await Self.getAuthenticatedUserInfo()
+        refreshContacts: { authToken, userId in
             let service = MockContactService()
             
-            let request = GetContactsRequest(userId: authInfo.userId, authToken: authInfo.token)
-            let response = try await service.getContacts(request)
-            let contacts = response.contacts.map { proto in
-                proto.toDomain()
-            }
+            let contacts = try await service.getContacts(userId: userId, authToken: authToken)
             
             // Check if we already have persisted contacts to avoid overwriting cleared pings
             @Shared(.contacts) var sharedContactsState
@@ -666,7 +717,7 @@ extension ContactsClient: DependencyKey {
             $sharedContactsState.withLock { $0 = ReadOnlyContactsState(mutableState) }  // ✅ fileprivate access
         },
         
-        startContactUpdatesStream: {
+        startContactUpdatesStream: { authToken, userId in
             // Mock gRPC streaming start
         },
         
@@ -726,6 +777,16 @@ extension ContactsClient: DependencyKey {
                     continuation.finish()
                 }
             }
+        },
+        
+        clearContactsState: {
+            @Shared(.contacts) var sharedContactsState
+            let clearedState = ContactsState(
+                contacts: [],
+                lastSyncTimestamp: nil,
+                isLoading: false
+            )
+            $sharedContactsState.withLock { $0 = ReadOnlyContactsState(clearedState) }
         }
     )
 }
