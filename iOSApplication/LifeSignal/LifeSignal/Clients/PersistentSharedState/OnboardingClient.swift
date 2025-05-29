@@ -99,7 +99,7 @@ enum OnboardingClientError: Error, LocalizedError {
 /// - Onboarding state persistence and restoration
 /// - Integration with UserClient for profile data management
 @DependencyClient
-struct OnboardingClient {
+struct OnboardingClient: ClientContext {
     
     // MARK: - Onboarding Flow Management
     
@@ -139,6 +139,72 @@ struct OnboardingClient {
     
     /// Clears onboarding state (used during sign out).
     var clearOnboardingState: @Sendable () async throws -> Void = { }
+}
+
+// MARK: - StateOwner Implementation
+
+extension OnboardingClient {
+    nonisolated(unsafe) static var mutationLog: LockIsolated<[StateMutation]> = StateOwnershipHelpers.createMutationLog()
+    
+    /// Performs tracked mutation on onboarding state
+    static func updateOnboardingState(_ operation: String, _ mutation: @escaping (inout OnboardingClientState) -> Void) {
+        logMutation(operation, stateType: "OnboardingClientState")
+        
+        @Shared(.onboardingInternalState) var onboardingState: OnboardingClientState
+        $onboardingState.withLock { state in
+            mutation(&state)
+        }
+    }
+    
+    /// Convenience method for starting onboarding
+    static func startOnboarding() {
+        updateOnboardingState("startOnboarding") { state in
+            state.needsOnboarding = true
+            state.isCompleted = false
+            state.currentStep = .profileSetup
+        }
+    }
+    
+    /// Convenience method for moving to next onboarding step
+    static func moveToNextStep() {
+        updateOnboardingState("moveToNextStep") { state in
+            switch state.currentStep {
+            case .profileSetup:
+                state.currentStep = .completed
+                state.isCompleted = true
+                state.needsOnboarding = false
+            case .completed:
+                // Already completed, no further steps
+                break
+            }
+        }
+    }
+    
+    /// Convenience method for completing profile setup
+    static func completeProfileSetup() {
+        updateOnboardingState("completeProfileSetup") { state in
+            state.hasUserProfile = true
+        }
+    }
+    
+    /// Convenience method for completing onboarding
+    static func completeOnboarding() {
+        updateOnboardingState("completeOnboarding") { state in
+            state.isCompleted = true
+            state.needsOnboarding = false
+            state.currentStep = .completed
+        }
+    }
+    
+    /// Convenience method for clearing onboarding state
+    static func clearOnboardingState() {
+        updateOnboardingState("clearOnboardingState") { state in
+            state.needsOnboarding = false
+            state.hasUserProfile = false
+            state.currentStep = .profileSetup
+            state.isCompleted = false
+        }
+    }
 }
 
 extension OnboardingClient: DependencyKey {

@@ -225,7 +225,7 @@ enum NetworkClientError: Error, LocalizedError {
 // MARK: - NetworkClient (TCA Shared State Pattern)
 
 @DependencyClient
-struct NetworkClient {
+struct NetworkClient: ClientContext {
     
     // MARK: - Network Monitoring
     var startNetworkMonitoring: @Sendable () async throws -> Void = { }
@@ -248,6 +248,56 @@ struct NetworkClient {
     
     // MARK: - State Management
     var clearNetworkState: @Sendable () async throws -> Void = { }
+}
+
+// MARK: - StateOwner Implementation
+
+extension NetworkClient {
+    nonisolated(unsafe) static var mutationLog: LockIsolated<[StateMutation]> = StateOwnershipHelpers.createMutationLog()
+    
+    /// Performs tracked mutation on network state
+    static func updateNetworkState(_ operation: String, _ mutation: @escaping (inout NetworkClientState) -> Void) {
+        logMutation(operation, stateType: "NetworkClientState")
+        
+        @Shared(.networkInternalState) var networkState: NetworkClientState
+        $networkState.withLock { state in
+            mutation(&state)
+        }
+    }
+    
+    /// Convenience method for updating connection status
+    static func updateConnectionStatus(isConnected: Bool, connectionType: NetworkConnectionType) {
+        updateNetworkState("updateConnectionStatus") { state in
+            state.isConnected = isConnected
+            state.connectionType = connectionType
+            
+            if isConnected {
+                state.lastConnectedTimestamp = Date()
+            } else {
+                state.lastDisconnectedTimestamp = Date()
+            }
+        }
+    }
+    
+    /// Convenience method for updating connection constraints
+    static func updateConnectionConstraints(isExpensive: Bool, isConstrained: Bool) {
+        updateNetworkState("updateConnectionConstraints") { state in
+            state.isExpensive = isExpensive
+            state.isConstrained = isConstrained
+        }
+    }
+    
+    /// Convenience method for clearing network state
+    static func clearNetworkState() {
+        updateNetworkState("clearNetworkState") { state in
+            state.isConnected = false
+            state.connectionType = .none
+            state.lastConnectedTimestamp = nil
+            state.lastDisconnectedTimestamp = nil
+            state.isExpensive = false
+            state.isConstrained = false
+        }
+    }
 }
 
 extension NetworkClient: DependencyKey {

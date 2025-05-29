@@ -1108,19 +1108,30 @@ struct NotificationClientState: Equatable, Codable {
     var unreadNotificationCount: Int
     var pendingNotificationActions: [PendingNotificationAction]
     var isListening: Bool
+    var isLoading: Bool
+    var permissionStatusRawValue: Int
     var lastSyncTimestamp: Date?
+    
+    var permissionStatus: UNAuthorizationStatus {
+        get { UNAuthorizationStatus(rawValue: permissionStatusRawValue) ?? .notDetermined }
+        set { permissionStatusRawValue = newValue.rawValue }
+    }
     
     init(
         notifications: [NotificationItem] = [],
         unreadNotificationCount: Int = 0,
         pendingNotificationActions: [PendingNotificationAction] = [],
         isListening: Bool = false,
+        isLoading: Bool = false,
+        permissionStatus: UNAuthorizationStatus = .notDetermined,
         lastSyncTimestamp: Date? = nil
     ) {
         self.notifications = notifications
         self.unreadNotificationCount = unreadNotificationCount
         self.pendingNotificationActions = pendingNotificationActions
         self.isListening = isListening
+        self.isLoading = isLoading
+        self.permissionStatusRawValue = permissionStatus.rawValue
         self.lastSyncTimestamp = lastSyncTimestamp
     }
 }
@@ -1446,7 +1457,7 @@ extension NotificationClient {
 }
 
 @DependencyClient
-struct NotificationClient {
+struct NotificationClient: ClientContext {
     
     // gRPC service integration (uses adapter for mock)
     var notificationService: NotificationServiceProtocol = MockNotificationServiceGRPCAdapter()
@@ -1517,6 +1528,53 @@ struct NotificationClient {
     /// Clears notification state (used for coordinated state clearing).
     var clearNotificationState: @Sendable () async throws -> Void = { }
     
+}
+
+// MARK: - StateOwner Implementation
+
+extension NotificationClient {
+    nonisolated(unsafe) static var mutationLog: LockIsolated<[StateMutation]> = StateOwnershipHelpers.createMutationLog()
+    
+    /// Performs tracked mutation on notification state
+    static func updateNotificationState(_ operation: String, _ mutation: @escaping (inout NotificationClientState) -> Void) {
+        logMutation(operation, stateType: "NotificationClientState")
+        
+        @Shared(.notificationInternalState) var notificationState: NotificationClientState
+        $notificationState.withLock { state in
+            mutation(&state)
+        }
+    }
+    
+    /// Convenience method for adding a notification
+    static func addNotification(_ notification: NotificationItem) {
+        updateNotificationState("addNotification") { state in
+            state.notifications.append(notification)
+            state.lastSyncTimestamp = Date()
+        }
+    }
+    
+    /// Convenience method for marking notification as read
+    static func markNotificationAsRead(withId notificationId: UUID) {
+        updateNotificationState("markAsRead") { state in
+            if let index = state.notifications.firstIndex(where: { $0.id == notificationId }) {
+                state.notifications[index].isRead = true
+            }
+        }
+    }
+    
+    /// Convenience method for updating permission status
+    static func updatePermissionStatus(_ status: UNAuthorizationStatus) {
+        updateNotificationState("updatePermissionStatus") { state in
+            state.permissionStatus = status
+        }
+    }
+    
+    /// Convenience method for setting loading state
+    static func setLoadingState(_ isLoading: Bool) {
+        updateNotificationState("setLoadingState") { state in
+            state.isLoading = isLoading
+        }
+    }
 }
 
 extension NotificationClient: DependencyKey {
@@ -1615,6 +1673,8 @@ extension NotificationClient: DependencyKey {
                 state.unreadNotificationCount = 0
                 state.pendingNotificationActions = []
                 state.isListening = false
+                state.isLoading = false
+                state.permissionStatus = .notDetermined
                 state.lastSyncTimestamp = Date()
             }
             
@@ -1968,6 +2028,8 @@ extension NotificationClient: DependencyKey {
                 state.unreadNotificationCount = 0
                 state.pendingNotificationActions = []
                 state.isListening = false
+                state.isLoading = false
+                state.permissionStatus = .notDetermined
                 state.lastSyncTimestamp = nil
             }
         }

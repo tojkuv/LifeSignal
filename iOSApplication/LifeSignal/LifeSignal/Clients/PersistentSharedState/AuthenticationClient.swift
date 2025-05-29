@@ -365,7 +365,7 @@ enum AuthenticationClientError: Error, LocalizedError {
 /// - Onboarding state (OnboardingClient responsibility)
 /// - Session orchestration (ApplicationFeature responsibility)
 @DependencyClient
-struct AuthenticationClient {
+struct AuthenticationClient: ClientContext {
     
     // Auth service integration
     var authService: AuthServiceProtocol = MockAuthService()
@@ -433,6 +433,29 @@ struct AuthenticationClient {
     
     /// Changes the user's phone number after SMS verification.
     var changePhoneNumber: @Sendable (String, String) async throws -> Void = { _, _ in throw AuthenticationClientError.authenticationFailed }
+}
+
+// MARK: - StateOwner Implementation
+
+extension AuthenticationClient {
+    nonisolated(unsafe) static var mutationLog: LockIsolated<[StateMutation]> = StateOwnershipHelpers.createMutationLog()
+    
+    /// Performs tracked mutation on authentication state
+    static func updateAuthState(_ operation: String, _ mutation: @escaping (inout AuthClientState) -> Void) {
+        logMutation(operation, stateType: "AuthClientState")
+        
+        @Shared(.authenticationInternalState) var authState: AuthClientState
+        $authState.withLock { state in
+            mutation(&state)
+        }
+    }
+    
+    /// Convenience method for updating auth state
+    static func updateAuthState(_ newState: AuthenticationState) {
+        updateAuthState("updateAuthState") { state in
+            state.authState = newState
+        }
+    }
 }
 
 extension AuthenticationClient: DependencyKey {
@@ -624,16 +647,9 @@ extension AuthenticationClient: DependencyKey {
 
 // MARK: - AuthenticationClient Helper Methods
 
+// NOTE: updateAuthState method moved to StateOwner implementation above
+
 extension AuthenticationClient {
-    
-    /// Updates authentication state using single structure
-    static func updateAuthState(_ newState: AuthenticationState) {
-        @Shared(.authenticationInternalState) var authState
-        $authState.withLock { state in
-            state.authState = newState
-        }
-    }
-    
     /// Updates authentication state from auth result using single structure
     static func updateAuthenticationState(from authResult: AuthResult) {
         @Shared(.authenticationInternalState) var authState
