@@ -27,9 +27,8 @@ enum NotificationFilterType: String, CaseIterable {
     }
 }
 
-@LifeSignalFeature
 @Reducer
-struct NotificationsHistorySheetFeature: FeatureContext {
+struct NotificationsHistorySheetFeature {
     @ObservableState
     struct State: Equatable {
         @Shared(.notificationInternalState) var notificationState: NotificationClientState
@@ -53,6 +52,7 @@ struct NotificationsHistorySheetFeature: FeatureContext {
     @Dependency(\.hapticClient) var haptics
     @Dependency(\.timeFormattingClient) var timeFormattingClient
 
+
     var body: some ReducerOf<Self> {
         Reduce { state, action in
             switch action {
@@ -72,8 +72,7 @@ struct NotificationsHistorySheetFeature: FeatureContext {
 
 // MARK: - Notifications History Sheet View
 
-@LifeSignalView
-struct NotificationsHistorySheetView: View, ViewContext {
+struct NotificationsHistorySheetView: View {
     @Bindable var store: StoreOf<NotificationsHistorySheetFeature>
     @Dependency(\.timeFormattingClient) var timeFormattingClient
 

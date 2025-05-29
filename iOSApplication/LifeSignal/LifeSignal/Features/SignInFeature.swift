@@ -4,7 +4,6 @@ import ComposableArchitecture
 import Perception
 @_exported import Sharing
 
-@LifeSignalFeature
 @Reducer 
 struct SignInFeature: FeatureContext {
     @ObservableState

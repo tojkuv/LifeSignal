@@ -18,7 +18,6 @@ enum DependentsSortMode: String, CaseIterable, Equatable {
     case dateAdded = "Date Added"
 }
 
-@LifeSignalFeature
 @Reducer
 struct DependentsFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     @ObservableState

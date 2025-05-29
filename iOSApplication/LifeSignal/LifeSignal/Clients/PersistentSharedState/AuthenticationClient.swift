@@ -364,13 +364,8 @@ enum AuthenticationClientError: Error, LocalizedError {
 /// - User profile data (UserClient responsibility)
 /// - Onboarding state (OnboardingClient responsibility)
 /// - Session orchestration (ApplicationFeature responsibility)
-@LifeSignalClient
 @DependencyClient
-struct AuthenticationClient: ClientContext {
-    
-    // MARK: - StateOwner Implementation (will be enforced by macro in Phase 2)
-    // typealias OwnedState = AuthClientState
-    // static var stateKey: any SharedReaderKey<AuthClientState> { .authenticationInternalState }
+struct AuthenticationClient {
     
     // Auth service integration
     var authService: AuthServiceProtocol = MockAuthService()

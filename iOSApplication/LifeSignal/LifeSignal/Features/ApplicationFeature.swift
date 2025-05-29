@@ -47,7 +47,6 @@ enum ApplicationTab: Int, CaseIterable {
     }
 }
 
-@LifeSignalFeature
 @Reducer
 struct ApplicationFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     @ObservableState

@@ -7,7 +7,6 @@ import Photos
 import ComposableArchitecture
 import Perception
 
-@LifeSignalFeature
 @Reducer
 struct QRScannerFeature: FeatureContext {
     @ObservableState
@@ -660,7 +659,6 @@ struct CameraPreviewView: UIViewRepresentable {
 
 
 /// A SwiftUI view for scanning QR codes
-@LifeSignalView
 struct QRScannerView: View, ViewContext {
     // MARK: - Properties
 

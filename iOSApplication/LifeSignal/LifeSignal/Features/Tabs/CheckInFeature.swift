@@ -11,7 +11,6 @@ private enum CheckInCancelID {
     case activationAnimation
 }
 
-@LifeSignalFeature
 @Reducer
 struct CheckInFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     @ObservableState

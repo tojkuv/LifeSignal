@@ -2,7 +2,6 @@ import Foundation
 import ComposableArchitecture
 import Dependencies
 @_exported import Sharing
-import LifeSignalMacros
 
 // MARK: - LifeSignal Architecture Patterns v2.0
 //

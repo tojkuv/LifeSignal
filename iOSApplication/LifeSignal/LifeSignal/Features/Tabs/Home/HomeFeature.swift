@@ -17,7 +17,6 @@ enum HomeAlert: Equatable {
 
 /// Home Feature - QR code generation and settings management using TCA
 /// Enhanced: Uses MultiStateReader for accessing multiple client states
-@LifeSignalFeature
 @Reducer
 struct HomeFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     /// Home state conforming to TCA patterns

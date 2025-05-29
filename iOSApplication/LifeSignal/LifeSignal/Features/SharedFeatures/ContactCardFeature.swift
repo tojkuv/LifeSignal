@@ -19,7 +19,6 @@ enum ContactCardStyle: Equatable {
     }
 }
 
-@LifeSignalFeature
 @Reducer
 struct ContactCardFeature: FeatureContext {
     @ObservableState

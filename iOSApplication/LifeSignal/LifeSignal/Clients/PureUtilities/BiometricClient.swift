@@ -78,7 +78,6 @@ enum BiometricClientError: Error, LocalizedError {
 
 // MARK: - BiometricClient
 
-@LifeSignalClient
 @DependencyClient
 struct BiometricClient {
     var isAvailable: @Sendable () -> BiometricType = { .none }

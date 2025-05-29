@@ -473,13 +473,8 @@ extension ContactsClient {
 
 // MARK: - ContactsClient (TCA Shared State Pattern)
 
-@LifeSignalClient
 @DependencyClient
-struct ContactsClient: ClientContext {
-    
-    // MARK: - StateOwner Implementation (will be enforced by macro in Phase 2)
-    // typealias OwnedState = ContactsClientState
-    // static var stateKey: any SharedReaderKey<ContactsClientState> { .contactsInternalState }
+struct ContactsClient {
     
     // MARK: - Service Integration (uses adapter for mock)
     var contactService: ContactServiceProtocol = MockContactServiceGRPCAdapter()

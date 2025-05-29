@@ -15,7 +15,6 @@ enum RespondersAlert: Equatable {
 
 // MARK: - Feature
 
-@LifeSignalFeature
 @Reducer
 struct RespondersFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     @ObservableState

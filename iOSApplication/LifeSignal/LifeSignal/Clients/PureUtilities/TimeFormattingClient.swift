@@ -4,7 +4,6 @@ import DependenciesMacros
 
 // MARK: - Time Formatting Client
 
-@LifeSignalClient
 @DependencyClient
 struct TimeFormattingClient {
     var formatTimeAgo: @Sendable (_ timeInterval: TimeInterval) -> String = { _ in "" }

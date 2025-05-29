@@ -811,13 +811,8 @@ extension UserClient {
     }
 }
 
-@LifeSignalClient
 @DependencyClient
-struct UserClient: ClientContext {
-    
-    // MARK: - StateOwner Implementation (will be enforced by macro in Phase 2)
-    // typealias OwnedState = UserClientState
-    // static var stateKey: any SharedReaderKey<UserClientState> { .userInternalState }
+struct UserClient {
     
     // gRPC service integration (uses adapter for mock)
     var userService: UserServiceProtocol = MockUserServiceGRPCAdapter()

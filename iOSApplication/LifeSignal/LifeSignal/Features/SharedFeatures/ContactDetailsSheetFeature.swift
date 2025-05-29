@@ -16,7 +16,6 @@ enum ContactRole: Equatable {
     case dependent
 }
 
-@LifeSignalFeature
 @Reducer
 struct ContactDetailsSheetFeature: FeatureContext {
     @ObservableState

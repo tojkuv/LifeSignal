@@ -6,7 +6,6 @@ import Perception
 import UIKit
 
 
-@LifeSignalFeature
 @Reducer
 struct ProfileFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     @ObservableState

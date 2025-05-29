@@ -2,7 +2,6 @@ import SwiftUI
 import ComposableArchitecture
 import UIKit
 
-@LifeSignalFeature
 @Reducer
 struct PhoneNumberEntryFeature: FeatureContext {
     @ObservableState

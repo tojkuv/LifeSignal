@@ -98,9 +98,8 @@ enum OnboardingClientError: Error, LocalizedError {
 /// - User profile creation and completion tracking
 /// - Onboarding state persistence and restoration
 /// - Integration with UserClient for profile data management
-@LifeSignalClient
 @DependencyClient
-struct OnboardingClient: ClientContext {
+struct OnboardingClient {
     
     // MARK: - Onboarding Flow Management
     

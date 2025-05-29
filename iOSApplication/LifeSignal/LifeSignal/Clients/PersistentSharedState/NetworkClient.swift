@@ -224,13 +224,8 @@ enum NetworkClientError: Error, LocalizedError {
 
 // MARK: - NetworkClient (TCA Shared State Pattern)
 
-@LifeSignalClient
 @DependencyClient
-struct NetworkClient: ClientContext {
-    
-    // MARK: - StateOwner Implementation (will be enforced by macro in Phase 2)
-    // typealias OwnedState = NetworkClientState
-    // static var stateKey: any SharedReaderKey<NetworkClientState> { .networkInternalState }
+struct NetworkClient {
     
     // MARK: - Network Monitoring
     var startNetworkMonitoring: @Sendable () async throws -> Void = { }

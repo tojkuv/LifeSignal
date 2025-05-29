@@ -4,7 +4,6 @@ import ComposableArchitecture
 import Perception
 // import UserNotifications
 
-@LifeSignalFeature
 @Reducer
 struct OnboardingFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
     @ObservableState

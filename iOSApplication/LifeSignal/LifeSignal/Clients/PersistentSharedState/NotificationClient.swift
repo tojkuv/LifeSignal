@@ -1445,13 +1445,8 @@ extension NotificationClient {
     }
 }
 
-@LifeSignalClient
 @DependencyClient
-struct NotificationClient: ClientContext {
-    
-    // MARK: - StateOwner Implementation (will be enforced by macro in Phase 2)
-    // typealias OwnedState = NotificationClientState
-    // static var stateKey: any SharedReaderKey<NotificationClientState> { .notificationInternalState }
+struct NotificationClient {
     
     // gRPC service integration (uses adapter for mock)
     var notificationService: NotificationServiceProtocol = MockNotificationServiceGRPCAdapter()

@@ -3,7 +3,6 @@ import Foundation
 import UIKit
 import ComposableArchitecture
 
-@LifeSignalClient
 @DependencyClient
 struct HapticClient {
   @DependencyEndpoint

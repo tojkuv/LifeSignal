@@ -6,7 +6,6 @@ import AVFoundation
 import Photos
 import Vision
 
-@LifeSignalClient
 @DependencyClient
 struct CameraClient {
     var requestPermission: @Sendable () async -> AVAuthorizationStatus = { .notDetermined }
