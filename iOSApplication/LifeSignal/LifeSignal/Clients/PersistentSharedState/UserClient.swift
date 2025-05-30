@@ -812,7 +812,10 @@ extension UserClient {
 }
 
 @DependencyClient
-struct UserClient: ClientContext {
+struct UserClient: StateOwnerClient, Sendable {
+    
+    /// The specific state type this client owns (associatedtype requirement)
+    typealias OwnedState = UserClientState
     
     // gRPC service integration (uses adapter for mock)
     var userService: UserServiceProtocol = MockUserServiceGRPCAdapter()

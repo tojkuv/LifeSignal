@@ -21,6 +21,8 @@ enum ContactCardStyle: Equatable {
 
 @Reducer
 struct ContactCardFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = ContactCardView
     @ObservableState
     struct State: Equatable, Identifiable {
         let contact: Contact
@@ -95,7 +97,9 @@ struct ContactCardFeature: FeatureContext {
 
 // MARK: - Contact Card View
 
-struct ContactCardView: View {
+struct ContactCardView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = ContactCardFeature
     @Bindable var store: StoreOf<ContactCardFeature>
     let onTap: () -> Void
     @Environment(\.colorScheme) private var colorScheme

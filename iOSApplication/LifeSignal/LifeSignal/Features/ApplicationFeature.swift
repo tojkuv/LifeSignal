@@ -49,6 +49,8 @@ enum ApplicationTab: Int, CaseIterable {
 
 @Reducer
 struct ApplicationFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = AppRootView
     @ObservableState
     struct State: Equatable {
         // ApplicationFeature has read-only access to authentication, onboarding and contacts state
@@ -684,7 +686,9 @@ struct LifeSignalApp: App {
     }
 }
 
-struct AppRootView: View {
+struct AppRootView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = ApplicationFeature
     @Bindable var store: StoreOf<ApplicationFeature>
 
     var body: some View {

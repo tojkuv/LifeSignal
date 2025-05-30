@@ -79,7 +79,7 @@ enum BiometricClientError: Error, LocalizedError {
 // MARK: - BiometricClient
 
 @DependencyClient
-struct BiometricClient {
+struct BiometricClient: PureUtilityClient, Sendable {
     var isAvailable: @Sendable () -> BiometricType = { .none }
     var authenticate: @Sendable (String) async throws -> Bool = { _ in false }
     var authenticateWithPermissionRequest: @Sendable (String) async throws -> Bool = { _ in false }

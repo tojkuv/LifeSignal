@@ -6,6 +6,8 @@ import Perception
 
 @Reducer 
 struct SignInFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = SignInView
     @ObservableState
     struct State: Equatable {
         // SignInFeature does not read session state - only ApplicationFeature handles session management
@@ -234,7 +236,9 @@ struct SignInFeature: FeatureContext {
 
 // MARK: - SignInView
 
-struct SignInView: View {
+struct SignInView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = SignInFeature
     @Bindable var store: StoreOf<SignInFeature>
 
     var body: some View {

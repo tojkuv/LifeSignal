@@ -16,7 +16,9 @@ enum RespondersAlert: Equatable {
 // MARK: - Feature
 
 @Reducer
-struct RespondersFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
+struct RespondersFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = RespondersView
     @ObservableState
     struct State: Equatable {
         @Shared(.authenticationInternalState) var authState: AuthClientState
@@ -672,7 +674,9 @@ struct RespondersFeature: FeatureContext { // : FeatureContext (will be enforced
 
 // MARK: - View
 
-struct RespondersView: View {
+struct RespondersView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = RespondersFeature
     @Bindable var store: StoreOf<RespondersFeature>
 
     // MARK: - Body

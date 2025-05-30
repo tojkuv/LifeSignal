@@ -19,7 +19,9 @@ enum DependentsSortMode: String, CaseIterable, Equatable {
 }
 
 @Reducer
-struct DependentsFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
+struct DependentsFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = DependentsView
     @ObservableState
     struct State: Equatable {
         @Shared(.authenticationInternalState) var authState: AuthClientState
@@ -716,7 +718,9 @@ struct DependentsFeature: FeatureContext { // : FeatureContext (will be enforced
 }
 
 
-struct DependentsView: View {
+struct DependentsView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = DependentsFeature
     @Bindable var store: StoreOf<DependentsFeature>
     @Environment(\.colorScheme) private var colorScheme
 

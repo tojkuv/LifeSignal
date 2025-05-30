@@ -7,7 +7,9 @@ import UIKit
 
 
 @Reducer
-struct ProfileFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
+struct ProfileFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = ProfileView
     @ObservableState
     struct State: Equatable {
         @Shared(.userInternalState) var userState: UserClientState
@@ -620,7 +622,9 @@ struct ImagePicker: UIViewControllerRepresentable {
 
 
 // MARK: - Main Profile View
-struct ProfileView: View {
+struct ProfileView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = ProfileFeature
     @Bindable var store: StoreOf<ProfileFeature>
     
     // Focus states bound to store

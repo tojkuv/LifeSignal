@@ -12,7 +12,9 @@ private enum CheckInCancelID {
 }
 
 @Reducer
-struct CheckInFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
+struct CheckInFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = CheckInView
     @ObservableState
     struct State: Equatable {
         @Shared(.authenticationInternalState) var authState: AuthClientState
@@ -643,7 +645,9 @@ struct CheckInFeature: FeatureContext { // : FeatureContext (will be enforced by
     }
 }
 
-struct CheckInView: View {
+struct CheckInView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = CheckInFeature
     @Bindable var store: StoreOf<CheckInFeature>
 
     var body: some View {

@@ -3,7 +3,7 @@ import ComposableArchitecture
 import DependenciesMacros
 
 @DependencyClient
-struct PhoneNumberFormatterClient {
+struct PhoneNumberFormatterClient: PureUtilityClient, Sendable {
     var formatPhoneNumber: @Sendable (String) -> String = { _ in "" }
     var formatPhoneNumberForDisplay: @Sendable (String) -> String = { _ in "" }
     var cleanPhoneNumber: @Sendable (String) -> String = { _ in "" }

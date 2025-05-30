@@ -4,7 +4,7 @@ import UIKit
 import ComposableArchitecture
 
 @DependencyClient
-struct HapticClient {
+struct HapticClient: PureUtilityClient, Sendable {
   @DependencyEndpoint
   var impact: @Sendable (UIImpactFeedbackGenerator.FeedbackStyle) async -> Void
   @DependencyEndpoint

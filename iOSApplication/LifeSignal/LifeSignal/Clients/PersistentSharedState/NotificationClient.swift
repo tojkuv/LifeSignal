@@ -1457,7 +1457,10 @@ extension NotificationClient {
 }
 
 @DependencyClient
-struct NotificationClient: ClientContext {
+struct NotificationClient: StateOwnerClient, Sendable {
+    
+    /// The specific state type this client owns (associatedtype requirement)
+    typealias OwnedState = NotificationClientState
     
     // gRPC service integration (uses adapter for mock)
     var notificationService: NotificationServiceProtocol = MockNotificationServiceGRPCAdapter()

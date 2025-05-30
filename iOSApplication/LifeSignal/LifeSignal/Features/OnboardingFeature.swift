@@ -5,7 +5,9 @@ import Perception
 // import UserNotifications
 
 @Reducer
-struct OnboardingFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
+struct OnboardingFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = OnboardingView
     @ObservableState
     struct State: Equatable {
         // Features have read-only access to shared state through SessionClient only
@@ -413,7 +415,9 @@ struct OnboardingFeature: FeatureContext { // : FeatureContext (will be enforced
     }
 }
 
-struct OnboardingView: View {
+struct OnboardingView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = OnboardingFeature
     @Bindable var store: StoreOf<OnboardingFeature>
     @FocusState private var firstNameFieldFocused: Bool
     @FocusState private var lastNameFieldFocused: Bool

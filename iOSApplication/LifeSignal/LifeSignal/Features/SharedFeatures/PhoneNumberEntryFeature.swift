@@ -4,6 +4,8 @@ import UIKit
 
 @Reducer
 struct PhoneNumberEntryFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = PhoneNumberEntryView
     @ObservableState
     struct State: Equatable {
         var selectedRegion: String
@@ -134,7 +136,9 @@ struct PhoneNumberEntryFeature: FeatureContext {
     }
 }
 
-struct PhoneNumberEntryView: View {
+struct PhoneNumberEntryView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = PhoneNumberEntryFeature
     @Bindable var store: StoreOf<PhoneNumberEntryFeature>
     @FocusState private var phoneNumberFieldFocused: Bool
     @State private var localPhoneNumber: String = ""

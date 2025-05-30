@@ -4,6 +4,8 @@ import UIKit
 
 @Reducer
 struct VerificationCodeEntryFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = VerificationCodeEntryView
     @ObservableState
     struct State: Equatable {
         var verificationCode: String = ""
@@ -72,7 +74,9 @@ struct VerificationCodeEntryFeature: FeatureContext {
     }
 }
 
-struct VerificationCodeEntryView: View {
+struct VerificationCodeEntryView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = VerificationCodeEntryFeature
     @Bindable var store: StoreOf<VerificationCodeEntryFeature>
     @FocusState private var verificationCodeFieldFocused: Bool
     @State private var localVerificationCode: String = ""

@@ -635,7 +635,6 @@
 		};
 /* End XCConfigurationList section */
 
-
 /* Begin XCRemoteSwiftPackageReference section */
 		9843B4322DCEFFC30020A050 /* XCRemoteSwiftPackageReference "swift-composable-architecture" */ = {
 			isa = XCRemoteSwiftPackageReference;

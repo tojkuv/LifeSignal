@@ -474,7 +474,10 @@ extension ContactsClient {
 // MARK: - ContactsClient (TCA Shared State Pattern)
 
 @DependencyClient
-struct ContactsClient: ClientContext {
+struct ContactsClient: StateOwnerClient, Sendable {
+    
+    /// The specific state type this client owns (associatedtype requirement)
+    typealias OwnedState = ContactsClientState
     
     // MARK: - Service Integration (uses adapter for mock)
     var contactService: ContactServiceProtocol = MockContactServiceGRPCAdapter()

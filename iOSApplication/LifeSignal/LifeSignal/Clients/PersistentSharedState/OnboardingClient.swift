@@ -99,7 +99,10 @@ enum OnboardingClientError: Error, LocalizedError {
 /// - Onboarding state persistence and restoration
 /// - Integration with UserClient for profile data management
 @DependencyClient
-struct OnboardingClient: ClientContext {
+struct OnboardingClient: StateOwnerClient, Sendable {
+    
+    /// The specific state type this client owns (associatedtype requirement)
+    typealias OwnedState = OnboardingClientState
     
     // MARK: - Onboarding Flow Management
     

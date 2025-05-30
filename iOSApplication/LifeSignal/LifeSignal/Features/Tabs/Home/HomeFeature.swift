@@ -18,7 +18,9 @@ enum HomeAlert: Equatable {
 /// Home Feature - QR code generation and settings management using TCA
 /// Enhanced: Uses MultiStateReader for accessing multiple client states
 @Reducer
-struct HomeFeature: FeatureContext { // : FeatureContext (will be enforced by macro in Phase 2)
+struct HomeFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = HomeView
     /// Home state conforming to TCA patterns
     @ObservableState
     struct State: Equatable {
@@ -1006,7 +1008,9 @@ struct InstructionsView: View {
 }
 
 
-struct HomeView: View {
+struct HomeView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = HomeFeature
     @Bindable var store: StoreOf<HomeFeature>
 
     var body: some View {

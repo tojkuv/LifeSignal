@@ -9,6 +9,8 @@ import Perception
 
 @Reducer
 struct QRScannerFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = QRScannerView
     @ObservableState
     struct State: Equatable {
         @Shared(.authenticationInternalState) var authState: AuthClientState
@@ -659,7 +661,9 @@ struct CameraPreviewView: UIViewRepresentable {
 
 
 /// A SwiftUI view for scanning QR codes
-struct QRScannerView: View, ViewContext {
+struct QRScannerView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = QRScannerFeature
     // MARK: - Properties
 
     /// The TCA store for the QR scanner

@@ -18,6 +18,8 @@ enum ContactRole: Equatable {
 
 @Reducer
 struct ContactDetailsSheetFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = ContactDetailsSheetView
     @ObservableState
     struct State: Equatable {
         @Shared(.authenticationInternalState) var authState: AuthClientState
@@ -408,7 +410,9 @@ struct ContactDetailsSheetFeature: FeatureContext {
     }
 }
 
-struct ContactDetailsSheetView: View {
+struct ContactDetailsSheetView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = ContactDetailsSheetFeature
     @Bindable var store: StoreOf<ContactDetailsSheetFeature>
     @Environment(\.colorScheme) private var colorScheme
     

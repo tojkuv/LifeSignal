@@ -7,7 +7,7 @@ import Photos
 import Vision
 
 @DependencyClient
-struct CameraClient {
+struct CameraClient: PureUtilityClient, Sendable {
     var requestPermission: @Sendable () async -> AVAuthorizationStatus = { .notDetermined }
     var checkPermission: @Sendable () async -> AVAuthorizationStatus = { .notDetermined }
     var requestPhotoLibraryPermission: @Sendable () async -> PHAuthorizationStatus = { .notDetermined }

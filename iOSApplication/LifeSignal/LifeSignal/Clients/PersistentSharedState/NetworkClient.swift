@@ -225,7 +225,10 @@ enum NetworkClientError: Error, LocalizedError {
 // MARK: - NetworkClient (TCA Shared State Pattern)
 
 @DependencyClient
-struct NetworkClient: ClientContext {
+struct NetworkClient: StateOwnerClient, Sendable {
+    
+    /// The specific state type this client owns (associatedtype requirement)
+    typealias OwnedState = NetworkClientState
     
     // MARK: - Network Monitoring
     var startNetworkMonitoring: @Sendable () async throws -> Void = { }

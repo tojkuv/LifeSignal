@@ -365,7 +365,10 @@ enum AuthenticationClientError: Error, LocalizedError {
 /// - Onboarding state (OnboardingClient responsibility)
 /// - Session orchestration (ApplicationFeature responsibility)
 @DependencyClient
-struct AuthenticationClient: ClientContext {
+struct AuthenticationClient: StateOwnerClient, Sendable {
+    
+    /// The specific state type this client owns (associatedtype requirement)
+    typealias OwnedState = AuthClientState
     
     // Auth service integration
     var authService: AuthServiceProtocol = MockAuthService()

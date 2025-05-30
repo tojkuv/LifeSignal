@@ -28,7 +28,9 @@ enum NotificationFilterType: String, CaseIterable {
 }
 
 @Reducer
-struct NotificationsHistorySheetFeature {
+struct NotificationsHistorySheetFeature: FeatureContext {
+    /// The view type that this feature is paired with (same file)
+    typealias PairedView = NotificationsHistorySheetView
     @ObservableState
     struct State: Equatable {
         @Shared(.notificationInternalState) var notificationState: NotificationClientState
@@ -72,7 +74,9 @@ struct NotificationsHistorySheetFeature {
 
 // MARK: - Notifications History Sheet View
 
-struct NotificationsHistorySheetView: View {
+struct NotificationsHistorySheetView: View, FeatureView {
+    /// The feature type that this view is paired with (same file)
+    typealias PairedFeature = NotificationsHistorySheetFeature
     @Bindable var store: StoreOf<NotificationsHistorySheetFeature>
     @Dependency(\.timeFormattingClient) var timeFormattingClient
 
